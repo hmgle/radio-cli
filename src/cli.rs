@@ -333,7 +333,10 @@ fn playback_loop(engine: &mut Engine, stop: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-fn doctor(config: &Config, json: bool, stop: &Arc<AtomicBool>) -> Result<()> {
+pub(crate) fn doctor_report(
+    config: &Config,
+    stop: &Arc<AtomicBool>,
+) -> Result<(serde_json::Value, bool)> {
     let mut checks = vec![];
     let mut failed = false;
     for (name, exe, flag) in [
@@ -373,10 +376,15 @@ fn doctor(config: &Config, json: bool, stop: &Arc<AtomicBool>) -> Result<()> {
         serde_json::json!({"name":"recording_dir","ok":writable_ok,"detail":config.recording_dir}),
     );
     let report = serde_json::json!({"checks":checks,"config":config.config_path,"database":config.data_dir.join("radio.db")});
+    Ok((report, failed))
+}
+
+fn doctor(config: &Config, json: bool, stop: &Arc<AtomicBool>) -> Result<()> {
+    let (report, failed) = doctor_report(config, stop)?;
     if json {
         emit(&report)?;
     } else {
-        for check in checks {
+        for check in report["checks"].as_array().into_iter().flatten() {
             println!(
                 "{} {}: {}",
                 if check["ok"] == true { "OK" } else { "FAIL" },

@@ -49,7 +49,7 @@ impl Station {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
     pub query: String,
     pub country: Option<String>,

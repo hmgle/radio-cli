@@ -125,6 +125,9 @@ impl Directory {
             ],
         )?;
         let mut count = 0;
+        if self.stop.load(Ordering::Relaxed) {
+            bail!("操作已取消");
+        }
         for row in &rows {
             if valid_identity(row) {
                 store.upsert(row)?;
@@ -154,6 +157,9 @@ impl Directory {
                 bail!("服务器未遵守分页上限");
             }
             let received = rows.len();
+            if self.stop.load(Ordering::Relaxed) {
+                bail!("操作已取消");
+            }
             let valid: Vec<_> = rows.into_iter().filter(valid_identity).collect();
             store.stage(&valid)?;
             offset += received;
@@ -164,6 +170,9 @@ impl Directory {
             if offset >= 200_000 {
                 bail!("目录超过安全上限，请检查服务器分页");
             }
+        }
+        if self.stop.load(Ordering::Relaxed) {
+            bail!("操作已取消");
         }
         store.finish_sync()
     }

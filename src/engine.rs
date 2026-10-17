@@ -25,6 +25,7 @@ pub struct Status {
     pub recording: bool,
     pub recording_ms: u64,
     pub recording_path: String,
+    pub source_url: String,
 }
 
 pub struct Engine {
@@ -63,6 +64,7 @@ impl Engine {
             recording: false,
             recording_ms: 0,
             recording_path: String::new(),
+            source_url: String::new(),
         };
         Ok(Self {
             config,
@@ -109,6 +111,7 @@ impl Engine {
 
     fn start_candidate(&mut self) -> Result<()> {
         self.url = self.candidates.pop_front().context("无可用播放地址")?;
+        self.status.source_url = self.url.clone();
         self.tried.push(self.url.clone());
         self.config.settings.volume = self.status.volume;
         self.player = Some(Player::start(&self.config, &self.url, &self.stop)?);
@@ -241,11 +244,19 @@ impl Engine {
         if self.recorder.is_some() {
             return self.stop_recording(None);
         }
+        self.record_current(None, None)
+    }
+
+    pub fn record_current(
+        &mut self,
+        duration: Option<Duration>,
+        dir: Option<&std::path::Path>,
+    ) -> Result<()> {
         if !self.status.playing {
             bail!("请等待电台开始播放后再录音");
         }
         let station = self.status.station.clone().context("尚未播放")?;
-        self.start_recording(station, self.url.clone(), None, None)
+        self.start_recording(station, self.url.clone(), duration, dir)
     }
 
     pub fn standalone_record(
