@@ -363,11 +363,32 @@ fn engine_uses_explicit_backup_without_merging_names() {
     assert!(!engine.playback_failed);
     engine.toggle_recording().unwrap();
     assert!(engine.status.recording);
+    // Finalizing before FFmpeg captured any audio would correctly be
+    // reported as a failed recording; wait until the partial file holds a
+    // real audio track so the stop always finalizes a verifiable file.
+    let partial = PathBuf::from(&engine.status.recording_path);
+    let wait_stop = Arc::new(AtomicBool::new(false));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let captured = recorder::probe(&engine.config, &partial.to_string_lossy(), &wait_stop)
+            .ok()
+            .and_then(|info| info["streams"].as_array().map(|s| !s.is_empty()))
+            .unwrap_or(false);
+        if captured {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "recording captured no audio track before finalizing"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
     engine.pause().unwrap();
     assert!(engine.status.recording, "pause should not end recording");
     engine.shutdown().unwrap();
     assert!(!engine.status.recording);
-    assert_eq!(engine.store.recordings(1).unwrap()[0].status, "complete");
+    let record = engine.store.recordings(1).unwrap().remove(0);
+    assert_eq!(record.status, "complete", "{record:?}");
 }
 
 #[test]

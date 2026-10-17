@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::{
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -35,6 +35,7 @@ pub struct Recorder {
     readers: Vec<thread::JoinHandle<()>>,
     errors: Arc<std::sync::Mutex<String>>,
     finished: bool,
+    stop_requested: bool,
 }
 
 pub fn probe(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Value> {
@@ -227,6 +228,7 @@ impl Recorder {
             readers: vec![reader],
             errors,
             finished: false,
+            stop_requested: false,
         };
         store.save_recording(&recorder.record)?;
         sidecar(&recorder.record)?;
@@ -251,9 +253,10 @@ impl Recorder {
         if let Some(status) = self.child.try_wait()? {
             return Ok(status);
         }
-        if let Some(mut input) = self.child.stdin.take() {
-            let _ = input.write_all(b"q\n");
-        }
+        // FFmpeg only reads "q" from a terminal, never from a piped stdin;
+        // SIGINT is its supported graceful stop and still finalizes the file.
+        self.stop_requested = true;
+        unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGINT) };
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             if let Some(status) = self.child.try_wait()? {
@@ -293,15 +296,17 @@ impl Recorder {
         } else {
             None
         });
-        self.record.status =
-            if status.success() && reason.is_none() && self.record.size_bytes > 0 {
-                "complete"
-            } else if reason.is_some() {
-                "interrupted"
-            } else {
-                "failed"
-            }
-            .into();
+        // FFmpeg exits 255 after finalizing on our SIGINT; a stop we asked for
+        // is not a failure as long as the output verifies below.
+        let graceful = status.success() || self.stop_requested;
+        self.record.status = if graceful && reason.is_none() && self.record.size_bytes > 0 {
+            "complete"
+        } else if reason.is_some() {
+            "interrupted"
+        } else {
+            "failed"
+        }
+        .into();
         let never_stop = Arc::new(AtomicBool::new(false));
         let verification = probe(config, &self.partial.to_string_lossy(), &never_stop);
         if let Ok(info) = &verification {
