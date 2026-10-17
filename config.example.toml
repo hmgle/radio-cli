@@ -1,0 +1,14 @@
+# Optional; omitted values use these defaults.
+mpv = "mpv"
+ffmpeg = "ffmpeg"
+ffprobe = "ffprobe"
+volume = 80
+connect_timeout_secs = 5
+request_timeout_secs = 20
+playback_timeout_secs = 12
+
+# Override automatic Radio Browser server discovery.
+# api_url = "https://de1.api.radio-browser.info"
+
+# Default: recordings/ under the application data directory.
+# recording_dir = "/home/yourname/Music/radio-recordings"
