@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A lightweight terminal radio with local favorites and recordings"
 license = "MIT"
+repository = "https://github.com/hmgle/radio-cli"
 rust-version = "1.88"
 
 [[bin]]

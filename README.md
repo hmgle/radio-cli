@@ -1,10 +1,14 @@
 # radio-cli
 
-Linux 优先的轻量 CLI / TUI 网络收音机。Rust 管理本地目录与交互，SQLite 保存收藏和历史，mpv 播放，FFmpeg 无损录音。无需账号或 API Key。
+**English** | [简体中文](README.zh-CN.md)
 
-## 安装与启动
+A lightweight, Linux-first terminal radio. Rust manages the local catalog and interaction, SQLite stores favorites and history, mpv plays audio, and FFmpeg records streams losslessly. No account or API key required.
 
-需要 Rust 1.88+、mpv、FFmpeg（含 ffprobe）。SQLite 已编入程序，不要求安装 SQLite 命令行工具。
+Homepage: <https://github.com/hmgle/radio-cli>
+
+## Installation & Quick Start
+
+Requires Rust 1.88+, mpv, and FFmpeg (including ffprobe). SQLite is compiled into the binary, so no SQLite command-line tools are needed.
 
 ```sh
 # Debian / Ubuntu
@@ -14,13 +18,13 @@ cargo build --release --locked
 ./target/release/radio sync
 ./target/release/radio tui
 
-# 或安装到 ~/.cargo/bin
+# or install to ~/.cargo/bin
 cargo install --path . --locked
 ```
 
-直接运行 `radio` 会在交互终端打开 TUI；重定向输出时显示帮助。没有目录时，TUI 和 `random` 先获取热门 1,000 台；完整目录通过 `sync` 获取。同步失败保留之前的目录。
+Running `radio` directly opens the TUI in an interactive terminal; when output is redirected it prints help instead. With no catalog present, the TUI and `random` first fetch the top 1,000 stations; the full catalog is fetched with `sync`. A failed sync keeps the previous catalog.
 
-## 命令
+## Commands
 
 ```sh
 radio search jazz --country FR --min-bitrate 128
@@ -34,71 +38,71 @@ radio favorites add <UUID>
 radio favorites list
 radio favorites remove <UUID>
 radio history
-radio station add '我的电台' 'https://example.com/live' \
+radio station add 'My Station' 'https://example.com/live' \
   --backup-url 'https://example.com/backup'
 radio record <UUID> --duration 30m --output-dir ./recordings
 radio recordings list
 ```
 
-名称、国家、语言和标签支持本地搜索；国家代码、语言和标签筛选使用完整值（语言也可用目录提供的代码，例如 `zh`）。最低码率筛选排除码率未知的记录。`random` 在整个匹配目录中抽样，不受搜索分页限制。`info` 始终输出 JSON；查询命令可加 `--json`。运行状态与诊断写入 stderr。
+Name, country, language, and tag searches run locally; country code, language, and tag filters use full values (languages also accept the codes provided by the catalog, e.g. `zh`). The minimum-bitrate filter excludes records with unknown bitrate. `random` samples across the entire matching catalog and is not limited by search pagination. `info` always outputs JSON; query commands accept `--json`. Runtime status and diagnostics go to stderr.
 
-电台采用完整 Radio Browser UUID；自定义电台创建本地 UUID。收藏、最近播放和自定义地址不被目录同步覆盖。收藏中已从目录消失的电台仍可尝试播放。历史保留最近 1,000 次成功起播记录，界面按电台聚合显示最近收听。
+Stations are identified by their full Radio Browser UUID; custom stations get a local UUID. Favorites, recently played entries, and custom addresses are never overwritten by a catalog sync. A favorite that has disappeared from the catalog can still be played. History keeps the last 1,000 successful playbacks; the interface aggregates it by station to show recent listening.
 
-TUI 按键：
+TUI keys:
 
-| 按键 | 操作 |
+| Key | Action |
 |---|---|
-| `:` | 命令模式；Enter 执行，Esc 返回 |
-| Tab / Shift-Tab | 下一个 / 上一个面板 |
-| `1`–`5` | 来源 / 列表 / 详情 / 播放器 / 任务面板 |
-| Ctrl-方向键 / Ctrl-`h/j/k/l` | 按空间位置切换面板 |
-| 方向键 / `j`、`k` | 选择、导航或滚动当前面板 |
-| Enter | 列表中播放；播放器中查看当前电台详情 |
-| Space | 暂停 / 恢复播放，录音继续 |
-| `n` | 按当前筛选随机下一台 |
-| `f` | 收藏 / 取消收藏选中电台 |
-| `r` | 开始 / 停止当前电台录音 |
-| `+`、`-` | 音量 |
-| `/` | 增量搜索；Enter 确认，Esc 恢复原搜索 |
-| `F` | 国家、语言、标签、最低码率筛选 |
-| `[` / `]` | 电台 / 收藏 / 最近 / 录音分类 |
-| `gg` / `G` | 列表首项 / 末项 |
-| PgUp / PgDn | 电台列表翻页 |
-| `?` | 打开帮助 |
-| `q` / Ctrl-C | 收尾录音并退出 |
+| `:` | Command mode; Enter executes, Esc returns |
+| `Tab` / `Shift-Tab` | Next / previous panel |
+| `1`–`5` | Source / list / details / player / tasks panel |
+| `Ctrl` + arrows / `Ctrl`+`h/j/k/l` | Switch panels by spatial position |
+| Arrows / `j`, `k` | Select, navigate, or scroll the focused panel |
+| `Enter` | Play in lists; view current station details in the player |
+| `Space` | Pause / resume playback; recording continues |
+| `n` | Random next station under the current filter |
+| `f` | Add / remove the selected station from favorites |
+| `r` | Start / stop recording the current station |
+| `+`, `-` | Volume |
+| `/` | Incremental search; Enter confirms, Esc restores the previous search |
+| `F` | Country, language, tag, and minimum-bitrate filters |
+| `[` / `]` | Stations / favorites / recent / recordings categories |
+| `gg` / `G` | First / last item in the list |
+| `PgUp` / `PgDn` | Page through the station list |
+| `?` | Open help |
+| `q` / `Ctrl-C` | Finalize recordings and quit |
 
-焦点面板采用亮青色粗边框、`▶` 标记和编号，底部显示模式与当前面板操作；也支持鼠标点击切换和滚轮导航。顶部持续显示当前播放电台、编码、码率、音量和录音状态，详情面板展示国家、语言、标签、UUID、地址等信息。码率与编码标注为目录数据，未知值明确显示未知；不会随列表选择而改变当前播放信息。
+The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and the wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
 
-在 TUI 内直接执行 `:sync` 后台同步，`:sync-cancel` 取消任务，`:current` 查看当前电台完整详情，`:record --duration 30m` 定时录制当前电台。命令支持引号、Tab 补全和历史；更多命令与操作设计见 [TUI 使用说明](docs/tui.md)。
+Inside the TUI, `:sync` runs a background sync, `:sync-cancel` cancels the task, `:current` shows full details of the current station, and `:record --duration 30m` schedules a timed recording of the current station. Commands support quoting, Tab completion, and history; see the [TUI guide](docs/tui.md) for more commands and interaction design (in Chinese).
 
-## 配置与数据
+## Configuration & Data
 
-Linux 默认路径：
+Default paths on Linux:
 
-- 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
-- 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
-- 录音：数据目录下的 `recordings/`
+- Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
+- Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
+- Recordings: `recordings/` under the data directory
 
-配置文件可选。参见 [config.example.toml](config.example.toml)，使用 `--config 文件` 指定；`--data-dir 目录` 可隔离测试数据。相对目录按启动时的工作目录解释；录音数据库保存绝对路径。
+The config file is optional; see [config.example.toml](config.example.toml), pass it with `--config <file>`, and use `--data-dir <dir>` to isolate test data. Relative directories are resolved against the working directory at startup; the recording database stores absolute paths.
 
-默认发现 Radio Browser 服务器并有限重试。可设置 `api_url`，或使用优先级更高的 `--api-url https://服务器`。HTTP 请求支持 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 等标准环境变量；音频后端遵循其各自的代理支持，目录可达不代表音频流可达。目录超过七天提示刷新，不会静默启动全量同步。
+Radio Browser servers are discovered automatically with limited retries. Set `api_url`, or use `--api-url https://server` which takes precedence. HTTP requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables; audio backends follow their own proxy support, so a reachable catalog does not imply a reachable audio stream. A catalog older than seven days triggers a refresh hint, never a silent full sync.
 
-同一数据目录只允许一个播放 / 录音 / TUI 会话；其他 CLI 查询和收藏操作仍可使用。退出前台即停止音频，长时间运行可放在 tmux 或 systemd 中。
+A single data directory allows only one playback / recording / TUI session; other CLI queries and favorite operations still work. Leaving the foreground stops the audio; for long-running use, run it inside tmux or systemd.
 
-## 录音行为
+## Recording Behavior
 
-- MP3 → `.mp3`；AAC（包括常见 HLS AAC）→ `.aac`；Vorbis → `.ogg`；Opus → `.opus`。根据实际音轨探测，不盲信目录的编码字段。
-- 使用流拷贝，不重编码、不降低音质；不支持的录音编码明确报错。
-- 每个录音有 JSON 元数据，包含电台、实际请求地址、时间、编码、媒体时长和完成状态。源站重定向后的最终 CDN 地址不一定可见。
-- 先写唯一 `.part` 文件；正常停止后生成最终文件。中断 / 失败保留 `.part` 和状态，后续启动媒体会话时恢复未收尾记录。`recordings list` 可查看结果；媒体时长可能为估计值。
-- TUI 切台先结束当前录音；新电台需重新按 `r`。暂停播放不会暂停录音。直播源提前结束不视作完整录音。
-- `--duration` 接受秒、`s`、`m`、`h`，范围为 1 秒至 365 天。切点以音频包为单位，不能保证精确歌曲边界。
-- 边听边录最多两条并发上游连接；编码探测连接先关闭，再启动录音连接。HLS 一个媒体任务可能请求多个分片。
-- 文件只保存在本地；请遵守电台条款与适用的个人录制规定。
+- MP3 → `.mp3`; AAC (including common HLS AAC) → `.aac`; Vorbis → `.ogg`; Opus → `.opus`. The actual audio track is probed; the catalog's codec field is not trusted blindly.
+- Stream copy is used: no re-encoding, no quality loss. Recording an unsupported codec fails with a clear error.
+- Each recording has a JSON sidecar with the station, actually requested address, timestamps, codec, media duration, and completion status. The final CDN address after a source-side redirect may not be visible.
+- A unique `.part` file is written first; the final file is produced after a normal stop. Interruptions / failures keep the `.part` file and its status, and unfinished records are recovered when a media session starts next. Use `recordings list` to inspect results; media duration may be an estimate.
+- Switching stations in the TUI ends the current recording first; the new station requires pressing `r` again. Pausing playback does not pause recording. A live source ending early is not treated as a complete recording.
+- `--duration` accepts seconds, `s`, `m`, and `h`, from 1 second to 365 days. Cut points follow audio packet boundaries; exact song boundaries cannot be guaranteed.
+- Listening and recording use at most two concurrent upstream connections; the codec-probing connection is closed before the recording connection starts. One HLS media task may request multiple segments.
+- Files stay local only; please comply with station terms and applicable personal-recording rules.
 
-如需恢复 `.part`，先复制到新文件，再根据原编码用 FFmpeg 流拷贝。不要直接覆盖原文件。
+To recover a `.part` file, copy it to a new file first, then use FFmpeg stream copy according to the original codec. Do not overwrite the original file.
 
-## 开发与验证
+## Development & Validation
 
 ```sh
 cargo fmt --check
@@ -108,6 +112,6 @@ cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
 uv run scripts/measure_resources.py --binary target/release/radio
 ```
 
-测试使用本地 HTTP/ICY/HLS 源，不依赖公共电台。录音测试需要 FFmpeg；mpv IPC 测试使用空音频输出，可通过 `RADIO_TEST_MPV=/绝对路径/mpv` 指定，未找到 mpv 时会跳过相关测试。CI 安装并执行真实 mpv 测试。资源目标与结果见 [验证记录](docs/validation.md)。
+Tests use local HTTP/ICY/HLS sources and do not depend on public stations. Recording tests require FFmpeg; mpv IPC tests use a null audio output and can be pointed at a specific binary with `RADIO_TEST_MPV=/absolute/path/to/mpv`, skipping when mpv is not found. CI installs and runs the real mpv tests. Resource targets and results are in the [validation log](docs/validation.md) (in Chinese).
 
-首版不提供后台服务、回溯缓存、歌曲识别、歌词、地图和后台全目录探测。目录来源为 [Radio Browser](https://www.radio-browser.info/)，音频直连电台；不使用 RoamDial 私有服务，也不会按同名自动合并备用线路。更详细的设计见 [实现说明](docs/implementation.md)。
+The first release does not provide a background service, time-shift caching, song recognition, lyrics, maps, or background full-catalog probing. The catalog comes from [Radio Browser](https://www.radio-browser.info/); audio connects directly to stations. RoamDial's private services are not used, and backup links are never auto-merged by name. See the [implementation notes](docs/implementation.md) for more design details (in Chinese).
