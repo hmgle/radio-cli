@@ -3,6 +3,8 @@ mpv = "mpv"
 ffmpeg = "ffmpeg"
 ffprobe = "ffprobe"
 volume = 80
+# Language precedence: --lang > RADIO_LANG > language > LC_ALL/LANG > en.
+# language = "en" # or "zh-CN"
 connect_timeout_secs = 5
 request_timeout_secs = 20
 playback_timeout_secs = 12

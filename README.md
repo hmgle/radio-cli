@@ -81,6 +81,11 @@ Inside the TUI, `:sync` runs a background sync, `:sync-cancel` cancels the task,
 
 Default paths on Linux:
 
+Select the CLI error and list language with `--lang en` or `--lang zh-CN`.
+Precedence is `--lang`, `RADIO_LANG`, config `language`, then `LC_ALL`/`LANG`;
+unknown languages fall back to English with one notice. TUI text and clap
+help migration follow separately.
+
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - Recordings: `recordings/` under the data directory

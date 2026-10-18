@@ -136,6 +136,51 @@ fn favorite_mutations_confirm_names_and_reject_missing_stations() {
 }
 
 #[test]
+fn cli_language_precedence_and_unknown_locale_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    fs::write(&config, "language = 'zh-CN'\n").unwrap();
+    for (args, radio_lang, lc_all, expected) in [
+        (
+            vec!["--lang", "en"],
+            "zh-CN",
+            "zh_CN.UTF-8",
+            "Station not found",
+        ),
+        (vec![], "en", "zh_CN.UTF-8", "Station not found"),
+        (vec![], "", "en_US.UTF-8", "本地未找到电台"),
+        (vec!["--lang", "zh-CN"], "en", "C", "本地未找到电台"),
+        (
+            vec!["--lang", "unknown"],
+            "zh-CN",
+            "zh_CN.UTF-8",
+            "Station not found",
+        ),
+    ] {
+        let result = radio(dir.path())
+            .arg("--config")
+            .arg(&config)
+            .args(args)
+            .args(["info", &uuid::Uuid::new_v4().to_string()])
+            .env("RADIO_LANG", radio_lang)
+            .env("LC_ALL", lc_all)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let error = String::from_utf8(result.stderr).unwrap();
+        assert!(error.contains(expected), "{error}");
+        assert!(error.matches("unsupported language").count() <= 1);
+    }
+    let result = radio(dir.path())
+        .args(["info", &uuid::Uuid::new_v4().to_string()])
+        .env_remove("RADIO_LANG")
+        .env("LC_ALL", "zh_CN.UTF-8")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&result.stderr).contains("本地未找到电台"));
+}
+
+#[test]
 fn media_lock_blocks_only_competing_media_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let config = support::config(dir.path());
@@ -153,7 +198,7 @@ fn media_lock_blocks_only_competing_media_sessions() {
         .output()
         .unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("另一个 radio"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Another radio"));
 }
 
 #[cfg(target_os = "linux")]

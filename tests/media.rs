@@ -525,7 +525,13 @@ fn recording_resolves_backup_and_missing_backend_fails_fast() {
     let error = engine
         .standalone_record(&station.stationuuid, None, None)
         .unwrap_err();
-    assert!(format!("{error:#}").contains("无法启动依赖"));
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::MissingDependency
+    );
 }
 
 #[test]
