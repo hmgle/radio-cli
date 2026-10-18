@@ -4,6 +4,10 @@
 
 Linux 优先的轻量 CLI / TUI 网络收音机。Rust 管理本地目录与交互，SQLite 保存收藏和历史，mpv 播放，FFmpeg 无损录音。无需账号或 API Key。
 
+支持平台为 Linux；Windows 和 macOS 暂不支持，Unix Socket、Linux 子进程监管、
+禁止覆盖的录音发布使用平台专有 API。CI 覆盖 Rust 1.88、stable 全部特性、
+x86_64 musl 静态构建及 RustSec 依赖审计。
+
 ## 安装与启动
 
 需要 Rust 1.88+、mpv、FFmpeg（含 ffprobe）。SQLite 已编入程序，不要求安装 SQLite 命令行工具。

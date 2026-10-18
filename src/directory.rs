@@ -42,11 +42,25 @@ impl Directory {
             self.servers.push(url.trim_end_matches('/').to_owned());
             return Ok(());
         }
-        if let Ok(resolver) = Resolver::from_system_conf()
-            && let Ok(records) = resolver.srv_lookup("_api._tcp.radio-browser.info.")
-        {
-            for record in records.iter() {
-                let name = record.target().to_utf8().trim_end_matches('.').to_owned();
+        let discovered = (|| -> Result<_> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                let resolver = Resolver::builder_tokio()?.build()?;
+                Ok(tokio::time::timeout(
+                    Duration::from_secs(3),
+                    resolver.srv_lookup("_api._tcp.radio-browser.info."),
+                )
+                .await??)
+            })
+        })();
+        if let Ok(records) = discovered {
+            for answer in records.answers() {
+                let hickory_resolver::proto::rr::RData::SRV(record) = &answer.data else {
+                    continue;
+                };
+                let name = record.target.to_utf8().trim_end_matches('.').to_owned();
                 if name.ends_with(".api.radio-browser.info") {
                     self.servers.push(format!("https://{name}"));
                 }

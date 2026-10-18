@@ -55,7 +55,10 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let result = (|| -> Result<()> {
         let _screen = Screen::enter()?;
         let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-        terminal.clear()?;
+        execute!(
+            io::stdout(),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+        )?;
         let mut app = App::default();
         app.source = source;
         app.filter.favorites = source == state::Source::Favorites;
