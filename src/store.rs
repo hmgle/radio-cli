@@ -89,6 +89,28 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn directory_count(&self) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM stations WHERE custom=0 AND active=1",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn incoming_count(&self) -> Result<usize> {
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM incoming", [], |r| r.get(0))?)
+    }
+
     pub fn begin_sync(&self) -> Result<()> {
         self.conn.execute_batch(
             "DROP TABLE IF EXISTS temp.incoming;
