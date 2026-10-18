@@ -147,3 +147,24 @@ fn shrink_requires_diagnosable_explicit_acceptance() {
     );
     assert_eq!(store.count().unwrap(), 1);
 }
+
+#[test]
+fn refresh_rejects_a_different_station_identity() {
+    let wrong = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "wrong".into(),
+        ..Station::default()
+    };
+    let body = serde_json::to_vec(&vec![wrong]).unwrap();
+    let server = Server::new(move |_, s| response(s, 200, "application/json", &body));
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.api_url = Some(server.url.clone());
+    let mut directory = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
+    assert!(
+        directory
+            .refresh(&uuid::Uuid::new_v4().to_string())
+            .unwrap()
+            .is_none()
+    );
+}

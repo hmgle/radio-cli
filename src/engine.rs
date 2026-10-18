@@ -109,7 +109,8 @@ impl Engine {
         self.status.playing = false;
         self.status.paused = false;
         self.status.station = Some(station.clone());
-        self.candidates.push_back(station.primary_url().to_owned());
+        self.candidates
+            .extend(station.stream_candidates(&self.store.backups(&station.stationuuid)?));
         self.start_candidate()
     }
 
@@ -153,20 +154,19 @@ impl Engine {
         self.status.paused = false;
         self.stop_recording(Some(reason))?;
         let station = self.status.station.clone().context("没有当前电台")?;
+        if !self.candidates.is_empty() {
+            return self.start_candidate();
+        }
         if !self.refreshed {
             self.refreshed = true;
             if !station.custom
                 && let Ok(Some(updated)) = self.directory.refresh(&station.stationuuid)
             {
                 self.store.upsert(&updated)?;
-                self.candidates.push_back(updated.primary_url().into());
-                self.candidates.push_back(updated.url);
+                self.candidates
+                    .extend(updated.stream_candidates(&self.store.backups(&station.stationuuid)?));
+                self.candidates.retain(|url| !self.tried.contains(url));
             }
-            self.candidates.push_back(station.url.clone());
-            self.candidates
-                .extend(self.store.backups(&station.stationuuid)?);
-            self.candidates
-                .retain(|url| !url.is_empty() && !self.tried.contains(url));
         }
         if !self.candidates.is_empty() {
             return self.start_candidate();
@@ -269,8 +269,68 @@ impl Engine {
         duration: Option<Duration>,
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
-        let station = self.store.station(uuid)?;
-        self.start_recording(station.clone(), station.primary_url().into(), duration, dir)
+        if self.recorder.is_some() {
+            bail!("已有录音任务");
+        }
+        let mut station = self.store.station(uuid)?;
+        let mut tried = Vec::new();
+        let mut last = None;
+        for refresh in [false, true] {
+            if refresh {
+                if station.custom {
+                    break;
+                }
+                if let Ok(Some(updated)) = self.directory.refresh(uuid) {
+                    self.store.upsert(&updated)?;
+                    station = updated;
+                }
+            }
+            for url in station.stream_candidates(&self.store.backups(uuid)?) {
+                if tried.contains(&url) {
+                    continue;
+                }
+                tried.push(url.clone());
+                match recorder::probe(&self.config, &url, &self.stop).and_then(|info| {
+                    let codec = info["streams"][0]["codec_name"]
+                        .as_str()
+                        .context("源站没有音频轨道")?;
+                    recorder::format_for_codec(codec)?;
+                    Ok(info)
+                }) {
+                    Ok(info) => {
+                        let recorder = Recorder::start_with_info(
+                            &self.config,
+                            &self.store,
+                            &station,
+                            &url,
+                            dir.unwrap_or(&self.config.recording_dir),
+                            duration,
+                            info,
+                        )?;
+                        self.attach_recorder(recorder);
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        if self.stop.load(std::sync::atomic::Ordering::Relaxed)
+                            || error.chain().any(|cause| {
+                                cause.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                                    matches!(
+                                        e.kind(),
+                                        std::io::ErrorKind::NotFound
+                                            | std::io::ErrorKind::PermissionDenied
+                                    )
+                                })
+                            })
+                        {
+                            return Err(error);
+                        }
+                        last = Some(error);
+                    }
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| anyhow::anyhow!("无有效录音地址")))
+            .context("所有录音线路均不可用")
     }
 
     fn start_recording(
@@ -293,12 +353,16 @@ impl Engine {
             duration,
             &self.stop,
         )?;
+        self.attach_recorder(recorder);
+        Ok(())
+    }
+
+    fn attach_recorder(&mut self, recorder: Recorder) {
         self.status.recording_path = recorder.record.path.clone();
         self.recorder = Some(recorder);
         self.status.recording = true;
         self.status.recording_ms = 0;
         self.status.message = "正在录音".into();
-        Ok(())
     }
 
     pub fn stop_recording(&mut self, reason: Option<&str>) -> Result<()> {

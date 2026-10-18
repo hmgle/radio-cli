@@ -232,7 +232,7 @@ impl Directory {
         Ok(self
             .get(&format!("/json/stations/byuuid/{uuid}"), &[])?
             .into_iter()
-            .next())
+            .find(|row| row.stationuuid == uuid && valid_identity(row)))
     }
 
     pub fn click(&mut self, uuid: &str) -> Result<()> {

@@ -201,6 +201,19 @@ impl Recorder {
     ) -> Result<Self> {
         validate_url(url)?;
         let info = probe(config, url, stop)?;
+        Self::start_with_info(config, store, station, url, dir, duration, info)
+    }
+
+    pub fn start_with_info(
+        config: &Config,
+        store: &Store,
+        station: &Station,
+        url: &str,
+        dir: &Path,
+        duration: Option<Duration>,
+        info: Value,
+    ) -> Result<Self> {
+        validate_url(url)?;
         let codec = info["streams"][0]["codec_name"]
             .as_str()
             .context("源站没有音频轨道")?
