@@ -95,6 +95,10 @@ TUI 静态文案和 clap 帮助的迁移将单独处理。
 运行时音量保存在 SQLite；配置 `resume = true` 可在 TUI 启动时恢复上次成功播放的电台和来源，
 默认关闭自动恢复播放。不会修改手写配置文件；无效音量回退配置值，已不可用的上次电台跳过。
 
+`countries`、`languages --prefix zh`、`tags --prefix jazz` 列出本地实际筛选值及电台数。
+搜索支持 `--sort name|bitrate|votes|clickcount|random`，默认按点击数，能与全部筛选组合；
+随机排序每次查询重新排列。TUI 的 `F` 弹窗后台加载候选，↑/↓ 选择并填入。
+
 - 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - 录音：数据目录下的 `recordings/`

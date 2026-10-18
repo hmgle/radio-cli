@@ -282,7 +282,13 @@ impl Store {
         let order = if filter.history {
             "(SELECT max(id) FROM history WHERE uuid=s.uuid) DESC"
         } else {
-            "s.popularity DESC,s.name,s.uuid"
+            match filter.sort {
+                crate::model::Sort::Name => "s.name COLLATE NOCASE,s.uuid",
+                crate::model::Sort::Bitrate => "s.bitrate DESC,s.name,s.uuid",
+                crate::model::Sort::Votes => "json_extract(s.json,'$.votes') DESC,s.name,s.uuid",
+                crate::model::Sort::Clickcount => "s.popularity DESC,s.name,s.uuid",
+                crate::model::Sort::Random => "random()",
+            }
         };
         let sql = format!("SELECT s.json,s.active,f.uuid IS NOT NULL FROM stations s
             LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?");
@@ -322,6 +328,35 @@ impl Store {
             .query_row(&sql, params_from_iter(args), |r| r.get::<_, String>(0))
             .optional()?;
         selected.map(|id| self.station(&id)).transpose()
+    }
+
+    pub fn facets(
+        &self,
+        kind: crate::model::FacetKind,
+        prefix: &str,
+    ) -> Result<Vec<crate::model::Facet>> {
+        use crate::model::{Facet, FacetKind};
+        let (sql, prefix) = match kind {
+            FacetKind::Country => (
+                "SELECT country,count(*) FROM stations WHERE active=1 AND country<>'' AND substr(country,1,length(?1))=?1 GROUP BY country ORDER BY country".to_owned(), prefix.trim().to_uppercase()
+            ),
+            FacetKind::Language | FacetKind::Tag => {
+                let column = if matches!(kind, FacetKind::Language) { "languages" } else { "tags" };
+                (format!("WITH RECURSIVE split(uuid,value,rest) AS (
+                    SELECT uuid,'',trim({column},',')||',' FROM stations WHERE active=1
+                    UNION ALL SELECT uuid,substr(rest,1,instr(rest,',')-1),substr(rest,instr(rest,',')+1) FROM split WHERE rest<>''
+                ), entries AS (SELECT DISTINCT uuid,value FROM split WHERE value<>'')
+                SELECT value,count(*) FROM entries WHERE substr(value,1,length(?1))=?1 GROUP BY value ORDER BY value"), prefix.trim().to_lowercase())
+            }
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([prefix], |r| {
+            Ok(Facet {
+                value: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn favorite(&self, uuid: &str, add: bool) -> Result<()> {

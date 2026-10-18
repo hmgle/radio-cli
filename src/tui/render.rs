@@ -516,10 +516,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
         );
     }
     if let Some((selected, values)) = &app.filter_edit {
-        let rect = popup(area, 64, 9);
+        let rect = popup(area, 72, 13);
         frame.render_widget(Clear, rect);
         let names = ["国家代码", "语言", "标签", "最低码率"];
-        let text = names
+        let mut text = names
             .iter()
             .enumerate()
             .map(|(i, name)| {
@@ -537,10 +537,38 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                 ))
             })
             .chain([
-                Line::from("Tab 下一项 · Enter 应用 · Esc 取消"),
+                Line::from("Tab 下一项 · ↑/↓ 选择候选 · Enter 应用 · Esc 取消"),
                 Line::from(app.message.clone()),
             ])
             .collect::<Vec<_>>();
+        if *selected < 3 {
+            let candidates = &view.facets[*selected];
+            let start = app.facet_index.unwrap_or(0).saturating_sub(1);
+            text.push(Line::from(if view.facets_loading {
+                "正在加载本地候选…"
+            } else {
+                "本地候选（电台数）:"
+            }));
+            text.extend(
+                candidates
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .take(3)
+                    .map(|(index, facet)| {
+                        Line::from(format!(
+                            "{} {} ({})",
+                            if app.facet_index == Some(index) {
+                                "›"
+                            } else {
+                                " "
+                            },
+                            crate::clean_text(&facet.value),
+                            facet.count
+                        ))
+                    }),
+            );
+        }
         frame.render_widget(Paragraph::new(text).block(panel("筛选".into(), true)), rect);
     }
     if app.help {

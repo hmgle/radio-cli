@@ -269,6 +269,7 @@ pub(super) struct App {
     pub search_due: Option<Instant>,
     original_query: String,
     pub filter_edit: Option<(usize, [String; 4])>,
+    pub facet_index: Option<usize>,
     pub help: bool,
     pub help_scroll: u16,
     pub details_scroll: u16,
@@ -303,6 +304,7 @@ impl Default for App {
             search_due: None,
             original_query: String::new(),
             filter_edit: None,
+            facet_index: None,
             help: false,
             help_scroll: 0,
             details_scroll: 0,
@@ -618,18 +620,41 @@ impl App {
         }
         if let Some((selected, values)) = &mut self.filter_edit {
             match key.code {
+                KeyCode::Down | KeyCode::Up if *selected < 3 => {
+                    let candidates = &view.facets[*selected];
+                    if !candidates.is_empty() {
+                        let index = match self.facet_index {
+                            Some(index) if key.code == KeyCode::Down => {
+                                (index + 1) % candidates.len()
+                            }
+                            Some(index) => (index + candidates.len() - 1) % candidates.len(),
+                            None if key.code == KeyCode::Down => 0,
+                            None => candidates.len() - 1,
+                        };
+                        self.facet_index = Some(index);
+                        values[*selected] = candidates[index].value.clone();
+                    }
+                }
                 KeyCode::Esc => self.filter_edit = None,
-                KeyCode::Tab => *selected = (*selected + 1) % 4,
-                KeyCode::BackTab => *selected = (*selected + 3) % 4,
+                KeyCode::Tab => {
+                    *selected = (*selected + 1) % 4;
+                    self.facet_index = None;
+                }
+                KeyCode::BackTab => {
+                    *selected = (*selected + 3) % 4;
+                    self.facet_index = None;
+                }
                 KeyCode::Backspace => {
                     values[*selected].pop();
+                    self.facet_index = None;
                 }
                 KeyCode::Char(c)
                     if !c.is_control()
                         && !key.modifiers.contains(KeyModifiers::CONTROL)
                         && values[*selected].len() < 200 =>
                 {
-                    values[*selected].push(c)
+                    values[*selected].push(c);
+                    self.facet_index = None;
                 }
                 KeyCode::Enter => match values[3].parse::<u32>() {
                     Ok(bitrate) => {
@@ -742,6 +767,8 @@ impl App {
                 }
             }
             KeyCode::Char('F') if self.source != Source::Recordings => {
+                self.facet_index = None;
+                self.send(sender, Command::Facets);
                 self.filter_edit = Some((
                     0,
                     [

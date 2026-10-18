@@ -186,6 +186,38 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
 }
 
 #[test]
+fn filter_popup_selects_local_candidates_with_the_keyboard() {
+    let mut data = view();
+    data.facets[0] = vec![
+        crate::model::Facet {
+            value: "CN".into(),
+            count: 2,
+        },
+        crate::model::Facet {
+            value: "FR".into(),
+            count: 3,
+        },
+    ];
+    let (sender, receiver) = command::channel(10);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    assert!(matches!(receiver.try_recv(), Ok(Command::Facets)));
+    app.key(key(KeyCode::Down), &data, &sender);
+    app.key(key(KeyCode::Down), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "FR");
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    assert!(text(&terminal).contains("FR (3)"));
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert_eq!(app.filter.country.as_deref(), Some("FR"));
+    assert!(
+        matches!(receiver.try_recv(), Ok(Command::Search(filter)) if filter.country.as_deref() == Some("FR"))
+    );
+}
+
+#[test]
 fn commands_use_cli_arguments_and_context_without_shell_execution() {
     let data = view();
     let filter = Filter {

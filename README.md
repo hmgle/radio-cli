@@ -104,6 +104,12 @@ last successfully played station and TUI source on startup (default: false).
 The handwritten config file is never rewritten. Invalid saved volume values
 fall back to the validated config setting; unavailable last stations are skipped.
 
+Inspect local filter values with `countries`, `languages --prefix zh`, or
+`tags --prefix jazz`; each value includes its station count. Search accepts
+`--sort name|bitrate|votes|clickcount|random` (default: clickcount), combined
+with all filters. Random ordering is reshuffled per query. The TUI `F` popup
+loads local candidates in the background; arrows select and fill a value.
+
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - Recordings: `recordings/` under the data directory
