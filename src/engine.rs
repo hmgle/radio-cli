@@ -53,6 +53,9 @@ pub struct Engine {
     refreshed: bool,
     confirmed: bool,
     history_recorded: bool,
+    local_playback: bool,
+    local_recording_id: Option<String>,
+    library_task: Option<Background<String>>,
     reconnect_attempts: usize,
     reconnect_due: Option<Instant>,
     started: Instant,
@@ -123,6 +126,9 @@ impl Engine {
             refreshed: false,
             confirmed: false,
             history_recorded: false,
+            local_playback: false,
+            local_recording_id: None,
+            library_task: None,
             reconnect_attempts: 0,
             reconnect_due: None,
             started: Instant::now(),
@@ -153,6 +159,34 @@ impl Engine {
     }
 
     fn play_station(&mut self, station: Station) -> Result<()> {
+        let candidates = station.stream_candidates(&self.store.backups(&station.stationuuid)?);
+        self.play_source(station, candidates, false)
+    }
+
+    pub fn play_recording(&mut self, id: &str) -> Result<()> {
+        let record = self.store.recording(id)?;
+        if matches!(record.status.as_str(), "recording" | "finalizing") || record.recovery_pending {
+            bail!(DomainError::new(ErrorCode::RecordingInUse));
+        }
+        let path = std::fs::canonicalize(&record.path)?;
+        let station = Station {
+            stationuuid: record.stationuuid,
+            name: format!("{} · 本地录音", record.station_name),
+            custom: true,
+            ..Station::default()
+        };
+        self.random_filter = None;
+        self.play_source(station, vec![path.to_string_lossy().into_owned()], true)?;
+        self.local_recording_id = Some(id.into());
+        Ok(())
+    }
+
+    fn play_source(
+        &mut self,
+        station: Station,
+        candidates: Vec<String>,
+        local: bool,
+    ) -> Result<()> {
         self.generation = self.generation.wrapping_add(1);
         self.refresh_task = None;
         self.stop_recording(None)?;
@@ -162,6 +196,8 @@ impl Engine {
         self.refreshed = false;
         self.confirmed = false;
         self.history_recorded = false;
+        self.local_playback = local;
+        self.local_recording_id = None;
         self.reconnect_attempts = 0;
         self.reconnect_due = None;
         self.playback_failed = false;
@@ -169,8 +205,7 @@ impl Engine {
         self.status.playing = false;
         self.status.paused = false;
         self.status.station = Some(station.clone());
-        self.candidates
-            .extend(station.stream_candidates(&self.store.backups(&station.stationuuid)?));
+        self.candidates.extend(candidates);
         self.start_candidate()
     }
 
@@ -187,17 +222,26 @@ impl Engine {
     fn start_url(&mut self) -> Result<()> {
         self.config.settings.volume = self.status.volume;
         if self.background_media {
+            let local = self.local_playback;
             let config = self.config.clone();
             let url = self.url.clone();
             self.player_start = Some((
                 self.generation,
                 self.status.volume,
                 Background::start("radio-player-start", move |cancel| {
-                    Player::start(&config, &url, &cancel)
+                    if local {
+                        Player::start_local(&config, std::path::Path::new(&url), &cancel)
+                    } else {
+                        Player::start(&config, &url, &cancel)
+                    }
                 })?,
             ));
         } else {
-            self.player = Some(Player::start(&self.config, &self.url, &self.stop)?);
+            self.player = Some(if self.local_playback {
+                Player::start_local(&self.config, std::path::Path::new(&self.url), &self.stop)?
+            } else {
+                Player::start(&self.config, &self.url, &self.stop)?
+            });
         }
         self.started = Instant::now();
         self.confirmed = false;
@@ -310,6 +354,7 @@ impl Engine {
                                     self.confirmed = true;
                                     if let Some(s) = &self.status.station
                                         && !self.history_recorded
+                                        && !self.local_playback
                                     {
                                         self.store.played(&s.stationuuid)?;
                                         self.store.set_meta("pref_last_station", &s.stationuuid)?;
@@ -341,6 +386,11 @@ impl Engine {
                                 }
                             }
                             Event::End(reason) if reason == "redirect" => {}
+                            Event::End(reason) if self.local_playback && reason == "eof" => {
+                                self.stop_playback()?;
+                                self.status.message = "本地录音播放结束".into();
+                                break;
+                            }
                             Event::End(reason) if matches!(reason.as_str(), "stop" | "quit") => {
                                 self.stop_playback()?;
                                 self.status.message = "已停止播放".into();
@@ -384,6 +434,48 @@ impl Engine {
             .toggle_pause()
     }
 
+    pub fn playback_active(&self) -> bool {
+        self.player.is_some()
+            || self.player_start.is_some()
+            || self.refresh_task.is_some()
+            || self.reconnect_due.is_some()
+    }
+
+    pub fn delete_recording(&mut self, id: String, index_only: bool) -> Result<()> {
+        if self.library_task.is_some() {
+            bail!(DomainError::new(ErrorCode::RecordingBusy));
+        }
+        if self.local_recording_id.as_deref() == Some(&id) {
+            self.stop_playback()?;
+        }
+        let path = self.config.data_dir.join("radio.db");
+        let lock = self._lock.clone();
+        self.library_task = Some(Background::start(
+            "radio-recording-delete",
+            move |cancel| {
+                let _lock = lock;
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    bail!(DomainError::new(ErrorCode::Cancelled));
+                }
+                crate::service::delete_recording(&Store::open(&path)?, &id, index_only)?;
+                Ok(format!("已删除录音 {id}"))
+            },
+        )?);
+        Ok(())
+    }
+
+    pub fn open_recordings(&mut self) -> Result<()> {
+        if self.library_task.is_some() {
+            bail!(DomainError::new(ErrorCode::RecordingBusy));
+        }
+        let dir = self.config.recording_dir.clone();
+        self.library_task = Some(Background::start("radio-open-recordings", move |cancel| {
+            crate::service::open_recordings(&dir, &cancel)?;
+            Ok(format!("已打开 {}", dir.display()))
+        })?);
+        Ok(())
+    }
+
     pub fn volume(&mut self, delta: i32) -> Result<()> {
         let value = (i32::from(self.status.volume) + delta).clamp(0, 100) as u8;
         if let Some(player) = &mut self.player {
@@ -407,6 +499,9 @@ impl Engine {
         duration: Option<Duration>,
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
+        if self.local_playback {
+            bail!(DomainError::new(ErrorCode::LocalRecording));
+        }
         if !self.status.playing {
             bail!(DomainError::new(ErrorCode::WaitForPlayback));
         }
@@ -582,6 +677,13 @@ impl Engine {
     }
 
     fn poll_background(&mut self) -> Result<()> {
+        if let Some(result) = self.library_task.as_ref().and_then(Background::poll) {
+            self.library_task = None;
+            self.status.message = match result {
+                Ok(message) => message,
+                Err(error) => format!("录音操作失败: {error:#}"),
+            };
+        }
         self.retiring.retain(|task| task.poll().is_none());
         if let Some(result) = self
             .player_start

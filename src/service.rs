@@ -67,3 +67,42 @@ fn validate(name: &str, url: &str, backups: &[String]) -> Result<()> {
     }
     Ok(())
 }
+
+pub fn open_recordings(
+    dir: &std::path::Path,
+    stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    crate::process::output(
+        std::process::Command::new("xdg-open").arg(dir),
+        std::time::Duration::from_secs(5),
+        stop,
+    )?;
+    Ok(())
+}
+
+/// Delete files first and the index last. Missing files make retries idempotent;
+/// other filesystem errors retain the index for diagnosis and another attempt.
+pub fn delete_recording(store: &Store, id: &str, index_only: bool) -> Result<()> {
+    let record = store.recording(id)?;
+    if matches!(record.status.as_str(), "recording" | "finalizing") || record.recovery_pending {
+        bail!(DomainError::new(ErrorCode::RecordingInUse));
+    }
+    if !index_only {
+        for path in [
+            std::path::PathBuf::from(&record.path),
+            std::path::PathBuf::from(format!("{}.json", record.path)),
+        ] {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(
+                        anyhow::Error::new(error).context(format!("{} ({id})", path.display()))
+                    );
+                }
+            }
+        }
+    }
+    store.remove_recording_index(id)
+}

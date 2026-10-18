@@ -96,7 +96,7 @@ fn context_hints_match_source_and_focus_actions() {
             assert!(!hint.is_empty());
             if focus == Focus::List {
                 let station_actions = source != Source::Recordings;
-                assert_eq!(hint.contains("Enter 播放"), station_actions);
+                assert!(hint.contains("Enter 播放"));
                 assert_eq!(hint.contains("f 收藏"), station_actions);
                 app.focus = focus;
                 app.key(key(KeyCode::Enter), &data, &sender);
@@ -1246,4 +1246,46 @@ fn page_down_uses_totals_and_waits_for_the_current_query() {
         assert_eq!(app.filter.offset, 0);
         assert!(receiver.try_recv().is_ok());
     }
+}
+
+#[test]
+fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
+    let mut data = view();
+    data.recordings = vec![
+        serde_json::from_value(serde_json::json!({
+            "id":"saved", "stationuuid":"s", "station_name":"Saved audio",
+            "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+            "stopped_at":null, "media_duration_ms":null, "codec":"mp3", "container":"mp3",
+            "path":"/tmp/sample", "size_bytes":1, "status":"failed",
+            "error":"first line\nFFmpeg disk failure details"
+        }))
+        .unwrap(),
+    ];
+    let mut app = App::default();
+    app.source = Source::Recordings;
+    let (sender, receiver) = command::channel(10);
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(matches!(receiver.try_recv(), Ok(Command::PlayRecording(id)) if id == "saved"));
+    app.key(key(KeyCode::Char('D')), &data, &sender);
+    assert!(receiver.try_recv().is_err());
+    app.key(key(KeyCode::Char('n')), &data, &sender);
+    assert!(receiver.try_recv().is_err());
+    app.key(key(KeyCode::Char('D')), &data, &sender);
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(Command::DeleteRecording {
+            index_only: false,
+            ..
+        })
+    ));
+    app.key(key(KeyCode::Char('o')), &data, &sender);
+    assert!(matches!(receiver.try_recv(), Ok(Command::OpenRecordings)));
+    app.key(key(KeyCode::Char('e')), &data, &sender);
+    assert!(app.recording_error_expanded);
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    assert!(text(&terminal).contains("FFmpeg disk failure details"));
 }

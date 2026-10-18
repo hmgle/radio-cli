@@ -254,6 +254,9 @@ pub(super) fn execute(
             refresh(engine, filter, view)?;
         }
         Command::Play(uuid) => engine.play(&uuid)?,
+        Command::PlayRecording(id) => engine.play_recording(&id)?,
+        Command::DeleteRecording { id, index_only } => engine.delete_recording(id, index_only)?,
+        Command::OpenRecordings => engine.open_recordings()?,
         Command::Random(filter) => engine.random(filter)?,
         Command::ToggleFavorite(uuid) => {
             let add = engine.store.toggle_favorite(&uuid)?;

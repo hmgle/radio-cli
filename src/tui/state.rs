@@ -258,6 +258,7 @@ impl Editor {
 }
 
 pub(super) struct App {
+    pub recording_error_expanded: bool,
     pub confirmation: Option<Command>,
     pub focus: Focus,
     pub source: Source,
@@ -292,6 +293,7 @@ impl Default for App {
         list.select(Some(0));
         Self {
             confirmation: None,
+            recording_error_expanded: false,
             focus: Focus::List,
             source: Source::Stations,
             mode: Mode::Normal,
@@ -548,10 +550,11 @@ impl App {
                         if matches!(
                             command,
                             Command::Station(crate::cli::StationAction::Remove { .. })
+                                | Command::DeleteRecording { .. }
                         ) {
                             self.confirmation = Some(command);
                             self.message =
-                                "确认删除自定义电台？引用名称将保留。y 确认 · n/Esc 取消".into();
+                                "确认删除？录音默认先删文件再删索引；--index-only 保留文件。y 确认 · n/Esc 取消".into();
                             return;
                         }
                         if let Command::Info(uuid, _) = command {
@@ -780,9 +783,32 @@ impl App {
                 }
             }
             KeyCode::Enter if self.focus == Focus::List => {
-                if let Some(s) = self.selected(view) {
+                if self.source == Source::Recordings && self.filter == view.filter {
+                    if let Some(r) = view.recordings.get(self.list.selected().unwrap_or(0)) {
+                        self.send(sender, Command::PlayRecording(r.id.clone()));
+                    }
+                } else if let Some(s) = self.selected(view) {
                     self.send(sender, Command::Play(s.stationuuid.clone()));
                 }
+            }
+            KeyCode::Char('D')
+                if self.source == Source::Recordings && self.filter == view.filter =>
+            {
+                if let Some(r) = view.recordings.get(self.list.selected().unwrap_or(0)) {
+                    self.confirmation = Some(Command::DeleteRecording {
+                        id: r.id.clone(),
+                        index_only: false,
+                    });
+                    self.message = "删除录音文件、sidecar 和索引？y 确认 · n/Esc 取消；仅删索引用 :recordings remove ID --index-only".into();
+                }
+            }
+            KeyCode::Char('o') if self.source == Source::Recordings => {
+                self.send(sender, Command::OpenRecordings);
+            }
+            KeyCode::Char('e') if self.source == Source::Recordings => {
+                self.recording_error_expanded = !self.recording_error_expanded;
+                self.focus = Focus::Details;
+                self.details_scroll = 0;
             }
             KeyCode::Char('f') if self.source != Source::Recordings => {
                 if let Some(s) = self.selected(view) {

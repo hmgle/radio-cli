@@ -768,3 +768,99 @@ fn recording_skips_a_source_without_an_audio_track() {
     );
     engine.shutdown().unwrap();
 }
+
+fn library_record(path: &std::path::Path) -> radio_cli::model::Recording {
+    serde_json::from_value(serde_json::json!({
+        "id":"library", "stationuuid":"s", "station_name":"Local sample",
+        "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+        "stopped_at":"2026-01-01", "media_duration_ms":2000, "codec":"mp3",
+        "container":"mp3", "path":path, "size_bytes":1,"status":"complete","error":null
+    }))
+    .unwrap()
+}
+
+#[test]
+fn recording_library_deletion_is_retryable_and_protects_pending_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let path = dir.path().join("sample.mp3");
+    fs::write(&path, b"audio").unwrap();
+    let mut record = library_record(&path);
+    store.save_recording(&record).unwrap();
+    radio_cli::service::delete_recording(&store, &record.id, true).unwrap();
+    assert!(path.exists());
+    record.recovery_pending = true;
+    store.save_recording(&record).unwrap();
+    assert!(radio_cli::service::delete_recording(&store, &record.id, false).is_err());
+    record.recovery_pending = false;
+    store.save_recording(&record).unwrap();
+    fs::create_dir(format!("{}.json", path.display())).unwrap();
+    assert!(radio_cli::service::delete_recording(&store, &record.id, false).is_err());
+    assert!(store.recording(&record.id).is_ok());
+    fs::remove_dir(format!("{}.json", path.display())).unwrap();
+    radio_cli::service::delete_recording(&store, &record.id, false).unwrap();
+    assert!(store.recording(&record.id).is_err());
+}
+
+#[test]
+fn insufficient_disk_space_refuses_before_creating_partial_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.recording_min_free_mb = u64::MAX;
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = sample("https://example.com/live");
+    let info = serde_json::json!({"streams":[{"codec_name":"mp3","codec_type":"audio"}],"format":{"bit_rate":"128000"}});
+    let result = Recorder::start_with_info(
+        &config,
+        &store,
+        &station,
+        station.primary_url(),
+        &config.recording_dir,
+        Some(Duration::from_secs(60)),
+        info,
+    );
+    assert!(
+        result
+            .err()
+            .unwrap()
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .is_some()
+    );
+    assert_eq!(store.recordings_count().unwrap(), 0);
+    assert_eq!(fs::read_dir(&config.recording_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn local_recording_plays_to_eof_without_history_or_reconnect() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(config) = mpv_config(dir.path()) else {
+        return;
+    };
+    let path = dir.path().join("local # audio.mp3");
+    fs::write(&path, support::fixture("libmp3lame", "mp3")).unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let record = library_record(&path);
+    engine.store.save_recording(&record).unwrap();
+    engine.play_recording(&record.id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut played = false;
+    while engine.playback_active() {
+        engine.tick().unwrap();
+        played |= engine.status.playing;
+        assert!(Instant::now() < deadline, "{:?}", engine.status);
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(played);
+    assert!(!engine.playback_failed);
+    assert_eq!(
+        engine
+            .store
+            .search_count(&radio_cli::model::Filter {
+                history: true,
+                ..Default::default()
+            })
+            .unwrap(),
+        0
+    );
+    engine.shutdown().unwrap();
+}
