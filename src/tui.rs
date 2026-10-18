@@ -77,8 +77,13 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                 continue;
             }
             match event::read()? {
-                Event::Resize(_, _) => dirty = true,
+                Event::Resize(width, height) => {
+                    app.update_size(width, height);
+                    dirty = true;
+                }
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    let size = terminal.size()?;
+                    app.update_size(size.width, size.height);
                     app.key(key, &snapshot, &sender);
                     dirty = true;
                 }
