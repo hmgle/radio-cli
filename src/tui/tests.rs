@@ -129,7 +129,7 @@ fn commands_use_cli_arguments_and_context_without_shell_execution() {
         _ => panic!(),
     }
     match command::parse("current", selected, current, &filter).unwrap() {
-        Parsed::Worker(Command::Info(uuid)) => assert_eq!(uuid, current.unwrap().stationuuid),
+        Parsed::Worker(Command::Info(uuid, _)) => assert_eq!(uuid, current.unwrap().stationuuid),
         _ => panic!(),
     }
     assert!(matches!(
@@ -574,4 +574,62 @@ fn full_queue_retries_every_view_query_with_latest_filter() {
             _ => panic!("expected retryable query"),
         }
     }
+}
+
+#[test]
+fn failed_info_replaces_old_details_and_external_edits_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let row = station("old detail");
+    engine.store.upsert(&row).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    worker::execute(
+        Command::Info(row.stationuuid.clone(), 1),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    assert!(shared.lock().unwrap().inspected.is_some());
+    worker::execute(
+        Command::Info("missing".into(), 2),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    let data = shared.lock().unwrap().clone();
+    assert!(data.inspected.is_none());
+    assert_eq!(data.inspected_request, 2);
+    assert!(data.inspected_error.is_some());
+    let mut app = App::default();
+    app.inspect_info = true;
+    app.info_request = 2;
+    app.focus = Focus::Details;
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("详情查询失败"));
+    assert!(!text(&terminal).contains("old detail"));
+    let before = engine.store.revision().unwrap();
+    let external = Store::open(&dir.path().join("radio.db")).unwrap();
+    external.favorite(&row.stationuuid, true).unwrap();
+    assert_ne!(engine.store.revision().unwrap(), before);
+    worker::execute(
+        Command::Refresh,
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    assert!(shared.lock().unwrap().rows[0].favorite);
 }

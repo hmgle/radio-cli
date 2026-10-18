@@ -32,7 +32,8 @@ pub(super) enum Command {
     Sync,
     Cancel,
     Recordings(Filter),
-    Info(String),
+    Info(String, u64),
+    Refresh,
     Doctor,
 }
 
@@ -90,12 +91,14 @@ pub(super) fn parse(
             .ok_or_else(|| anyhow::anyhow!("请先选择电台或指定 UUID"))
     };
     match name.as_str() {
+        "refresh" if words.len() == 1 => return Ok(Parsed::Worker(Command::Refresh)),
         "current" if words.len() == 1 => {
             return Ok(Parsed::Worker(Command::Info(
                 current
                     .ok_or_else(|| anyhow::anyhow!("尚未播放"))?
                     .stationuuid
                     .clone(),
+                0,
             )));
         }
         "q" | "quit" if words.len() == 1 => return Ok(Parsed::Quit),
@@ -159,7 +162,7 @@ pub(super) fn parse(
         Some(Action::Search(search)) => Parsed::Search(search.filter()),
         Some(Action::Play { uuid }) => Parsed::Worker(Command::Play(uuid)),
         Some(Action::Random(search)) => Parsed::Worker(Command::Random(search.filter())),
-        Some(Action::Info { uuid }) => Parsed::Worker(Command::Info(uuid)),
+        Some(Action::Info { uuid }) => Parsed::Worker(Command::Info(uuid, 0)),
         Some(Action::History(page)) => Parsed::Source(Source::History, page),
         Some(Action::Favorites { action }) => match action {
             crate::cli::Favorite::List(page) => Parsed::Source(Source::Favorites, page),

@@ -132,6 +132,13 @@ impl Store {
         Ok(count)
     }
 
+    pub fn revision(&self) -> Result<(u64, u64)> {
+        let external = self
+            .conn
+            .pragma_query_value(None, "data_version", |r| r.get(0))?;
+        Ok((external, self.conn.total_changes()))
+    }
+
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn

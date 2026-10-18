@@ -28,6 +28,8 @@ pub(super) struct View {
     pub task_active: bool,
     pub logs: VecDeque<String>,
     pub inspected: Option<Station>,
+    pub inspected_request: u64,
+    pub inspected_error: Option<String>,
     pub revision: u64,
     pub rows_revision: u64,
     pub filter: Filter,
@@ -47,6 +49,8 @@ impl View {
             task_active: false,
             logs: VecDeque::new(),
             inspected: None,
+            inspected_request: 0,
+            inspected_error: None,
             revision: 1,
             rows_revision: 0,
             filter: Filter {
@@ -252,10 +256,17 @@ pub(super) fn execute(
             *filter = value;
             refresh(engine, filter, view)?;
         }
-        Command::Info(uuid) => {
-            let station = engine.store.station(&uuid)?;
+        Command::Refresh => refresh(engine, filter, view)?,
+        Command::Info(uuid, request) => {
+            let result = engine.store.station(&uuid);
             let mut data = view.lock().unwrap();
-            data.inspected = Some(station);
+            data.inspected_request = request;
+            data.inspected = None;
+            data.inspected_error = None;
+            match result {
+                Ok(station) => data.inspected = Some(station),
+                Err(error) => data.inspected_error = Some(format!("详情查询失败: {error:#}")),
+            }
             data.revision += 1;
         }
         Command::Doctor => {
@@ -297,6 +308,7 @@ pub(super) fn run(
     let mut last_status = String::new();
     let mut last_message = String::new();
     let mut was_recording = false;
+    let mut revision = engine.store.revision()?;
     let result = (|| -> Result<()> {
         while !stop.load(Ordering::Relaxed) {
             match commands.recv_timeout(Duration::from_millis(100)) {
@@ -357,7 +369,9 @@ pub(super) fn run(
             if let Err(error) = engine.tick() {
                 view.lock().unwrap().log(&format!("错误: {error:#}"));
             }
-            if was_recording && !engine.status.recording {
+            let current_revision = engine.store.revision()?;
+            if revision != current_revision || was_recording && !engine.status.recording {
+                revision = current_revision;
                 refresh(&engine, &filter, &view)?;
             }
             was_recording = engine.status.recording;
