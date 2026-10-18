@@ -1,5 +1,5 @@
 use super::{
-    command::{self, Command, Parsed},
+    command::{self, Command, CommandSender, Parsed},
     worker::View,
 };
 use crate::model::{Filter, Station};
@@ -7,7 +7,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::{layout::Rect, widgets::ListState};
 use std::{
     collections::VecDeque,
-    sync::mpsc::SyncSender,
     time::{Duration, Instant},
 };
 
@@ -350,13 +349,13 @@ impl App {
             self.selected(view).map(|s| s.stationuuid.clone())
         }
     }
-    fn request_info(&mut self, uuid: String, sender: &SyncSender<Command>) {
+    fn request_info(&mut self, uuid: String, sender: &CommandSender) {
         self.info_request = self.info_request.wrapping_add(1);
         self.inspect_info = self.send(sender, Command::Info(uuid, self.info_request));
         self.focus = Focus::Details;
         self.details_scroll = 0;
     }
-    fn send(&mut self, sender: &SyncSender<Command>, command: Command) -> bool {
+    fn send(&mut self, sender: &CommandSender, command: Command) -> bool {
         match sender.try_send(command) {
             Ok(()) => true,
             Err(error) => {
@@ -365,7 +364,7 @@ impl App {
             }
         }
     }
-    pub fn flush_search(&mut self, sender: &SyncSender<Command>) {
+    pub fn flush_search(&mut self, sender: &CommandSender) {
         if self.send(
             sender,
             if self.source == Source::Recordings {
@@ -385,7 +384,7 @@ impl App {
         self.details_scroll = 0;
         self.inspect_info = false;
     }
-    fn switch_source(&mut self, source: Source, sender: &SyncSender<Command>) {
+    fn switch_source(&mut self, source: Source, sender: &CommandSender) {
         self.positions[self.source.index()] = self.list.selected().unwrap_or(0);
         self.source = source;
         self.list = ListState::default().with_selected(Some(self.positions[source.index()]));
@@ -452,7 +451,7 @@ impl App {
             Focus::Player => {}
         }
     }
-    fn execute_line(&mut self, view: &View, sender: &SyncSender<Command>) {
+    fn execute_line(&mut self, view: &View, sender: &CommandSender) {
         match command::parse(
             &self.editor.text,
             self.selected(view),
@@ -509,7 +508,7 @@ impl App {
             Err(error) => self.message = crate::clean_text(&format!("{error}")),
         }
     }
-    pub fn key(&mut self, key: KeyEvent, view: &View, sender: &SyncSender<Command>) {
+    pub fn key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
             || self.too_small && key.code == KeyCode::Char('q')
         {
@@ -709,7 +708,7 @@ impl App {
             _ => {}
         }
     }
-    pub fn mouse(&mut self, event: MouseEvent, view: &View, sender: &SyncSender<Command>) {
+    pub fn mouse(&mut self, event: MouseEvent, view: &View, sender: &CommandSender) {
         if self.mode != Mode::Normal || self.help || self.filter_edit.is_some() {
             return;
         }

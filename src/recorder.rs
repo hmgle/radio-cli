@@ -37,6 +37,20 @@ pub struct Recorder {
 }
 
 pub fn probe(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Value> {
+    probe_with_timeout(
+        config,
+        url,
+        stop,
+        Duration::from_secs(config.settings.playback_timeout_secs),
+    )
+}
+
+fn probe_with_timeout(
+    config: &Config,
+    url: &str,
+    stop: &Arc<AtomicBool>,
+    timeout: Duration,
+) -> Result<Value> {
     let data = process::output(
         Command::new(&config.settings.ffprobe).args([
             "-v",
@@ -58,7 +72,7 @@ pub fn probe(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Value
             "-i",
             url,
         ]),
-        Duration::from_secs(config.settings.playback_timeout_secs),
+        timeout,
         stop,
     )?;
     Ok(serde_json::from_slice(&data)?)
@@ -266,11 +280,11 @@ impl Recorder {
         }
         command.args(["-progress", "pipe:2", "-f", muxer, "pipe:1"]);
         // An exclusively created file is passed as stdout; no shell or unsafe FD setup.
-        let child_result = process::owned_child(&mut command)
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::from(file))
-            .stderr(Stdio::piped())
-            .spawn();
+            .stderr(Stdio::piped());
+        let child_result = process::spawn_owned(command);
         let mut child = match child_result {
             Ok(child) => child,
             Err(e) => {
@@ -375,11 +389,16 @@ impl Recorder {
         }
     }
 
-    pub fn finish(
+    pub fn finish(self, config: &Config, store: &Store, reason: Option<&str>) -> Result<Recording> {
+        self.finish_cancellable(config, store, reason, &Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn finish_cancellable(
         mut self,
         config: &Config,
         store: &Store,
         reason: Option<&str>,
+        stop: &Arc<AtomicBool>,
     ) -> Result<Recording> {
         let status = self.stop_child()?;
         for handle in self.readers.drain(..) {
@@ -388,8 +407,12 @@ impl Recorder {
         self.duration_ms = self.progress.load(Ordering::Relaxed);
         self.record.stopped_at = Some(chrono::Utc::now().to_rfc3339());
         self.record.size_bytes = fs::metadata(&self.partial)?.len();
-        let never_stop = Arc::new(AtomicBool::new(false));
-        let verification = probe(config, &self.partial.to_string_lossy(), &never_stop);
+        let verification = probe_with_timeout(
+            config,
+            &self.partial.to_string_lossy(),
+            stop,
+            Duration::from_secs(2),
+        );
         if let Ok(info) = &verification {
             self.record.media_duration_ms = info["format"]["duration"]
                 .as_str()
