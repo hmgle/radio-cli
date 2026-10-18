@@ -12,9 +12,11 @@ pub(super) enum Command {
     Play(String),
     Random(Filter),
     Favorite(String, bool),
+    ToggleFavorite(String),
     Pause,
     Stop,
     Volume(u8),
+    AdjustVolume(i32),
     RecordToggle,
     RecordStop,
     Record {

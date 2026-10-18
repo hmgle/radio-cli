@@ -64,7 +64,7 @@ impl View {
     }
 }
 
-struct CatalogJob {
+pub(super) struct CatalogJob {
     cancel: Arc<AtomicBool>,
     progress: Arc<AtomicUsize>,
     result: Receiver<Result<usize>>,
@@ -138,7 +138,7 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
     Ok(())
 }
 
-fn execute(
+pub(super) fn execute(
     command: Command,
     engine: &mut Engine,
     filter: &mut Filter,
@@ -153,6 +153,11 @@ fn execute(
         }
         Command::Play(uuid) => engine.play(&uuid)?,
         Command::Random(filter) => engine.random(filter)?,
+        Command::ToggleFavorite(uuid) => {
+            let add = !engine.store.station(&uuid)?.favorite;
+            return execute(Command::Favorite(uuid, add), engine, filter, job, view);
+        }
+        Command::AdjustVolume(delta) => engine.volume(delta)?,
         Command::Favorite(uuid, add) => {
             engine.store.favorite(&uuid, add)?;
             let mut data = view.lock().unwrap();

@@ -658,10 +658,7 @@ impl App {
             }
             KeyCode::Char('f') if self.source != Source::Recordings => {
                 if let Some(s) = self.selected(view) {
-                    self.send(
-                        sender,
-                        Command::Favorite(s.stationuuid.clone(), !s.favorite),
-                    );
+                    self.send(sender, Command::ToggleFavorite(s.stationuuid.clone()));
                 }
             }
             KeyCode::Char('F') if self.source != Source::Recordings => {
@@ -685,16 +682,10 @@ impl App {
                 self.send(sender, Command::Pause);
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                self.send(
-                    sender,
-                    Command::Volume(view.status.volume.saturating_add(5).min(100)),
-                );
+                self.send(sender, Command::AdjustVolume(5));
             }
             KeyCode::Char('-') => {
-                self.send(
-                    sender,
-                    Command::Volume(view.status.volume.saturating_sub(5)),
-                );
+                self.send(sender, Command::AdjustVolume(-5));
             }
             _ => {}
         }
