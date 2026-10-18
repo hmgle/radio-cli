@@ -221,9 +221,10 @@ impl Store {
         if filter.history {
             clauses[0] = "EXISTS(SELECT 1 FROM history h WHERE h.uuid=s.uuid)".into();
         }
-        if !filter.query.is_empty() {
+        let query = filter.query.trim();
+        if !query.is_empty() {
             clauses.push("instr(s.search,?)>0".into());
-            args.push(filter.query.to_lowercase().into());
+            args.push(query.to_lowercase().into());
         }
         if let Some(country) = &filter.country {
             clauses.push("s.country=?".into());

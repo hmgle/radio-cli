@@ -30,7 +30,9 @@ fn unicode_filters_literals_and_pagination() {
     let (_dir, store) = db();
     let s = station("上海 Jazz 100%_FM");
     store.upsert(&s).unwrap();
-    for query in ["上海", "jAZZ", "%_", "100%_FM"] {
+    for query in [
+        "上海", "jAZZ", "%_", "100%_FM", " jazz ", "　jazz", "\tjazz\t",
+    ] {
         assert_eq!(
             store
                 .search(&Filter {
@@ -41,6 +43,19 @@ fn unicode_filters_literals_and_pagination() {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+    for query in ["", " \t　 "] {
+        let filter = Filter {
+            query: query.into(),
+            limit: 100,
+            ..Filter::default()
+        };
+        assert_eq!(store.search(&filter).unwrap().len(), 1);
+        assert_eq!(store.search_count(&filter).unwrap(), 1);
+        assert_eq!(
+            store.random(&filter, &[]).unwrap().unwrap().stationuuid,
+            s.stationuuid
         );
     }
     let mut filter = Filter {
