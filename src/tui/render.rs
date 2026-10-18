@@ -485,13 +485,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             app.filter.tag.as_deref().unwrap_or("全部标签"),
             app.filter.min_bitrate
         );
-        let context = match app.focus {
-            Focus::Sources => "j/k 分类 · Enter 进入列表",
-            Focus::List => "j/k 选择 · Enter 播放 · f 收藏 · gg/G 首尾 · PgUp/PgDn 翻页",
-            Focus::Details => "j/k / PgUp/PgDn 滚动详情",
-            Focus::Player => "Enter 当前电台详情 · Space 暂停 · r 录音 · +/- 音量 · :stop 停止",
-            Focus::Activity => "j/k 滚动消息 · :sync 同步 · :sync-cancel 取消",
-        };
+        let context = context_hint(app.source, app.focus);
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
@@ -587,7 +581,17 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-/// Horizontally scroll input by display cells while keeping the Unicode cursor visible.
+pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {
+    match (source, focus) {
+        (_, Focus::Sources) => "j/k 分类 · Enter 进入列表",
+        (Source::Recordings, Focus::List) => "j/k 选择 · gg/G 首尾 · PgUp/PgDn 翻页",
+        (_, Focus::List) => "j/k 选择 · Enter 播放 · f 收藏 · gg/G 首尾 · PgUp/PgDn 翻页",
+        (_, Focus::Details) => "j/k / PgUp/PgDn 滚动详情",
+        (_, Focus::Player) => "Enter 当前电台详情 · Space 暂停 · r 录音 · +/- 音量 · :stop 停止",
+        (_, Focus::Activity) => "j/k 滚动消息 · :sync 同步 · :sync-cancel 取消",
+    }
+}
+
 pub(super) fn input_geometry(label: &str, width: u16) -> (u16, u16) {
     let start = label.width().saturating_add(1).min(usize::from(width)) as u16;
     (
@@ -596,6 +600,7 @@ pub(super) fn input_geometry(label: &str, width: u16) -> (u16, u16) {
     )
 }
 
+/// Horizontally scroll input by display cells while keeping the Unicode cursor visible.
 fn input_window(text: &str, cursor: usize, width: u16) -> (String, u16) {
     if width == 0 {
         return (String::new(), 0);
