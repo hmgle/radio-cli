@@ -102,6 +102,12 @@ pub(super) enum Command {
     Station(crate::cli::StationAction),
     Search(Filter),
     Play(String),
+    PlayRecording(String),
+    DeleteRecording {
+        id: String,
+        index_only: bool,
+    },
+    OpenRecordings,
     Random(Filter),
     Favorite(String, bool),
     ToggleFavorite(String),
@@ -151,6 +157,9 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "record",
     "record stop",
     "recordings list",
+    "recordings play",
+    "recordings remove",
+    "open recordings",
     "favorites list",
     "favorites add",
     "favorites remove",
@@ -189,6 +198,9 @@ pub(super) fn parse(
     };
     match name.as_str() {
         "refresh" if words.len() == 1 => return Ok(Parsed::Worker(Command::Refresh)),
+        "open" if words.get(1).map(String::as_str) == Some("recordings") && words.len() == 2 => {
+            return Ok(Parsed::Worker(Command::OpenRecordings));
+        }
         "current" if words.len() == 1 => {
             return Ok(Parsed::Worker(Command::Info(
                 current
@@ -269,6 +281,15 @@ pub(super) fn parse(
         Some(Action::Recordings {
             action: crate::cli::RecordingAction::List(page),
         }) => Parsed::Source(Source::Recordings, page),
+        Some(Action::Recordings {
+            action: crate::cli::RecordingAction::Play { id },
+        }) => Parsed::Worker(Command::PlayRecording(id)),
+        Some(Action::Recordings {
+            action: crate::cli::RecordingAction::Remove { id, index_only },
+        }) => Parsed::Worker(Command::DeleteRecording { id, index_only }),
+        Some(Action::Recordings {
+            action: crate::cli::RecordingAction::Open,
+        }) => Parsed::Worker(Command::OpenRecordings),
         Some(Action::Record {
             uuid,
             duration,
@@ -337,6 +358,9 @@ Home / Ctrl-a 行首；End / Ctrl-e 行尾；Ctrl-u 清空\n\n\
 :favorites list|add|remove [UUID]\n\
 :history                最近播放\n\
 :recordings list        录音记录\n\
+录音列表: Enter 播放 · D 删除(y 确认) · o 打开目录 · e 展开错误\n\
+:recordings play ID / :recordings remove ID [--index-only]\n\
+:open recordings        打开录音目录\n\
 :station add '我的电台' https://example.com/live\n\
 :station list / :station edit UUID --name 名称 --url URL\n\
 :station remove UUID [--keep-references]  y 确认删除\n\

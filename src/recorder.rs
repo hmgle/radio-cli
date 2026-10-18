@@ -242,6 +242,25 @@ impl Recorder {
         let (extension, muxer) = format_for_codec(&codec)?;
         fs::create_dir_all(dir)?;
         let dir = fs::canonicalize(dir)?;
+        let bitrate = info["format"]["bit_rate"]
+            .as_str()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(u64::from(station.bitrate) * 1000);
+        let required = config
+            .settings
+            .recording_min_free_mb
+            .saturating_mul(1024 * 1024)
+            .saturating_add(duration.map_or(0, |duration| {
+                bitrate.saturating_mul(duration.as_secs()).saturating_div(8)
+            }));
+        let available = fs2::available_space(&dir)?;
+        if available < required {
+            bail!(
+                DomainError::new(ErrorCode::InsufficientSpace)
+                    .with("available", available)
+                    .with("required", required)
+            );
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let name: String = station
             .name

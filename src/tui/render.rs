@@ -335,7 +335,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                     r.stationuuid,
                     crate::clean_text(&r.source_url_resolved),
                     crate::clean_text(&r.path),
-                    r.error.as_deref().unwrap_or("")
+                    r.error.as_deref().map(|error| if app.recording_error_expanded {
+                        error.lines().map(crate::clean_text).collect::<Vec<_>>().join("\n")
+                    } else {
+                        format!("{} · e 展开错误", crate::clean_text(error.lines().next().unwrap_or("")))
+                    }).unwrap_or_default()
                 )
             }).unwrap_or_else(|| "暂无录音记录".into())
         } else if app.inspect_info && view.inspected_request != app.info_request {
@@ -622,7 +626,9 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {
     match (source, focus) {
         (_, Focus::Sources) => "j/k 分类 · Enter 进入列表",
-        (Source::Recordings, Focus::List) => "j/k 选择 · gg/G 首尾 · PgUp/PgDn 翻页",
+        (Source::Recordings, Focus::List) => {
+            "Enter 播放 · D 删除 · o 目录 · e 错误 · PgUp/PgDn 翻页"
+        }
         (_, Focus::List) => "j/k 选择 · Enter 播放 · f 收藏 · gg/G 首尾 · PgUp/PgDn 翻页",
         (_, Focus::Details) => "j/k / PgUp/PgDn 滚动详情",
         (_, Focus::Player) => "Enter 当前电台详情 · Space 暂停 · r 录音 · +/- 音量 · :stop 停止",

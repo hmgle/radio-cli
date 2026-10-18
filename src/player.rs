@@ -38,6 +38,21 @@ pub struct Player {
 impl Player {
     pub fn start(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
         validate_url(url)?;
+        Self::start_input(config, url, stop)
+    }
+
+    pub fn start_local(
+        config: &Config,
+        path: &std::path::Path,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<Self> {
+        let path = fs::canonicalize(path)?;
+        let url = reqwest::Url::from_file_path(path)
+            .map_err(|_| DomainError::new(ErrorCode::InvalidUrl))?;
+        Self::start_input(config, url.as_str(), stop)
+    }
+
+    fn start_input(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
         let socket = config
             .runtime_dir
             .join(format!("mpv-{}.sock", uuid::Uuid::new_v4().simple()));

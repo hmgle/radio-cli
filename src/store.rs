@@ -540,6 +540,25 @@ impl Store {
             .query_row("SELECT count(*) FROM recordings", [], |r| r.get(0))?)
     }
 
+    pub fn recording(&self, id: &str) -> Result<Recording> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT json,recovery_pending FROM recordings WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .context(DomainError::new(ErrorCode::RecordingNotFound))?;
+        Self::read_recording(row)
+    }
+
+    pub fn remove_recording_index(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM recordings WHERE id=?1", [id])?;
+        Ok(())
+    }
+
     pub fn recordings_page(&self, limit: usize, offset: usize) -> Result<Vec<Recording>> {
         let mut stmt = self.conn.prepare("SELECT json,recovery_pending FROM recordings ORDER BY json_extract(json,'$.started_at') DESC,id DESC LIMIT ?1 OFFSET ?2")?;
         let rows = stmt.query_map(

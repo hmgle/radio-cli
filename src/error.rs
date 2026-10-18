@@ -61,6 +61,10 @@ codes! {
     EmptyStationName => "empty_station_name",
     DuplicateStation => "duplicate_station",
     NotCustom => "not_custom",
+    RecordingNotFound => "recording_not_found",
+    RecordingInUse => "recording_in_use",
+    InsufficientSpace => "insufficient_space",
+    LocalRecording => "local_recording",
 }
 
 #[derive(Debug, Clone)]

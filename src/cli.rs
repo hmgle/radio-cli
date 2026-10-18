@@ -219,6 +219,16 @@ pub enum StationAction {
 pub enum RecordingAction {
     List(Page),
     Recover,
+    Play {
+        id: String,
+    },
+    Remove {
+        id: String,
+        /// Remove the index only, retaining the audio and sidecar files.
+        #[arg(long)]
+        index_only: bool,
+    },
+    Open,
 }
 
 fn emit(value: &impl serde::Serialize) -> Result<()> {
@@ -406,6 +416,26 @@ pub fn run(cli: Cli) -> Result<()> {
             emit(&store.update_backups(&uuid, &add, &remove)?)?;
         }
         Action::Recordings {
+            action: RecordingAction::Play { id },
+        } => {
+            drop(store);
+            let mut engine = Engine::new(config, stop.clone())?;
+            engine.play_recording(&id)?;
+            playback_loop(&mut engine, &stop)?;
+        }
+        Action::Recordings {
+            action: RecordingAction::Remove { id, index_only },
+        } => {
+            let _lock = crate::process::MediaLock::acquire(&config.runtime_dir)?;
+            crate::service::delete_recording(&store, &id, index_only)?;
+            emit(&serde_json::json!({"id":id,"removed":true,"index_only":index_only}))?;
+        }
+        Action::Recordings {
+            action: RecordingAction::Open,
+        } => {
+            crate::service::open_recordings(&config.recording_dir, &stop)?;
+        }
+        Action::Recordings {
             action: RecordingAction::Recover,
         } => {
             let _lock = crate::process::MediaLock::acquire(&config.runtime_dir)?;
@@ -506,7 +536,7 @@ pub fn run(cli: Cli) -> Result<()> {
 
 fn playback_loop(engine: &mut Engine, stop: &AtomicBool) -> Result<()> {
     let mut previous = String::new();
-    while !stop.load(Ordering::Relaxed) && !engine.playback_failed {
+    while !stop.load(Ordering::Relaxed) && !engine.playback_failed && engine.playback_active() {
         engine.tick()?;
         let line = format!(
             "{} | {} | {}",
@@ -574,6 +604,16 @@ pub(crate) fn doctor_report(
     checks.push(
         serde_json::json!({"name":"recording_dir","ok":writable_ok,"detail":config.recording_dir}),
     );
+    let available = fs2::available_space(&config.recording_dir)?;
+    let minimum = config
+        .settings
+        .recording_min_free_mb
+        .saturating_mul(1024 * 1024);
+    let enough = available >= minimum;
+    failed |= !enough;
+    checks.push(serde_json::json!({"name":"recording_space","ok":enough,
+        "available_bytes":available,"minimum_bytes":minimum,
+        "detail":format!("{available} bytes available; reserve {minimum} bytes")}));
     let report = serde_json::json!({"checks":checks,"config":config.config_path,"database":config.data_dir.join("radio.db")});
     Ok((report, failed))
 }

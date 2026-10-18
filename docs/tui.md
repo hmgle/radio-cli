@@ -80,3 +80,17 @@ TUI 录音附属于当前播放会话：`:record UUID` 仅接受正在播放的�
 明确报错；`r` / `:record` 录制当前实际线路（包括备份）。暂停不停止录音，换台、
 播放失败、`:stop` 或退出会收尾录音；`:record stop` 仅结束录音。独立录制其他电台
 请使用 CLI `radio record UUID`。播放器的 REC 标记对应当前播放电台。
+
+本地录音列表中，Enter 播放选中的文件，`o`（或 `:open recordings`）
+用 `xdg-open` 打开录音目录，`e` 在详情面板展开完整 FFmpeg 错误尾部。
+`D` 删除选中录音，按 `y` 确认，`n`/Esc 取消。
+默认先删除音频和 sidecar，成功后删除索引；文件操作失败时保留索引，
+重试允许文件已不存在。`:recordings remove ID --index-only` 仅删除索引、
+保留文件，同样需要确认。录制、收尾和仍待恢复的记录不能删除。
+本地播放不产生电台收听历史，不发送目录点击统计，播放结束后自动停止。
+
+CLI 对应命令为 `radio recordings play ID`、`radio recordings remove ID
+[--index-only]`、`radio recordings open`。CLI 删除命令直接执行。
+录音前检查可用空间：`recording_min_free_mb` 默认保留 16 MiB，再加上
+已知码率乘以指定时长的估算空间。不足时拒绝开始，不创建临时录音。
+`radio doctor --json` 的 `recording_space` 检查返回可用和最低空间字节数。
