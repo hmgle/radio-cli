@@ -104,7 +104,9 @@ fn publish(partial: &Path, final_path: &Path) -> Result<()> {
         let from = CString::new(partial.as_os_str().as_bytes())?;
         let to = CString::new(final_path.as_os_str().as_bytes())?;
         let result = unsafe {
-            libc::renameat2(
+            // musl does not expose a renameat2 wrapper on every toolchain.
+            libc::syscall(
+                libc::SYS_renameat2,
                 libc::AT_FDCWD,
                 from.as_ptr(),
                 libc::AT_FDCWD,
