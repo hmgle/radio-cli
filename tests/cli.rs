@@ -282,3 +282,57 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
         );
     }
 }
+
+#[test]
+fn large_lists_expose_pages_totals_and_full_exports() {
+    let dir = tempfile::tempdir().unwrap();
+    let _config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    for i in 0..105 {
+        let station = Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: format!("station {i:03}"),
+            active: true,
+            ..Station::default()
+        };
+        store.upsert(&station).unwrap();
+        store.favorite(&station.stationuuid, true).unwrap();
+        store.played(&station.stationuuid).unwrap();
+        let r: radio_cli::model::Recording = serde_json::from_value(serde_json::json!({
+            "id":format!("r-{i:03}"),"stationuuid":station.stationuuid,"station_name":station.name,"source_url_resolved":"https://example.com","started_at":format!("2026-01-01T00:{:02}:{:02}Z", i/60,i%60),"stopped_at":null,"media_duration_ms":null,"codec":"mp3","container":"mp3","path":"/tmp/test","size_bytes":1,"status":"complete","error":null
+        })).unwrap();
+        store.save_recording(&r).unwrap();
+    }
+    // Updating an old recording must not move it ahead of newer starts.
+    let first = store.recordings_page(1, 104).unwrap().remove(0);
+    store.save_recording(&first).unwrap();
+    assert_eq!(store.recordings_page(1, 104).unwrap()[0].id, first.id);
+    for command in [
+        vec!["favorites", "list"],
+        vec!["history"],
+        vec!["recordings", "list"],
+    ] {
+        for (options, len, more) in [
+            (vec![], 100, true),
+            (vec!["--offset", "100"], 5, false),
+            (vec!["--offset", "105"], 0, false),
+            (vec!["--all"], 105, false),
+        ] {
+            let output = radio(dir.path())
+                .arg("--json")
+                .args(&command)
+                .args(options)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let page: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(page["items"].as_array().unwrap().len(), len);
+            assert_eq!(page["total"], 105);
+            assert_eq!(page["has_more"], more);
+        }
+    }
+}

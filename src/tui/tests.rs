@@ -570,7 +570,7 @@ fn full_queue_retries_every_view_query_with_latest_filter() {
         assert!(app.search_due.is_none());
         match rx.recv().unwrap() {
             Command::Search(filter) => assert_eq!(filter, app.filter),
-            Command::Recordings => assert_eq!(app.source, Source::Recordings),
+            Command::Recordings(_) => assert_eq!(app.source, Source::Recordings),
             _ => panic!("expected retryable query"),
         }
     }

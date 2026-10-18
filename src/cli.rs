@@ -70,6 +70,63 @@ impl Search {
     }
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct Page {
+    #[arg(long, default_value_t=100, value_parser=clap::value_parser!(u16).range(1..=1000))]
+    pub limit: u16,
+    #[arg(long, default_value_t = 0)]
+    pub offset: usize,
+    /// Export every matching entry from offset onward.
+    #[arg(long)]
+    pub all: bool,
+}
+
+fn emit_page<T: serde::Serialize>(
+    items: &[T],
+    total: usize,
+    page: &Page,
+    json: bool,
+) -> Result<()> {
+    let has_more = page.offset.saturating_add(items.len()) < total;
+    if json {
+        emit(
+            &serde_json::json!({"items":items,"total":total,"offset":page.offset,"limit": if page.all { None } else { Some(page.limit) },"has_more":has_more}),
+        )?;
+    } else {
+        eprintln!(
+            "{} / {total} 项 · offset {}{}",
+            items.len(),
+            page.offset,
+            if has_more {
+                " · 后续可用 --offset / --all"
+            } else {
+                " · 最后一页"
+            }
+        );
+    }
+    Ok(())
+}
+
+fn list_stations(store: &Store, mut filter: Filter, page: &Page, json: bool) -> Result<()> {
+    let total = store.search_count(&filter)?;
+    filter.limit = usize::from(page.limit);
+    filter.offset = page.offset;
+    let mut rows = store.search(&filter)?;
+    while page.all && filter.offset.saturating_add(rows.len()) < total {
+        filter.offset = page.offset.saturating_add(rows.len());
+        let next = store.search(&filter)?;
+        if next.is_empty() {
+            break;
+        }
+        rows.extend(next);
+        filter.offset = page.offset;
+    }
+    if !json {
+        print_stations(&rows, false)?;
+    }
+    emit_page(&rows, total, page, json)
+}
+
 #[derive(Subcommand)]
 pub enum Action {
     Tui,
@@ -86,7 +143,7 @@ pub enum Action {
         #[command(subcommand)]
         action: Favorite,
     },
-    History,
+    History(Page),
     Station {
         #[command(subcommand)]
         action: StationAction,
@@ -106,7 +163,7 @@ pub enum Action {
 }
 #[derive(Subcommand)]
 pub enum Favorite {
-    List,
+    List(Page),
     Add { uuid: String },
     Remove { uuid: String },
 }
@@ -121,7 +178,7 @@ pub enum StationAction {
 }
 #[derive(Subcommand)]
 pub enum RecordingAction {
-    List,
+    List(Page),
     Recover,
 }
 
@@ -184,21 +241,23 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Action::Search(search) => print_stations(&store.search(&search.filter())?, cli.json)?,
         Action::Info { uuid } => emit(&store.station(&uuid)?)?,
-        Action::History => print_stations(
-            &store.search(&Filter {
+        Action::History(page) => list_stations(
+            &store,
+            Filter {
                 history: true,
-                limit: 100,
                 ..Filter::default()
-            })?,
+            },
+            &page,
             cli.json,
         )?,
         Action::Favorites { action } => match action {
-            Favorite::List => print_stations(
-                &store.search(&Filter {
+            Favorite::List(page) => list_stations(
+                &store,
+                Filter {
                     favorites: true,
-                    limit: 100,
                     ..Filter::default()
-                })?,
+                },
+                &page,
                 cli.json,
             )?,
             Favorite::Add { uuid } => store.favorite(&uuid, true)?,
@@ -258,12 +317,22 @@ pub fn run(cli: Cli) -> Result<()> {
             }
         }
         Action::Recordings {
-            action: RecordingAction::List,
+            action: RecordingAction::List(page),
         } => {
-            let records = store.recordings(100)?;
-            if cli.json {
-                emit(&records)?;
-            } else {
+            let total = store.recordings_count()?;
+            let mut records = store.recordings_page(usize::from(page.limit), page.offset)?;
+            while page.all && page.offset.saturating_add(records.len()) < total {
+                let next = store.recordings_page(
+                    usize::from(page.limit),
+                    page.offset.saturating_add(records.len()),
+                )?;
+                if next.is_empty() {
+                    break;
+                }
+                records.extend(next);
+            }
+            emit_page(&records, total, &page, cli.json)?;
+            if !cli.json {
                 for r in records {
                     println!(
                         "{} {} {} {}",

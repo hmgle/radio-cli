@@ -31,7 +31,7 @@ pub(super) enum Command {
     },
     Sync,
     Cancel,
-    Recordings,
+    Recordings(Filter),
     Info(String),
     Doctor,
 }
@@ -39,7 +39,7 @@ pub(super) enum Command {
 pub(super) enum Parsed {
     Worker(Command),
     Search(Filter),
-    Source(Source),
+    Source(Source, crate::cli::Page),
     Focus(Focus),
     Help,
     Quit,
@@ -154,21 +154,21 @@ pub(super) fn parse(
     if cli.config.is_some() || cli.data_dir.is_some() || cli.api_url.is_some() || cli.json {
         bail!("TUI 命令不接受进程级配置参数");
     }
-    Ok(match cli.command {
+    let parsed = match cli.command {
         Some(Action::Sync) => Parsed::Worker(Command::Sync),
         Some(Action::Search(search)) => Parsed::Search(search.filter()),
         Some(Action::Play { uuid }) => Parsed::Worker(Command::Play(uuid)),
         Some(Action::Random(search)) => Parsed::Worker(Command::Random(search.filter())),
         Some(Action::Info { uuid }) => Parsed::Worker(Command::Info(uuid)),
-        Some(Action::History) => Parsed::Source(Source::History),
+        Some(Action::History(page)) => Parsed::Source(Source::History, page),
         Some(Action::Favorites { action }) => match action {
-            crate::cli::Favorite::List => Parsed::Source(Source::Favorites),
+            crate::cli::Favorite::List(page) => Parsed::Source(Source::Favorites, page),
             crate::cli::Favorite::Add { uuid } => Parsed::Worker(Command::Favorite(uuid, true)),
             crate::cli::Favorite::Remove { uuid } => Parsed::Worker(Command::Favorite(uuid, false)),
         },
         Some(Action::Recordings {
-            action: crate::cli::RecordingAction::List,
-        }) => Parsed::Source(Source::Recordings),
+            action: crate::cli::RecordingAction::List(page),
+        }) => Parsed::Source(Source::Recordings, page),
         Some(Action::Record {
             uuid,
             duration,
@@ -192,7 +192,11 @@ pub(super) fn parse(
         }),
         Some(Action::Doctor) => Parsed::Worker(Command::Doctor),
         _ => bail!("未知 TUI 命令；:help 查看帮助"),
-    })
+    };
+    if matches!(&parsed, Parsed::Source(_, page) if page.all) {
+        bail!("TUI 使用 PgUp/PgDn 分页；--all 仅供 CLI 导出");
+    }
+    Ok(parsed)
 }
 
 pub(super) const HELP: &str = "NORMAL 普通模式\n\

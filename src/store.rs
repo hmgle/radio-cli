@@ -292,7 +292,7 @@ impl Store {
 
     pub fn save_recording(&self, recording: &Recording) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO recordings VALUES (?1,?2,?3)",
+            "INSERT INTO recordings VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET status=excluded.status,json=excluded.json",
             params![
                 recording.id,
                 recording.status,
@@ -302,11 +302,30 @@ impl Store {
         Ok(())
     }
 
+    pub fn search_count(&self, filter: &Filter) -> Result<usize> {
+        let (conditions, args) = Self::conditions(filter);
+        Ok(self.conn.query_row(&format!("SELECT count(*) FROM stations s LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions}"), params_from_iter(args), |r| r.get(0))?)
+    }
+
     pub fn recordings(&self, limit: usize) -> Result<Vec<Recording>> {
-        let mut stmt = self
+        self.recordings_page(limit, 0)
+    }
+
+    pub fn recordings_count(&self) -> Result<usize> {
+        Ok(self
             .conn
-            .prepare("SELECT json FROM recordings ORDER BY rowid DESC LIMIT ?1")?;
-        let rows = stmt.query_map([limit.min(1000) as i64], |r| r.get::<_, String>(0))?;
+            .query_row("SELECT count(*) FROM recordings", [], |r| r.get(0))?)
+    }
+
+    pub fn recordings_page(&self, limit: usize, offset: usize) -> Result<Vec<Recording>> {
+        let mut stmt = self.conn.prepare("SELECT json FROM recordings ORDER BY json_extract(json,'$.started_at') DESC,id DESC LIMIT ?1 OFFSET ?2")?;
+        let rows = stmt.query_map(
+            params![
+                limit.clamp(1, 1000) as i64,
+                offset.min(i64::MAX as usize) as i64
+            ],
+            |r| r.get::<_, String>(0),
+        )?;
         rows.map(|json| Ok(serde_json::from_str(&json?)?)).collect()
     }
 

@@ -228,12 +228,19 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
         || app.focus != Focus::Details
     {
         let title = format!(
-            "2 {} · {} 项 · 页 {}",
+            "2 {} · {}/{} 项 · 页 {}",
             app.source.label(),
             app.length(view),
+            if app.source == Source::Recordings {
+                view.recordings_total
+            } else {
+                view.total
+            },
             app.filter.offset / app.filter.limit.max(1) + 1
         );
-        let items: Vec<ListItem> = if app.source == Source::Recordings {
+        let items: Vec<ListItem> = if app.filter != view.filter {
+            vec![]
+        } else if app.source == Source::Recordings {
             view.recordings
                 .iter()
                 .map(|r| {

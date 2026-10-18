@@ -58,3 +58,9 @@ Tab / Shift-Tab 循环切换面板；Ctrl-h/j/k/l 或 Ctrl-方向键按位置切
 目录任务独立运行，重复同步会提示已有任务，失败与取消保留原目录。媒体命令使用同一有界队列；起播失败的网络回退和 ffprobe 录音探测仍可能暂时延迟后续媒体操作，界面可继续输入。没有后台守护进程；退出后停止媒体并等待任务收尾。
 
 Ctrl-C 在所有 TUI 模式下收尾并退出；Esc 取消编辑或关闭弹窗。终端过小时，q 直接退出。
+
+收藏、历史和录音列表均支持 PgUp/PgDn 分页，列表标题显示当前条数及总数。
+命令行 `favorites list`、`history`、`recordings list` 支持 `--limit`、`--offset` 和 `--all`。
+这些列表的 `--json` 输出为 `{items,total,limit,offset,has_more}`；`--all` 导出全部剩余条目，
+此时 `limit` 为 null。`search --json` 为兼容现有脚本仍返回数组。录音按开始时间和 ID
+稳定排序，更新录音状态不会将旧任务排到首位。TUI 使用分页，`--all` 仅供命令行导出。
