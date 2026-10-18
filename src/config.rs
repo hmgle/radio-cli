@@ -10,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub mouse: bool,
     pub theme: Theme,
     pub recording_min_free_mb: u64,
     pub auto_sync_days: u16,
@@ -30,6 +31,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            mouse: true,
             theme: Theme::Default,
             recording_min_free_mb: 16,
             auto_sync_days: 7,

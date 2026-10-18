@@ -36,6 +36,19 @@ pub struct Status {
 }
 
 impl Status {
+    pub(crate) fn control_eq(&self, other: &Self) -> bool {
+        self.station == other.station
+            && self.title == other.title
+            && self.message == other.message
+            && self.playback_state == other.playback_state
+            && self.recording_state == other.recording_state
+            && self.volume == other.volume
+            && self.recording_path == other.recording_path
+            && self.source_url == other.source_url
+    }
+    pub(crate) fn ui_eq(&self, other: &Self) -> bool {
+        self.control_eq(other) && self.recording_ms / 1000 == other.recording_ms / 1000
+    }
     pub fn playing(&self) -> bool {
         matches!(
             self.playback_state,
@@ -214,6 +227,13 @@ impl Engine {
 
     pub fn pause(&mut self) -> Result<()> {
         self.playback.pause(&mut self.session, &mut self.recording)
+    }
+    pub fn mute(&mut self) -> Result<()> {
+        self.playback
+            .player
+            .as_mut()
+            .context(DomainError::new(ErrorCode::NotPlaying))?
+            .toggle_mute()
     }
 
     pub fn volume(&mut self, delta: i32) -> Result<()> {

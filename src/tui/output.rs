@@ -1,5 +1,15 @@
 use std::io::{self, Write};
 
+pub(super) fn clipboard_sequence(value: &str) -> Vec<u8> {
+    use base64::Engine;
+    let mut end = value.len().min(4096);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&value.as_bytes()[..end]);
+    format!("\x1b]52;c;{encoded}\x07").into_bytes()
+}
+
 /// Remove SGR commands, including backend resets, while preserving cursor and
 /// screen control. Escape sequences can span separate Write calls.
 pub(super) struct TerminalWriter<W> {
@@ -54,6 +64,19 @@ impl<W: Write> Write for TerminalWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipboard_payload_is_bounded_utf8_and_cannot_inject_controls() {
+        use base64::Engine;
+        let value = format!("\x1b]injection\x07{}", "中文".repeat(2000));
+        let bytes = clipboard_sequence(&value);
+        let encoded = &bytes[b"\x1b]52;c;".len()..bytes.len() - 1];
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        assert!(decoded.len() <= 4096);
+        assert!(std::str::from_utf8(&decoded).is_ok());
+        assert!(!encoded.contains(&0x1b));
+    }
     #[test]
     fn strips_fragmented_colors_and_resets_but_preserves_screen_controls() {
         let mut writer = TerminalWriter::new(Vec::new(), true);

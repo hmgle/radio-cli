@@ -28,10 +28,13 @@ use worker::View;
 
 struct Screen;
 impl Screen {
-    fn enter() -> Result<Self> {
+    fn enter(mouse: bool) -> Result<Self> {
         enable_raw_mode()?;
         let guard = Self;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(io::stdout(), EnterAlternateScreen)?;
+        if mouse {
+            execute!(io::stdout(), EnableMouseCapture)?;
+        }
         Ok(guard)
     }
 }
@@ -48,6 +51,8 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     }
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|s| !s.is_empty());
     let theme = config.settings.theme.effective(no_color);
+    let mouse = config.settings.mouse;
+    let history_path = config.data_dir.join("command-history.json");
     if theme == crate::config::Theme::Mono {
         crossterm::style::force_color_output(false);
     }
@@ -59,7 +64,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let worker_stop = stop.clone();
     let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
     let result = (|| -> Result<()> {
-        let _screen = Screen::enter()?;
+        let _screen = Screen::enter(mouse)?;
         let writer = output::TerminalWriter::new(io::stdout(), theme == crate::config::Theme::Mono);
         let mut terminal = Terminal::new(CrosstermBackend::new(writer))?;
         execute!(
@@ -67,18 +72,31 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
         )?;
         let mut app = App::default();
+        app.mouse_enabled = mouse;
+        if let Err(error) = app.editor.load_history(history_path) {
+            app.message = format!("历史加载失败: {error}");
+        }
         app.theme = theme;
         app.source = source;
         app.filter.favorites = source == state::Source::Favorites;
         app.filter.history = source == state::Source::History;
+        app.filter.recordings = source == state::Source::Recordings;
         let mut revision = 0;
+        let mut immediate_revision = 0;
+        let mut last_draw = Instant::now();
         let mut dirty = true;
         while !stop.load(Ordering::Relaxed) && !app.quit {
-            let snapshot = view.lock().unwrap().clone();
+            let snapshot = view.lock().unwrap().snapshot();
             app.reconcile(&snapshot);
-            if dirty || revision != snapshot.revision {
+            if dirty
+                || revision != snapshot.revision
+                    && (immediate_revision != snapshot.immediate_revision
+                        || last_draw.elapsed() >= Duration::from_secs(1))
+            {
                 terminal.draw(|frame| render::draw(frame, &mut app, &snapshot))?;
                 revision = snapshot.revision;
+                immediate_revision = snapshot.immediate_revision;
+                last_draw = Instant::now();
                 dirty = false;
             }
             if app.search_due.is_some_and(|due| Instant::now() >= due) {
@@ -99,7 +117,20 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
                     let size = terminal.size()?;
                     app.update_size(size.width, size.height);
+                    let old_mouse = app.mouse_enabled;
                     app.key(key, &snapshot, &sender);
+                    if app.mouse_enabled != old_mouse {
+                        if app.mouse_enabled {
+                            execute!(io::stdout(), EnableMouseCapture)?;
+                        } else {
+                            execute!(io::stdout(), DisableMouseCapture)?;
+                        }
+                    }
+                    if let Some(value) = app.clipboard.take() {
+                        use std::io::Write;
+                        io::stdout().write_all(&output::clipboard_sequence(&value))?;
+                        io::stdout().flush()?;
+                    }
                     dirty = true;
                 }
                 Event::Mouse(mouse) => {

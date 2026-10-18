@@ -399,7 +399,9 @@ impl Store {
             "INSERT INTO history(uuid,played_at) VALUES (?1,?2)",
             params![uuid, chrono::Utc::now().to_rfc3339()],
         )?;
-        self.conn.execute("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 1000)", [])?;
+        let threshold = self.conn.last_insert_rowid().saturating_sub(1000);
+        self.conn
+            .execute("DELETE FROM history WHERE id <= ?1", [threshold])?;
         Ok(())
     }
 

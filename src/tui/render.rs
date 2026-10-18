@@ -626,7 +626,16 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                     format!(
                         "{} {name}: {}",
                         if i == *selected { "›" } else { " " },
-                        values[i]
+                        if i == *selected {
+                            input_window(
+                                &values[i],
+                                app.filter_input.cursor.min(values[i].len()),
+                                rect.width.saturating_sub(16),
+                            )
+                            .0
+                        } else {
+                            values[i].clone()
+                        }
                     ),
                     if i == *selected {
                         Style::default().fg(Color::Yellow)
@@ -669,6 +678,16 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             );
         }
         frame.render_widget(Paragraph::new(text).block(panel("筛选".into(), true)), rect);
+        let label_width = format!("› {}: ", names[*selected]).width() as u16;
+        let (_, cursor) = input_window(
+            &values[*selected],
+            app.filter_input.cursor.min(values[*selected].len()),
+            rect.width.saturating_sub(16),
+        );
+        frame.set_cursor_position((
+            rect.x + 1 + label_width + cursor,
+            rect.y + 1 + *selected as u16,
+        ));
     }
     if app.help {
         let rect = popup(area, 88, area.height.saturating_sub(2));
@@ -691,18 +710,19 @@ fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> Paragraph<'a>
     let width = usize::from(rect.width.saturating_sub(2).max(1));
     let mut lines = Vec::new();
     for line in text.lines() {
+        let line = crate::clean_text(line);
         let mut start = 0;
         let mut cells = 0;
         for (index, c) in line.char_indices() {
             let size = c.width().unwrap_or(0);
             if cells + size > width && index > start {
-                lines.push(Line::from(&line[start..index]));
+                lines.push(Line::from(line[start..index].to_owned()));
                 start = index;
                 cells = 0;
             }
             cells += size;
         }
-        lines.push(Line::from(&line[start..]));
+        lines.push(Line::from(line[start..].to_owned()));
     }
     let visible = usize::from(rect.height.saturating_sub(2));
     let maximum = lines.len().saturating_sub(visible).min(u16::MAX as usize) as u16;

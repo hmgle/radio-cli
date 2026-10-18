@@ -50,6 +50,11 @@ radio recordings list
 
 名称、国家、语言和标签支持本地搜索；国家代码、语言和标签筛选使用完整值（语言也可用目录提供的代码，例如 `zh`）。最低码率筛选排除码率未知的记录。`random` 在整个匹配目录中抽样，不受搜索分页限制。`info` 始终输出 JSON；查询命令可加 `--json`。运行状态与诊断写入 stderr。
 
+`--json-v2` 返回统一的成功/错误封套和稳定错误码，原有 `--json` 格式保持兼容，
+详见 [JSON 契约](docs/json-contract.md)。录音支持 `recordings play ID`、
+`recordings remove ID [--index-only]`、`recordings open`；TUI 中 Enter / D / o / e
+分别回听、确认删除、打开目录和展开错误。录音空间检查默认保留 16 MiB。
+
 电台采用完整 Radio Browser UUID；自定义电台创建本地 UUID。收藏、最近播放和自定义地址不被目录同步覆盖。收藏中已从目录消失的电台仍可尝试播放。历史保留最近 1,000 次成功起播记录，界面按电台聚合显示最近收听。
 
 TUI 按键：
@@ -62,7 +67,8 @@ TUI 按键：
 | Ctrl-方向键 / Ctrl-`h/j/k/l` | 按空间位置切换面板 |
 | 方向键 / `j`、`k` | 选择、导航或滚动当前面板 |
 | Enter | 列表中播放；播放器中查看当前电台详情 |
-| Space | 暂停 / 恢复播放，录音继续 |
+| Space / `m` | 暂停 / 恢复 / 静音，录音继续 |
+| `y` / `Y` | OSC 52 复制 UUID / URL（录音 ID / 路径） |
 | `n` | 按当前筛选随机下一台 |
 | `f` | 收藏 / 取消收藏选中电台 |
 | `r` | 开始 / 停止当前电台录音 |
@@ -80,8 +86,6 @@ TUI 按键：
 在 TUI 内直接执行 `:sync` 后台同步，`:sync-cancel` 取消任务，`:current` 查看当前电台完整详情，`:record --duration 30m` 定时录制当前电台。命令支持引号、Tab 补全和历史；更多命令与操作设计见 [TUI 使用说明](docs/tui.md)。
 
 ## 配置与数据
-
-Linux 默认路径：
 
 CLI 错误和列表文案支持 `--lang en` / `--lang zh-CN`。优先级为 `--lang`、
 `RADIO_LANG`、配置 `language`、`LC_ALL`/`LANG`，未知语言提示一次并回退英文。
@@ -106,6 +110,8 @@ TUI 静态文案和 clap 帮助的迁移将单独处理。
 TUI 启动时自动后台刷新已完整同步且超过 `auto_sync_days` 天的目录（默认 7，0 关闭），
 自动同步也保留取消与缩减保护。`F` 弹窗 Ctrl-U 或点击底栏筛选摘要可清空筛选。
 查询仍按字面子串匹配，多词 CLI 参数用 shell 引号分组；`-tag:` 等高级语法留待后续。
+
+Linux 默认路径：
 
 - 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
@@ -150,3 +156,8 @@ Ctrl-C 在所有 TUI 模式下收尾并退出；Esc 取消编辑或关闭弹窗�
 `radio completions zsh > _radio` 后放入 zsh 的 `$fpath` 目录。
 `radio man > radio.1` 生成手册页。发布压缩包包含三种 shell 补全和
 `man/radio.1`，生成命令不读取配置、不创建数据目录。
+
+`theme = "default"|"mono"|"light"` 设置主题，非空 `NO_COLOR` 强制 mono。
+80×24 下详情用 `3` 打开，空闲任务栏收起。`mouse = false` 或 `:set mouse false`
+允许终端选择文本。命令历史跨会话保留 100 条；`:help record` 查看命令用法，
+`:set language en|zh-CN` 在当前会话切换已迁移的消息语言。

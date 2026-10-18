@@ -74,6 +74,7 @@ pub struct Filter {
     pub history: bool,
     pub custom: bool,
     pub limit: usize,
+    pub recordings: bool,
     pub offset: usize,
 }
 

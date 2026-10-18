@@ -44,3 +44,35 @@ cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
 cargo build --release --locked
 uv run scripts/measure_resources.py --binary target/release/radio
 ```
+
+## 0.3.0 / S1–S3 validation — 2026-10-19
+
+- All 101 default tests pass, including real mpv/FFmpeg and pseudo-terminal cases;
+  the opt-in 50,000-station benchmark also passes. Tests use isolated data and
+  local HTTP sources. A null audio backend exercises real IPC and media EOF.
+- Coverage includes atomic bootstrap cancellation/rollback, literal Unicode
+  search, station editing and duplicate URLs, a ten-second stream outage,
+  persisted preferences, automatic sync, local recording playback/deletion,
+  impossible-space refusal, versioned JSON and specific process exits.
+- TUI snapshots cover list/details at 80×24, 100×24 and 160×48; every media-state
+  pair renders, themes preserve focus, light colors contrast, and NO_COLOR
+  emits no SGR commands in a pseudo-terminal.
+- Shared-view tests assert cached Arc publications and collection sharing;
+  station queries do not read corrupt unused recording rows. History retains
+  precisely 1000 rows through an indexed threshold. Local benchmark repeats
+  measured P95 26.26/21.65 ms; the immediate pre-performance-change baseline
+  measured 20.57 ms. The test budget is 100 ms; these timings are environment
+  observations, not a statistical claim of a specific speedup.
+- Formatting, strict Clippy with all targets/features, Rust 1.88 checks and
+  RustSec audit pass. CI installs real media executables and also verifies
+  x86_64-unknown-linux-musl static linkage. No advisory ignore list is used.
+- Shell generation covers bash/zsh/fish and radio(1) without creating data;
+  packaging includes these assets, the lockfile hash and source provenance.
+
+This release implements #36–#57. S4 (#58–#64) remains backlog. Static TUI/Clap
+translation is the explicitly separate follow-up to the i18n foundation #42.
+
+The extracted 0.3.0 archive also passes CLI/JSON/exits/doctor and real local mpv
+playback-to-EOF/deletion smoke tests. Completion files and man output match the
+binary; bash/zsh syntax checks and SHA-256 verification pass. Repackaging the same
+commit produces the same archive hash. The internal roadmap is not archived.

@@ -706,3 +706,25 @@ fn completions_and_manual_are_generated_without_preparing_data() {
     let value: serde_json::Value = serde_json::from_slice(&v2.stdout).unwrap();
     assert!(value["data"].as_str().unwrap().contains("#compdef radio"));
 }
+
+#[test]
+fn doctor_missing_dependencies_return_one_error_envelope_with_exit_three() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("doctor.toml");
+    fs::write(
+        &config,
+        "mpv='/missing/mpv'\nffmpeg='/missing/ffmpeg'\nffprobe='/missing/ffprobe'\n",
+    )
+    .unwrap();
+    let output = radio(dir.path())
+        .arg("--config")
+        .arg(config)
+        .args(["--json-v2", "doctor"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["error"]["code"], "missing_dependency");
+    assert!(result.get("data").is_none());
+}

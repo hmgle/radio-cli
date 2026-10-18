@@ -129,6 +129,9 @@ impl Player {
     pub fn toggle_pause(&mut self) -> Result<()> {
         self.command(json!(["cycle", "pause"]))
     }
+    pub fn toggle_mute(&mut self) -> Result<()> {
+        self.command(json!(["cycle", "mute"]))
+    }
     pub fn volume(&mut self, delta: i32) -> Result<()> {
         self.command(json!(["add", "volume", delta]))
     }

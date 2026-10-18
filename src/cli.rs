@@ -633,7 +633,7 @@ pub(crate) fn doctor_report(
     ] {
         let result =
             crate::process::output(Command::new(exe).arg(flag), Duration::from_secs(5), stop);
-        let (ok, detail) = match result {
+        let (ok, detail, code) = match result {
             Ok(output) => (
                 true,
                 String::from_utf8_lossy(&output)
@@ -641,11 +641,17 @@ pub(crate) fn doctor_report(
                     .next()
                     .unwrap_or("")
                     .to_owned(),
+                None,
             ),
-            Err(e) => (false, e.to_string()),
+            Err(e) => (
+                false,
+                e.to_string(),
+                e.downcast_ref::<crate::error::DomainError>()
+                    .map(|e| e.code.as_str()),
+            ),
         };
         failed |= !ok;
-        checks.push(serde_json::json!({"name":name,"ok":ok,"detail":detail}));
+        checks.push(serde_json::json!({"name":name,"ok":ok,"detail":detail,"code":code}));
     }
     std::fs::create_dir_all(&config.recording_dir).context("录音目录不可用")?;
     let test_path = config
@@ -691,6 +697,17 @@ fn doctor(config: &Config, json: bool, stop: &Arc<AtomicBool>) -> Result<()> {
         }
     }
     if failed {
+        if let Some(check) = report["checks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|check| check["code"] == "missing_dependency")
+        {
+            bail!(
+                crate::error::DomainError::new(crate::error::ErrorCode::MissingDependency)
+                    .with("program", check["name"].as_str().unwrap_or(""))
+            );
+        }
         bail!("依赖或目录检查未通过");
     }
     Ok(())
