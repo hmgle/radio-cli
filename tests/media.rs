@@ -375,6 +375,71 @@ fn edited_custom_station_plays_the_new_url() {
 }
 
 #[test]
+fn live_stream_reconnects_after_a_ten_second_outage_without_duplicate_history() {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let Some(config) = mpv_config(dir.path()) else {
+        return;
+    };
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = requests.clone();
+    let outage = Arc::new(Mutex::new(None::<Instant>));
+    let server = Server::new(move |_, stream| {
+        let n = seen.fetch_add(1, Ordering::Relaxed);
+        let mut until = outage.lock().unwrap();
+        if n == 0 {
+            // First fixture plays for four seconds; refuse connections for
+            // ten more seconds after its expected EOF.
+            *until = Some(Instant::now() + Duration::from_secs(14));
+            response(stream, 200, "audio/mpeg", &bytes);
+        } else if until.is_some_and(|t| Instant::now() < t) {
+            response(stream, 503, "text/plain", b"offline");
+        } else {
+            response(stream, 200, "audio/mpeg", &bytes);
+        }
+    });
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let station = sample(&server.url);
+    engine.store.upsert(&station).unwrap();
+    engine.play(&station.stationuuid).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(23);
+    let mut first_played = false;
+    let mut reconnecting = false;
+    loop {
+        engine.tick().unwrap();
+        first_played |= engine.status.playing;
+        reconnecting |= engine.status.message.contains("重连中");
+        if first_played && reconnecting && engine.status.playing {
+            break;
+        }
+        assert!(!engine.playback_failed, "{}", engine.status.message);
+        assert!(Instant::now() < deadline, "{}", engine.status.message);
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        engine.status.station.as_ref().unwrap().stationuuid,
+        station.stationuuid
+    );
+    let conn = rusqlite::Connection::open(engine.config.data_dir.join("radio.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM history", [], |r| r.get::<_, usize>(0))
+            .unwrap(),
+        1
+    );
+    engine.stop_playback().unwrap();
+    let before = requests.load(Ordering::Relaxed);
+    for _ in 0..70 {
+        engine.tick().unwrap();
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(requests.load(Ordering::Relaxed), before);
+}
+
+#[test]
 fn engine_uses_explicit_backup_without_merging_names() {
     let dir = tempfile::tempdir().unwrap();
     let Some(config) = mpv_config(dir.path()) else {
