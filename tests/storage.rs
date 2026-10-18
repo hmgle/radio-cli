@@ -381,6 +381,59 @@ fn custom_station_mutations_are_atomic_and_preserve_references() {
     );
 }
 
+#[test]
+fn facets_count_distinct_stations_and_sort_combines_with_filters() {
+    use radio_cli::model::{FacetKind, Sort};
+    let (_dir, store) = db();
+    let mut first = station("Alpha");
+    first.languagecodes = "zh, zh,cu".into();
+    first.bitrate = 128;
+    first.votes = 50;
+    first.clickcount = 1;
+    let mut second = station("Beta");
+    second.bitrate = 320;
+    second.votes = 1;
+    second.clickcount = 100;
+    store.upsert(&first).unwrap();
+    store.upsert(&second).unwrap();
+    let languages = store.facets(FacetKind::Language, " ZH ").unwrap();
+    assert_eq!(languages.len(), 1);
+    assert_eq!(languages[0].value, "zh");
+    assert_eq!(languages[0].count, 2);
+    assert_eq!(
+        store.facets(FacetKind::Country, "c").unwrap()[0].value,
+        "CN"
+    );
+    assert_eq!(store.facets(FacetKind::Tag, "public").unwrap()[0].count, 2);
+    assert!(store.facets(FacetKind::Tag, "%").unwrap().is_empty());
+    for (sort, expected) in [
+        (Sort::Name, &first),
+        (Sort::Bitrate, &second),
+        (Sort::Votes, &first),
+        (Sort::Clickcount, &second),
+    ] {
+        let rows = store
+            .search(&Filter {
+                sort,
+                min_bitrate: 128,
+                limit: 100,
+                ..Filter::default()
+            })
+            .unwrap();
+        assert_eq!(rows[0].stationuuid, expected.stationuuid);
+    }
+    let rows = store
+        .search(&Filter {
+            sort: Sort::Bitrate,
+            min_bitrate: 200,
+            limit: 100,
+            ..Filter::default()
+        })
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].stationuuid, second.stationuuid);
+}
+
 /// Run explicitly with `cargo test --release --test storage catalog_benchmark -- --ignored --nocapture`.
 #[test]
 #[ignore]

@@ -21,6 +21,8 @@ use std::{
 
 #[derive(Clone)]
 pub(super) struct View {
+    pub facets: [Vec<crate::model::Facet>; 3],
+    pub facets_loading: bool,
     pub backups: std::collections::BTreeMap<String, Vec<String>>,
     pub rows: Vec<Station>,
     pub recordings: Vec<Recording>,
@@ -41,6 +43,8 @@ pub(super) struct View {
 impl View {
     pub fn new(status: Status) -> Self {
         Self {
+            facets: Default::default(),
+            facets_loading: false,
             backups: Default::default(),
             total: 0,
             recordings_total: 0,
@@ -188,6 +192,39 @@ pub(super) fn execute(
     view: &Arc<Mutex<View>>,
 ) -> Result<()> {
     match command {
+        Command::Facets => {
+            let mut data = view.lock().unwrap();
+            if !data.facets_loading {
+                data.facets_loading = true;
+                let path = engine.config.data_dir.join("radio.db");
+                let shared = view.clone();
+                if let Err(error) =
+                    thread::Builder::new()
+                        .name("radio-facets".into())
+                        .spawn(move || {
+                            let result = (|| -> Result<_> {
+                                let store = Store::open(&path)?;
+                                use crate::model::FacetKind;
+                                Ok([
+                                    store.facets(FacetKind::Country, "")?,
+                                    store.facets(FacetKind::Language, "")?,
+                                    store.facets(FacetKind::Tag, "")?,
+                                ])
+                            })();
+                            let mut data = shared.lock().unwrap();
+                            data.facets_loading = false;
+                            match result {
+                                Ok(facets) => data.facets = facets,
+                                Err(error) => data.log(&format!("筛选候选加载失败: {error:#}")),
+                            }
+                            data.revision += 1;
+                        })
+                {
+                    data.facets_loading = false;
+                    return Err(error.into());
+                }
+            }
+        }
         Command::Search(value) => {
             let source = if value.history {
                 super::state::Source::History

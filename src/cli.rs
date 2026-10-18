@@ -43,6 +43,8 @@ pub struct Cli {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct Search {
+    #[arg(long, value_enum, default_value = "clickcount")]
+    pub sort: crate::model::Sort,
     pub query: Option<String>,
     #[arg(long)]
     pub country: Option<String>,
@@ -60,6 +62,7 @@ pub struct Search {
 impl Search {
     pub fn filter(&self) -> Filter {
         Filter {
+            sort: self.sort,
             query: self.query.clone().unwrap_or_default(),
             country: self.country.clone(),
             language: self.language.clone(),
@@ -131,6 +134,9 @@ fn list_stations(store: &Store, mut filter: Filter, page: &Page, json: bool) -> 
 
 #[derive(Subcommand)]
 pub enum Action {
+    Countries(FacetArgs),
+    Languages(FacetArgs),
+    Tags(FacetArgs),
     Tui,
     Sync {
         #[arg(long)]
@@ -165,6 +171,12 @@ pub enum Action {
         action: RecordingAction,
     },
     Doctor,
+}
+
+#[derive(Args)]
+pub struct FacetArgs {
+    #[arg(long, default_value = "")]
+    pub prefix: String,
 }
 #[derive(Subcommand)]
 pub enum Favorite {
@@ -258,6 +270,21 @@ pub fn run(cli: Cli) -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, stop.clone())?;
     let mut store = Store::open(&config.data_dir.join("radio.db"))?;
     match action {
+        Action::Countries(ref args) | Action::Languages(ref args) | Action::Tags(ref args) => {
+            let kind = match action {
+                Action::Countries(_) => crate::model::FacetKind::Country,
+                Action::Languages(_) => crate::model::FacetKind::Language,
+                _ => crate::model::FacetKind::Tag,
+            };
+            let facets = store.facets(kind, &args.prefix)?;
+            if cli.json {
+                emit(&facets)?;
+            } else {
+                for facet in facets {
+                    println!("{}\t{}", crate::clean_text(&facet.value), facet.count);
+                }
+            }
+        }
         Action::Tui => {
             drop(store);
             crate::tui::run(config, stop)?;

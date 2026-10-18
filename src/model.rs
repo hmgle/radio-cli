@@ -64,6 +64,7 @@ impl Station {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
+    pub sort: Sort,
     pub query: String,
     pub country: Option<String>,
     pub language: Option<String>,
@@ -74,6 +75,29 @@ pub struct Filter {
     pub custom: bool,
     pub limit: usize,
     pub offset: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Sort {
+    Name,
+    Bitrate,
+    Votes,
+    #[default]
+    Clickcount,
+    Random,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FacetKind {
+    Country,
+    Language,
+    Tag,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Facet {
+    pub value: String,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

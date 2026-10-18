@@ -254,6 +254,39 @@ fn station_cli_supports_edit_backups_list_and_remove() {
 }
 
 #[test]
+fn facet_cli_reports_real_local_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let _config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    store
+        .upsert(&Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "Fixture".into(),
+            active: true,
+            countrycode: "CN".into(),
+            languagecodes: "zh,en".into(),
+            tags: "jazz".into(),
+            ..Station::default()
+        })
+        .unwrap();
+    for (command, prefix, expected) in [
+        ("countries", "c", "CN"),
+        ("languages", "zh", "zh"),
+        ("tags", "ja", "jazz"),
+    ] {
+        let output = radio(dir.path())
+            .args(["--json", command, "--prefix", prefix])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result.as_array().unwrap().len(), 1);
+        assert_eq!(result[0]["value"], expected);
+        assert_eq!(result[0]["count"], 1);
+    }
+}
+
+#[test]
 fn media_lock_blocks_only_competing_media_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let config = support::config(dir.path());

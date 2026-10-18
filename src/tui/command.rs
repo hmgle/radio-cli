@@ -98,6 +98,7 @@ impl CommandReceiver {
 }
 
 pub(super) enum Command {
+    Facets,
     Station(crate::cli::StationAction),
     Search(Filter),
     Play(String),
