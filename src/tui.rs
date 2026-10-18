@@ -1,4 +1,5 @@
 mod command;
+mod output;
 mod render;
 mod state;
 #[cfg(test)]
@@ -45,6 +46,11 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         bail!("TUI 需要交互终端");
     }
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|s| !s.is_empty());
+    let theme = config.settings.theme.effective(no_color);
+    if theme == crate::config::Theme::Mono {
+        crossterm::style::force_color_output(false);
+    }
     let engine = Engine::new(config, stop.clone())?;
     let source = state::Source::restore(&engine.store, engine.config.settings.resume)?;
     let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
@@ -54,12 +60,14 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
     let result = (|| -> Result<()> {
         let _screen = Screen::enter()?;
-        let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+        let writer = output::TerminalWriter::new(io::stdout(), theme == crate::config::Theme::Mono);
+        let mut terminal = Terminal::new(CrosstermBackend::new(writer))?;
         execute!(
             io::stdout(),
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
         )?;
         let mut app = App::default();
+        app.theme = theme;
         app.source = source;
         app.filter.favorites = source == state::Source::Favorites;
         app.filter.history = source == state::Source::History;

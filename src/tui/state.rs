@@ -258,6 +258,7 @@ impl Editor {
 }
 
 pub(super) struct App {
+    pub theme: crate::config::Theme,
     pub recording_error_expanded: bool,
     pub confirmation: Option<Command>,
     pub focus: Focus,
@@ -293,6 +294,7 @@ impl Default for App {
         list.select(Some(0));
         Self {
             confirmation: None,
+            theme: crate::config::Theme::Default,
             recording_error_expanded: false,
             focus: Focus::List,
             source: Source::Stations,

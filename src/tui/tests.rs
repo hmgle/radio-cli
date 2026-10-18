@@ -1344,3 +1344,41 @@ fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
         .unwrap();
     assert_eq!(app.rects[Focus::Activity.index()].height, 4);
 }
+
+#[test]
+fn themes_keep_text_and_focus_legible_at_eighty_columns() {
+    use crate::config::Theme;
+    let data = view();
+    let mut reference = None;
+    for theme in [Theme::Default, Theme::Mono, Theme::Light] {
+        let mut app = App::default();
+        app.theme = theme;
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        let rendered = text(&terminal);
+        assert!(rendered.contains("▶ [2/3]"));
+        if let Some(reference) = &reference {
+            assert_eq!(&rendered, reference);
+        } else {
+            reference = Some(rendered);
+        }
+        for cell in &terminal.backend().buffer().content {
+            match theme {
+                Theme::Mono => assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset)),
+                Theme::Light if !cell.symbol().trim().is_empty() => assert_ne!(cell.fg, cell.bg),
+                _ => {}
+            }
+        }
+        let selected = &terminal.backend().buffer()[(
+            app.rects[Focus::List.index()].x + 1,
+            app.rects[Focus::List.index()].y + 1,
+        )];
+        if theme == Theme::Light {
+            assert_eq!((selected.fg, selected.bg), (Color::White, Color::Blue));
+        }
+    }
+    assert_eq!(Theme::Light.effective(true), Theme::Mono);
+    assert_eq!(Theme::Light.effective(false), Theme::Light);
+}

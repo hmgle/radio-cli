@@ -10,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub theme: Theme,
     pub recording_min_free_mb: u64,
     pub auto_sync_days: u16,
     pub resume: bool,
@@ -28,6 +29,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            theme: Theme::Default,
             recording_min_free_mb: 16,
             auto_sync_days: 7,
             resume: false,
@@ -42,6 +44,21 @@ impl Default for Settings {
             volume: 80,
             recording_dir: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    Default,
+    Mono,
+    Light,
+}
+
+impl Theme {
+    pub fn effective(self, no_color: bool) -> Self {
+        if no_color { Self::Mono } else { self }
     }
 }
 

@@ -64,6 +64,33 @@ fn value(text: &str) -> String {
 }
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
+    draw_content(frame, app, view);
+    let theme = app.theme;
+    if theme == crate::config::Theme::Default {
+        return;
+    }
+    for cell in &mut frame.buffer_mut().content {
+        if theme == crate::config::Theme::Mono {
+            cell.fg = Color::Reset;
+            cell.bg = Color::Reset;
+        } else {
+            let selected = cell.bg == Color::Cyan;
+            cell.fg = if selected {
+                Color::White
+            } else {
+                match cell.fg {
+                    Color::Cyan => Color::Blue,
+                    Color::Yellow => Color::Magenta,
+                    Color::Gray | Color::DarkGray | Color::White | Color::Reset => Color::Black,
+                    color => color,
+                }
+            };
+            cell.bg = if selected { Color::Blue } else { Color::White };
+        }
+    }
+}
+
+fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     let area = frame.area();
     app.rects = [Rect::default(); 5];
     app.source_rows = [Rect::default(); 4];
