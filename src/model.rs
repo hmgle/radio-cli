@@ -34,6 +34,19 @@ impl Station {
         }
     }
 
+    pub fn stream_candidates(&self, backups: &[String]) -> Vec<String> {
+        let mut result = Vec::new();
+        for url in std::iter::once(self.primary_url())
+            .chain(std::iter::once(self.url.as_str()))
+            .chain(backups.iter().map(String::as_str))
+        {
+            if crate::config::validate_url(url).is_ok() && !result.iter().any(|s| s == url) {
+                result.push(url.to_owned());
+            }
+        }
+        result
+    }
+
     pub fn search_text(&self) -> String {
         format!(
             "{} {} {} {} {} {} {}",

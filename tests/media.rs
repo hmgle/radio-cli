@@ -475,3 +475,55 @@ fn inaccessible_old_recordings_do_not_block_media_startup() {
         assert!(r.error.unwrap().contains(&r.path));
     }
 }
+
+#[test]
+fn invalid_resolved_url_uses_original_for_playback_and_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(config) = mpv_config(dir.path()) else {
+        return;
+    };
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, s| response(s, 200, "audio/mpeg", &bytes));
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let mut station = sample(&server.url);
+    station.url_resolved = "invalid resolved URL".into();
+    engine.store.upsert(&station).unwrap();
+    engine.play(&station.stationuuid).unwrap();
+    assert_eq!(engine.status.source_url, server.url);
+    engine
+        .standalone_record(&station.stationuuid, Some(Duration::from_secs(1)), None)
+        .unwrap();
+    assert_eq!(
+        engine.store.recordings(1).unwrap()[0].source_url_resolved,
+        server.url
+    );
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn recording_resolves_backup_and_missing_backend_fails_fast() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, s| response(s, 200, "audio/mpeg", &bytes));
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let station = sample("http://127.0.0.1:1/unavailable");
+    engine.store.upsert(&station).unwrap();
+    engine
+        .store
+        .add_backup(&station.stationuuid, &server.url)
+        .unwrap();
+    engine
+        .standalone_record(&station.stationuuid, Some(Duration::from_secs(1)), None)
+        .unwrap();
+    assert_eq!(
+        engine.store.recordings(1).unwrap()[0].source_url_resolved,
+        server.url
+    );
+    engine.stop_recording(None).unwrap();
+    engine.config.settings.ffprobe = dir.path().join("missing-ffprobe").to_string_lossy().into();
+    let error = engine
+        .standalone_record(&station.stationuuid, None, None)
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("无法启动依赖"));
+}
