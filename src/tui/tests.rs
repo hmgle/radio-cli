@@ -507,3 +507,33 @@ fn ctrl_c_quits_every_mode_and_small_screen_q_quits() {
     app.key(key(KeyCode::Char('q')), &data, &tx);
     assert!(app.quit);
 }
+
+#[test]
+fn rapid_shortcuts_apply_against_owner_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.status.volume = 80;
+    let frozen = view();
+    engine.store.upsert(&frozen.rows[0]).unwrap();
+    let shared = Arc::new(Mutex::new(frozen.clone()));
+    let (tx, rx) = mpsc::sync_channel(16);
+    let mut app = App::default();
+    for c in ['+', '+', '+', 'f', 'f'] {
+        app.key(key(KeyCode::Char(c)), &frozen, &tx);
+    }
+    let mut filter = app.filter.clone();
+    let mut job = None;
+    for command in rx.try_iter() {
+        worker::execute(command, &mut engine, &mut filter, &mut job, &shared).unwrap();
+    }
+    assert_eq!(engine.status.volume, 95);
+    assert!(
+        !engine
+            .store
+            .station(&frozen.rows[0].stationuuid)
+            .unwrap()
+            .favorite
+    );
+}
