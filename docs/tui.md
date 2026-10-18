@@ -104,3 +104,8 @@ CLI 对应命令为 `radio recordings play ID`、`radio recordings remove ID
 默认主题沿用终端背景；mono 只使用粗体、边框和箭头；light 使用白底深色文字、
 蓝色焦点和白字蓝底选中项。非空 `NO_COLOR` 环境变量强制 mono，优先于配置。
 三种主题在 80×24 下保持相同内容与焦点标记；自动检查浅色主题前景背景对比。
+
+`probe_timeout_secs` 独立控制录音前的 ffprobe 探测，默认 5 秒（1–300）；
+`playback_timeout_secs` 继续只控制播放起播期限，录音收尾验证仍有自己的短超时。
+播放控制器拥有播放器、候选线路、重连与代次；录音控制器拥有探测、录制和收尾任务，
+Engine 负责协调共享服务及退出。CLI 和 TUI 共用电台服务与数据库写入策略。

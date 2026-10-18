@@ -22,6 +22,7 @@ pub struct Settings {
     pub connect_timeout_secs: u64,
     pub request_timeout_secs: u64,
     pub playback_timeout_secs: u64,
+    pub probe_timeout_secs: u64,
     pub volume: u8,
     pub recording_dir: Option<PathBuf>,
 }
@@ -41,6 +42,7 @@ impl Default for Settings {
             connect_timeout_secs: 5,
             request_timeout_secs: 20,
             playback_timeout_secs: 12,
+            probe_timeout_secs: 5,
             volume: 80,
             recording_dir: None,
         }
@@ -102,9 +104,11 @@ impl Config {
             || settings.connect_timeout_secs == 0
             || settings.request_timeout_secs == 0
             || settings.playback_timeout_secs == 0
+            || settings.probe_timeout_secs == 0
             || settings.connect_timeout_secs > 300
             || settings.request_timeout_secs > 300
             || settings.playback_timeout_secs > 300
+            || settings.probe_timeout_secs > 300
         {
             bail!(DomainError::new(ErrorCode::InvalidSettings));
         }

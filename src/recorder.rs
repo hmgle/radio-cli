@@ -42,7 +42,7 @@ pub fn probe(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Value
         config,
         url,
         stop,
-        Duration::from_secs(config.settings.playback_timeout_secs),
+        Duration::from_secs(config.settings.probe_timeout_secs),
     )
 }
 

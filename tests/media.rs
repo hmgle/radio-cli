@@ -864,3 +864,33 @@ fn local_recording_plays_to_eof_without_history_or_reconnect() {
     );
     engine.shutdown().unwrap();
 }
+
+#[test]
+fn probing_has_a_separate_configurable_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    assert_eq!(config.settings.probe_timeout_secs, 5);
+    config.settings.probe_timeout_secs = 1;
+    config.settings.playback_timeout_secs = 30;
+    let executable = dir.path().join("slow-probe");
+    fs::write(&executable, "#!/bin/sh\nexec sleep 10\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    config.settings.ffprobe = executable.to_string_lossy().into();
+    let started = Instant::now();
+    let result = recorder::probe(
+        &config,
+        "https://example.com/live",
+        &Arc::new(AtomicBool::new(false)),
+    );
+    assert_eq!(
+        result
+            .err()
+            .unwrap()
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::ProcessTimeout
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
