@@ -64,6 +64,28 @@ impl Store {
         Self::write_station(&self.conn, "stations", station)
     }
 
+    pub fn bootstrap(
+        &mut self,
+        rows: &[Station],
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        for row in rows {
+            if cancelled() {
+                bail!("操作已取消");
+            }
+            Self::write_station(&tx, "stations", row)?;
+        }
+        if cancelled() {
+            bail!("操作已取消");
+        }
+        if rows.is_empty() {
+            bail!("目录没有有效电台记录");
+        }
+        tx.commit()?;
+        Ok(rows.len())
+    }
+
     fn write_station(conn: &Connection, table: &str, s: &Station) -> Result<()> {
         if s.stationuuid.is_empty() || s.name.trim().is_empty() {
             bail!("电台缺少 UUID 或名称");
@@ -221,9 +243,10 @@ impl Store {
         if filter.history {
             clauses[0] = "EXISTS(SELECT 1 FROM history h WHERE h.uuid=s.uuid)".into();
         }
-        if !filter.query.is_empty() {
+        let query = filter.query.trim();
+        if !query.is_empty() {
             clauses.push("instr(s.search,?)>0".into());
-            args.push(filter.query.to_lowercase().into());
+            args.push(query.to_lowercase().into());
         }
         if let Some(country) = &filter.country {
             clauses.push("s.country=?".into());
@@ -270,24 +293,20 @@ impl Store {
     }
 
     pub fn random(&self, filter: &Filter, exclude: &[String]) -> Result<Option<Station>> {
-        let (conditions, args) = Self::conditions(filter);
+        let (mut conditions, mut args) = Self::conditions(filter);
+        if !exclude.is_empty() {
+            let placeholders = vec!["?"; exclude.len()].join(",");
+            conditions.push_str(&format!(" AND s.uuid NOT IN ({placeholders})"));
+            args.extend(exclude.iter().cloned().map(Value::Text));
+        }
         let sql = format!(
             "SELECT s.uuid FROM stations s LEFT JOIN favorites f ON f.uuid=s.uuid
-            WHERE {conditions}"
+            WHERE {conditions} ORDER BY random() LIMIT 1"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut selected = None;
-        let mut count = 0u64;
-        for uuid in stmt.query_map(params_from_iter(args), |r| r.get::<_, String>(0))? {
-            let uuid = uuid?;
-            if exclude.contains(&uuid) {
-                continue;
-            }
-            count += 1;
-            if rand::random_range(0..count) == 0 {
-                selected = Some(uuid);
-            }
-        }
+        let selected = self
+            .conn
+            .query_row(&sql, params_from_iter(args), |r| r.get::<_, String>(0))
+            .optional()?;
         selected.map(|id| self.station(&id)).transpose()
     }
 

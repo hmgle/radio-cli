@@ -30,7 +30,9 @@ fn unicode_filters_literals_and_pagination() {
     let (_dir, store) = db();
     let s = station("上海 Jazz 100%_FM");
     store.upsert(&s).unwrap();
-    for query in ["上海", "jAZZ", "%_", "100%_FM"] {
+    for query in [
+        "上海", "jAZZ", "%_", "100%_FM", " jazz ", "　jazz", "\tjazz\t",
+    ] {
         assert_eq!(
             store
                 .search(&Filter {
@@ -41,6 +43,19 @@ fn unicode_filters_literals_and_pagination() {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+    for query in ["", " \t　 "] {
+        let filter = Filter {
+            query: query.into(),
+            limit: 100,
+            ..Filter::default()
+        };
+        assert_eq!(store.search(&filter).unwrap().len(), 1);
+        assert_eq!(store.search_count(&filter).unwrap(), 1);
+        assert_eq!(
+            store.random(&filter, &[]).unwrap().unwrap().stationuuid,
+            s.stationuuid
         );
     }
     let mut filter = Filter {
@@ -156,6 +171,23 @@ fn random_uses_entire_matching_catalog_and_excludes_candidates() {
     );
     ids.push(last);
     assert!(store.random(&filter, &ids).unwrap().is_none());
+    assert!(
+        store
+            .random(
+                &Filter {
+                    query: "missing".into(),
+                    ..filter.clone()
+                },
+                &[]
+            )
+            .unwrap()
+            .is_none()
+    );
+    let selected = store
+        .random(&filter, &["' OR 1=1 --".into()])
+        .unwrap()
+        .unwrap();
+    assert!(ids.contains(&selected.stationuuid));
 }
 
 #[test]
@@ -169,6 +201,41 @@ fn malformed_record_does_not_replace_directory() {
     assert!(store.stage(&[station("有效记录"), invalid]).is_err());
     assert!(store.finish_sync().is_err());
     assert_eq!(store.count().unwrap(), 1);
+}
+
+#[test]
+fn bootstrap_rolls_back_mid_batch_failure_and_cancellation() {
+    let (_dir, mut store) = db();
+    let old = station("Original");
+    store.upsert(&old).unwrap();
+    let mut replacement = old.clone();
+    replacement.name = "Replacement".into();
+    let new = station("New");
+    let mut invalid = station("Invalid");
+    invalid.stationuuid = "bad-uuid".into();
+    assert!(
+        store
+            .bootstrap(&[replacement.clone(), new.clone(), invalid], || false)
+            .is_err()
+    );
+    assert_eq!(store.count().unwrap(), 1);
+    assert_eq!(store.station(&old.stationuuid).unwrap().name, old.name);
+    for cancel_at in 1..=3 {
+        let mut checks = 0;
+        assert!(
+            store
+                .bootstrap(&[replacement.clone(), new.clone()], || {
+                    checks += 1;
+                    checks == cancel_at
+                })
+                .is_err()
+        );
+        assert_eq!(store.count().unwrap(), 1);
+        assert_eq!(store.station(&old.stationuuid).unwrap().name, old.name);
+    }
+    assert_eq!(store.bootstrap(&[replacement, new], || false).unwrap(), 2);
+    assert_eq!(store.count().unwrap(), 2);
+    assert!(store.bootstrap(&[], || false).is_err());
 }
 
 #[test]

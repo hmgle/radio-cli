@@ -266,8 +266,28 @@ pub fn run(cli: Cli) -> Result<()> {
                 &page,
                 cli.json,
             )?,
-            Favorite::Add { uuid } => store.favorite(&uuid, true)?,
-            Favorite::Remove { uuid } => store.favorite(&uuid, false)?,
+            Favorite::Add { ref uuid } | Favorite::Remove { ref uuid } => {
+                let added = matches!(action, Favorite::Add { .. });
+                let station = store.station(uuid)?;
+                store.favorite(uuid, added)?;
+                if cli.json {
+                    emit(&serde_json::json!({
+                        "stationuuid": uuid,
+                        "name": station.name,
+                        "favorite": added,
+                    }))?;
+                } else {
+                    println!(
+                        "{}：{}",
+                        if added {
+                            "已收藏"
+                        } else {
+                            "已取消收藏"
+                        },
+                        crate::clean_text(&station.name)
+                    );
+                }
+            }
         },
         Action::Station {
             action:
@@ -365,7 +385,7 @@ pub fn run(cli: Cli) -> Result<()> {
             let mut engine = Engine::new(config, stop.clone())?;
             if engine.store.count()? == 0 {
                 eprintln!("获取热门电台…");
-                engine.directory.bootstrap(&engine.store)?;
+                engine.directory.bootstrap(&mut engine.store)?;
             }
             engine.random(search.filter())?;
             playback_loop(&mut engine, &stop)?;

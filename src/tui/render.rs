@@ -11,7 +11,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn panel(title: String, active: bool) -> Block<'static> {
     Block::default()
@@ -446,11 +446,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             "SEARCH /"
         };
         let input = Rect::new(bottom.x, bottom.y, bottom.width, 1);
-        let (text, cursor) = input_window(
-            &app.editor.text,
-            app.editor.cursor,
-            input.width.saturating_sub(label.len() as u16 + 1),
-        );
+        let (input_width, cursor_start) = input_geometry(label, input.width);
+        let (text, cursor) = input_window(&app.editor.text, app.editor.cursor, input_width);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -463,7 +460,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             ])),
             input,
         );
-        frame.set_cursor_position((input.x + label.len() as u16 + 1 + cursor, input.y));
+        frame.set_cursor_position((input.x + cursor_start + cursor, input.y));
         let hint = if app.message.is_empty() {
             if app.mode == Mode::Command {
                 "Enter 执行 · Esc 返回 · Tab 补全 · ↑/↓ 历史 · :help 帮助"
@@ -488,13 +485,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             app.filter.tag.as_deref().unwrap_or("全部标签"),
             app.filter.min_bitrate
         );
-        let context = match app.focus {
-            Focus::Sources => "j/k 分类 · Enter 进入列表",
-            Focus::List => "j/k 选择 · Enter 播放 · f 收藏 · gg/G 首尾 · PgUp/PgDn 翻页",
-            Focus::Details => "j/k / PgUp/PgDn 滚动详情",
-            Focus::Player => "Enter 当前电台详情 · Space 暂停 · r 录音 · +/- 音量 · :stop 停止",
-            Focus::Activity => "j/k 滚动消息 · :sync 同步 · :sync-cancel 取消",
-        };
+        let context = context_hint(app.source, app.focus);
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
@@ -587,6 +578,25 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
         area.y + (area.height - height) / 2,
         width,
         height,
+    )
+}
+
+pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {
+    match (source, focus) {
+        (_, Focus::Sources) => "j/k 分类 · Enter 进入列表",
+        (Source::Recordings, Focus::List) => "j/k 选择 · gg/G 首尾 · PgUp/PgDn 翻页",
+        (_, Focus::List) => "j/k 选择 · Enter 播放 · f 收藏 · gg/G 首尾 · PgUp/PgDn 翻页",
+        (_, Focus::Details) => "j/k / PgUp/PgDn 滚动详情",
+        (_, Focus::Player) => "Enter 当前电台详情 · Space 暂停 · r 录音 · +/- 音量 · :stop 停止",
+        (_, Focus::Activity) => "j/k 滚动消息 · :sync 同步 · :sync-cancel 取消",
+    }
+}
+
+pub(super) fn input_geometry(label: &str, width: u16) -> (u16, u16) {
+    let start = label.width().saturating_add(1).min(usize::from(width)) as u16;
+    (
+        width.saturating_sub(start),
+        start.min(width.saturating_sub(1)),
     )
 }
 

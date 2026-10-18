@@ -76,6 +76,51 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
 }
 
 #[test]
+fn input_labels_use_display_cells_and_keep_the_cursor_inside() {
+    assert_eq!(render::input_geometry("SEARCH /", 20), (11, 9));
+    assert_eq!(render::input_geometry("搜索 /", 20), (13, 7));
+    assert_eq!(render::input_geometry("e\u{301}", 20), (18, 2));
+    assert_eq!(render::input_geometry("搜索 /", 3), (0, 2));
+    assert_eq!(render::input_geometry("搜索 /", 0), (0, 0));
+}
+
+#[test]
+fn context_hints_match_source_and_focus_actions() {
+    let data = view();
+    let (sender, receiver) = command::channel(20);
+    for source in Source::ALL {
+        let mut app = App::default();
+        app.source = source;
+        for focus in Focus::ALL {
+            let hint = render::context_hint(source, focus);
+            assert!(!hint.is_empty());
+            if focus == Focus::List {
+                let station_actions = source != Source::Recordings;
+                assert_eq!(hint.contains("Enter 播放"), station_actions);
+                assert_eq!(hint.contains("f 收藏"), station_actions);
+                app.focus = focus;
+                app.key(key(KeyCode::Enter), &data, &sender);
+                assert_eq!(
+                    matches!(receiver.try_recv(), Ok(Command::Play(_))),
+                    station_actions
+                );
+                app.key(key(KeyCode::Char('f')), &data, &sender);
+                assert_eq!(
+                    matches!(receiver.try_recv(), Ok(Command::ToggleFavorite(_))),
+                    station_actions
+                );
+            }
+        }
+        app.focus = Focus::List;
+        let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        assert!(text(&terminal).contains(render::context_hint(source, Focus::List)));
+    }
+}
+
+#[test]
 fn commands_use_cli_arguments_and_context_without_shell_execution() {
     let data = view();
     let filter = Filter {

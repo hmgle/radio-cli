@@ -94,7 +94,7 @@ impl CatalogJob {
                     let mut store = Store::open(&config.data_dir.join("radio.db"))?;
                     let mut directory = Directory::new(&config, job_cancel)?;
                     if bootstrap {
-                        directory.bootstrap(&store)
+                        directory.bootstrap(&mut store)
                     } else {
                         directory.sync_with_policy(
                             &mut store,

@@ -93,6 +93,49 @@ fn bad_config_is_reported_without_panicking() {
 }
 
 #[test]
+fn favorite_mutations_confirm_names_and_reject_missing_stations() {
+    let dir = tempfile::tempdir().unwrap();
+    let _config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "Jazz 上海\x1b\n".into(),
+        active: true,
+        ..Station::default()
+    };
+    store.upsert(&station).unwrap();
+    for action in ["add", "remove"] {
+        let output = radio(dir.path())
+            .args(["favorites", action, &station.stationuuid])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let confirmation = String::from_utf8(output.stdout).unwrap();
+        assert!(confirmation.contains("Jazz 上海"));
+        assert!(!confirmation.contains('\x1b'));
+        let json = radio(dir.path())
+            .args(["--json", "favorites", action, &station.stationuuid])
+            .output()
+            .unwrap();
+        assert!(json.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(result["stationuuid"], station.stationuuid);
+        assert_eq!(result["favorite"], action == "add");
+        assert_eq!(
+            store.station(&station.stationuuid).unwrap().favorite,
+            action == "add"
+        );
+        let missing = radio(dir.path())
+            .args(["favorites", action, &uuid::Uuid::new_v4().to_string()])
+            .output()
+            .unwrap();
+        assert!(!missing.status.success());
+        assert!(missing.stdout.is_empty());
+        assert!(!missing.stderr.is_empty());
+    }
+}
+
+#[test]
 fn media_lock_blocks_only_competing_media_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let config = support::config(dir.path());
