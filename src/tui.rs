@@ -19,7 +19,6 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -48,7 +47,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     }
     let engine = Engine::new(config, stop.clone())?;
     let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
-    let (sender, receiver) = mpsc::sync_channel(16);
+    let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();
     let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));

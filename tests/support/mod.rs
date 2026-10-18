@@ -118,3 +118,22 @@ pub fn fixture(codec: &str, format: &str) -> Vec<u8> {
     );
     result.stdout
 }
+
+pub fn fake_mpv(dir: &std::path::Path) -> std::path::PathBuf {
+    let source = dir.join("fake-mpv.rs");
+    std::fs::write(&source, include_str!("fake_mpv.rs")).unwrap();
+    let binary = dir.join("fake-mpv");
+    let output = std::process::Command::new("rustc")
+        .arg("--edition=2024")
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    binary
+}

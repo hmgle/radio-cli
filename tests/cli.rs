@@ -119,9 +119,7 @@ fn owned_children_exit_after_frontend_sigkill() {
     if let Some(path) = std::env::var_os("RADIO_TEST_CHILD_PID") {
         let mut command = Command::new("/bin/sleep");
         command.arg("60");
-        let mut child = radio_cli::process::owned_child(&mut command)
-            .spawn()
-            .unwrap();
+        let mut child = radio_cli::process::spawn_owned(command).unwrap();
         fs::write(path, child.id().to_string()).unwrap();
         let _ = child.wait();
         return;

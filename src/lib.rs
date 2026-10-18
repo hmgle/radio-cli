@@ -18,3 +18,9 @@ pub fn clean_text(text: &str) -> String {
         .take(1024)
         .collect()
 }
+
+#[cfg(test)]
+extern crate self as radio_cli;
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;

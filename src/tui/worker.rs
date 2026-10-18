@@ -1,9 +1,10 @@
-use super::command::Command;
+use super::command::{Command, CommandReceiver};
 use crate::{
     config::Config,
     directory::Directory,
     engine::{Engine, Status},
     model::{Filter, Recording, Station},
+    process::Background,
     store::Store,
 };
 use anyhow::{Result, bail};
@@ -118,9 +119,9 @@ impl CatalogJob {
 impl Drop for CatalogJob {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+        // Cancellation is checked before publication; do not join a
+        // blocking HTTP request while shutting down media.
+        self.handle.take();
     }
 }
 
@@ -188,7 +189,7 @@ pub(super) fn execute(
         }
         Command::Pause => engine.pause()?,
         Command::Stop => {
-            engine.shutdown()?;
+            engine.stop_playback()?;
             engine.status.playing = false;
             engine.status.paused = false;
             engine.status.message = "已停止播放".into();
@@ -288,16 +289,14 @@ pub(super) fn execute(
             data.revision += 1;
         }
         Command::Doctor => {
-            let (report, _) = crate::cli::doctor_report(&engine.config, &engine.stop)?;
-            let mut data = view.lock().unwrap();
-            for check in report["checks"].as_array().into_iter().flatten() {
-                data.log(&format!(
-                    "{} {}: {}",
-                    if check["ok"] == true { "OK" } else { "FAIL" },
-                    check["name"].as_str().unwrap_or(""),
-                    check["detail"].as_str().unwrap_or("")
-                ));
+            if engine.diagnostics.is_some() {
+                bail!("诊断任务正在运行");
             }
+            let config = engine.config.clone();
+            engine.diagnostics = Some(Background::start("radio-doctor", move |cancel| {
+                crate::cli::doctor_report(&config, &cancel)
+            })?);
+            view.lock().unwrap().log("开始后台诊断");
         }
     }
     Ok(())
@@ -305,10 +304,11 @@ pub(super) fn execute(
 
 pub(super) fn run(
     mut engine: Engine,
-    commands: Receiver<Command>,
+    commands: CommandReceiver,
     view: Arc<Mutex<View>>,
     stop: Arc<AtomicBool>,
 ) -> Result<()> {
+    engine.enable_background_media();
     let mut filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -383,6 +383,23 @@ pub(super) fn run(
                 drop(data);
                 drop(active);
                 refresh(&engine, &filter, &view)?;
+            }
+            if let Some(result) = engine.diagnostics.as_ref().and_then(Background::poll) {
+                engine.diagnostics = None;
+                let mut data = view.lock().unwrap();
+                match result {
+                    Ok((report, _)) => {
+                        for check in report["checks"].as_array().into_iter().flatten() {
+                            data.log(&format!(
+                                "{} {}: {}",
+                                if check["ok"] == true { "OK" } else { "FAIL" },
+                                check["name"].as_str().unwrap_or(""),
+                                check["detail"].as_str().unwrap_or("")
+                            ));
+                        }
+                    }
+                    Err(error) => data.log(&format!("诊断失败: {error:#}")),
+                }
             }
             if let Err(error) = engine.tick() {
                 view.lock().unwrap().log(&format!("错误: {error:#}"));

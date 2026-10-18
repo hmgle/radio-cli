@@ -7,6 +7,96 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use std::{path::PathBuf, time::Duration};
 
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::time::Instant;
+
+pub(super) struct CommandSender {
+    normal: SyncSender<Command>,
+    control: Sender<Command>,
+}
+pub(super) struct CommandReceiver {
+    normal: Receiver<Command>,
+    control: Receiver<Command>,
+}
+fn priority(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Pause
+            | Command::Stop
+            | Command::RecordStop
+            | Command::Volume(_)
+            | Command::AdjustVolume(_)
+            | Command::Cancel
+    )
+}
+pub(super) fn channel(capacity: usize) -> (CommandSender, CommandReceiver) {
+    let (normal, normal_rx) = mpsc::sync_channel(capacity);
+    let (control, control_rx) = mpsc::channel();
+    (
+        CommandSender { normal, control },
+        CommandReceiver {
+            normal: normal_rx,
+            control: control_rx,
+        },
+    )
+}
+impl CommandSender {
+    pub fn try_send(&self, command: Command) -> Result<(), String> {
+        if priority(&command) {
+            self.control.send(command).map_err(|e| e.to_string())
+        } else {
+            self.normal.try_send(command).map_err(|e| e.to_string())
+        }
+    }
+    #[cfg(test)]
+    pub fn send(&self, command: Command) -> Result<(), String> {
+        if priority(&command) {
+            self.control.send(command).map_err(|e| e.to_string())
+        } else {
+            self.normal.send(command).map_err(|e| e.to_string())
+        }
+    }
+}
+impl CommandReceiver {
+    #[cfg(test)]
+    pub fn try_recv(&self) -> Result<Command, mpsc::TryRecvError> {
+        self.control.try_recv().or_else(|_| self.normal.try_recv())
+    }
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<Command, mpsc::RecvTimeoutError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(command) = self.control.try_recv() {
+                return Ok(command);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self
+                .normal
+                .recv_timeout(remaining.min(Duration::from_millis(10)))
+            {
+                Ok(command) => return Ok(command),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return self
+                        .control
+                        .try_recv()
+                        .map_err(|_| mpsc::RecvTimeoutError::Disconnected);
+                }
+                Err(_) if Instant::now() >= deadline => {
+                    return Err(mpsc::RecvTimeoutError::Timeout);
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    #[cfg(test)]
+    pub fn recv(&self) -> Result<Command, mpsc::RecvTimeoutError> {
+        self.recv_timeout(Duration::from_secs(2))
+    }
+    #[cfg(test)]
+    pub fn try_iter(&self) -> impl Iterator<Item = Command> + '_ {
+        std::iter::from_fn(|| self.try_recv().ok())
+    }
+}
+
 pub(super) enum Command {
     Search(Filter),
     Play(String),
@@ -48,6 +138,7 @@ pub(super) enum Parsed {
 
 pub(super) const COMPLETIONS: &[&str] = &[
     "sync",
+    "refresh",
     "sync-cancel",
     "search",
     "play",
@@ -210,12 +301,13 @@ gg / G  首项/末项     Ctrl-u/d  移动十项\n\
 Enter  播放列表选中项（来源面板中进入列表）\n\
 Space 暂停  n 随机  f 收藏选中项  r 录音  +/- 音量\n\
 /  搜索模式（Enter 确认，Esc 恢复原搜索）\n\
-F  筛选对话框     ?  帮助     q 退出\n\n\
+F  筛选对话框     F5 刷新     ?  帮助     q / Ctrl-C 退出\n\n\
 COMMAND 命令模式\n\
 : 输入命令；Enter 执行；Esc 返回普通模式；Ctrl-c 收尾并退出\n\
 Tab / Shift-Tab 补全；↑/↓ 历史；←/→ 编辑光标\n\
 Home / Ctrl-a 行首；End / Ctrl-e 行尾；Ctrl-u 清空\n\n\
-:sync                   后台同步目录（不停止播放）\n\
+:sync [--accept-shrink]  后台同步目录（不停止播放）\n\
+:refresh                刷新当前列表\n\
 :sync-cancel            取消目录任务，保留旧目录\n\
 :search jazz --country FR --min-bitrate 128\n\
 :play [UUID]            播放选中电台或指定 UUID\n\

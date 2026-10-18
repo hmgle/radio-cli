@@ -187,7 +187,7 @@ fn editor_handles_unicode_cursor_completion_and_history_draft() {
 #[test]
 fn modes_route_text_without_triggering_normal_actions_and_restore_search() {
     let data = view();
-    let (sender, receiver) = mpsc::sync_channel(16);
+    let (sender, receiver) = command::channel(16);
     let mut app = App::default();
     app.key(key(KeyCode::Char(':')), &data, &sender);
     for c in "station add 'q r n' https://example.com/live".chars() {
@@ -314,7 +314,7 @@ fn focus_navigation_mouse_and_stale_results_follow_visible_panels() {
     use crossterm::event::{MouseEvent, MouseEventKind};
     let mut data = view();
     let mut app = App::default();
-    let (sender, receiver) = mpsc::sync_channel(16);
+    let (sender, receiver) = command::channel(16);
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
     terminal
         .draw(|frame| render::draw(frame, &mut app, &data))
@@ -403,7 +403,7 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
     let stop = Arc::new(AtomicBool::new(false));
     let engine = Engine::new(config, stop.clone()).unwrap();
     let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
-    let (sender, receiver) = mpsc::sync_channel(16);
+    let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();
     let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
@@ -483,7 +483,7 @@ fn ctrl_w_keeps_unicode_boundaries() {
 #[test]
 fn ctrl_c_quits_every_mode_and_small_screen_q_quits() {
     let data = view();
-    let (tx, _rx) = mpsc::sync_channel(16);
+    let (tx, _rx) = command::channel(16);
     for mode in [Mode::Normal, Mode::Search, Mode::Command] {
         for popup in 0..3 {
             let mut app = App::default();
@@ -518,7 +518,7 @@ fn rapid_shortcuts_apply_against_owner_state() {
     let frozen = view();
     engine.store.upsert(&frozen.rows[0]).unwrap();
     let shared = Arc::new(Mutex::new(frozen.clone()));
-    let (tx, rx) = mpsc::sync_channel(16);
+    let (tx, rx) = command::channel(16);
     let mut app = App::default();
     for c in ['+', '+', '+', 'f', 'f'] {
         app.key(key(KeyCode::Char(c)), &frozen, &tx);
@@ -543,8 +543,8 @@ fn full_queue_retries_every_view_query_with_latest_filter() {
     let mut data = view();
     data.rows.resize(100, station("row"));
     for action in 0..5 {
-        let (tx, rx) = mpsc::sync_channel(1);
-        tx.send(Command::Pause).unwrap();
+        let (tx, rx) = command::channel(1);
+        tx.send(Command::Search(data.filter.clone())).unwrap();
         let mut app = App::default();
         match action {
             0 => app.key(key(KeyCode::Char(']')), &data, &tx),
@@ -679,4 +679,228 @@ fn tui_recording_rejects_a_different_station() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
+    use crate::test_support::{self, Server, response};
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_support::config(dir.path());
+    let fake = test_support::fake_mpv(dir.path());
+    config.settings.mpv = fake.to_string_lossy().into();
+    let marker = dir.path().join("probe-started");
+    let slow = dir.path().join("slow-probe");
+    std::fs::write(
+        &slow,
+        format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o700)).unwrap();
+    config.settings.ffprobe = slow.to_string_lossy().into();
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = requests.clone();
+    let server = Server::new(move |_, stream| {
+        seen.fetch_add(1, Ordering::Relaxed);
+        thread::sleep(Duration::from_secs(2));
+        response(stream, 200, "application/json", b"[]");
+    });
+    config.settings.api_url = Some(server.url.clone());
+    let stop = Arc::new(AtomicBool::new(false));
+    let engine = Engine::new(config, stop.clone()).unwrap();
+    let mut good = station("good");
+    good.url = "https://example.com/good".into();
+    let mut bad = station("bad");
+    bad.url = "https://example.com/fail".into();
+    engine.store.upsert(&good).unwrap();
+    engine.store.upsert(&bad).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let (sender, receiver) = command::channel(16);
+    let output = shared.clone();
+    let worker_stop = stop.clone();
+    let handle = thread::spawn(move || worker::run(engine, receiver, output, worker_stop));
+    let wait = |check: &dyn Fn(&View) -> bool, budget: Duration| {
+        let deadline = Instant::now() + budget;
+        loop {
+            if check(&shared.lock().unwrap()) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker response exceeded {budget:?}"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    sender
+        .send(Command::Play(good.stationuuid.clone()))
+        .unwrap();
+    wait(&|v| v.status.playing, Duration::from_secs(3));
+    // Click reporting is still waiting on a slow HTTP response.
+    sender.send(Command::Doctor).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    sender.send(Command::Volume(37)).unwrap();
+    sender.send(Command::Pause).unwrap();
+    wait(
+        &|v| v.status.volume == 37 && v.status.paused,
+        Duration::from_millis(250),
+    );
+    sender
+        .send(Command::Record {
+            uuid: None,
+            duration: None,
+            dir: None,
+        })
+        .unwrap();
+    wait(&|v| v.status.recording, Duration::from_secs(1));
+    sender.send(Command::RecordStop).unwrap();
+    sender.send(Command::Volume(41)).unwrap();
+    wait(
+        &|v| !v.status.recording && v.status.volume == 41,
+        Duration::from_millis(250),
+    );
+    sender.send(Command::Play(bad.stationuuid.clone())).unwrap();
+    wait(
+        &|v| v.status.message.contains("后台刷新"),
+        Duration::from_secs(2),
+    );
+    sender.send(Command::Stop).unwrap();
+    wait(
+        &|v| v.status.message == "已停止播放",
+        Duration::from_millis(250),
+    );
+    sender
+        .send(Command::Play(good.stationuuid.clone()))
+        .unwrap();
+    wait(
+        &|v| v.status.playing && v.status.station.as_ref().unwrap().stationuuid == good.stationuuid,
+        Duration::from_secs(2),
+    );
+    let start = Instant::now();
+    stop.store(true, Ordering::Relaxed);
+    drop(sender);
+    handle.join().unwrap().unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "shutdown waited for HTTP or doctor"
+    );
+    thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .status
+            .station
+            .as_ref()
+            .unwrap()
+            .stationuuid,
+        good.stationuuid
+    );
+    assert!(requests.load(Ordering::Relaxed) >= 2);
+    let log = std::fs::read_to_string(fake.with_extension("commands")).unwrap();
+    assert!(log.contains("[\"add\",\"volume\",-43]"));
+    assert!(log.contains("[\"cycle\",\"pause\"]"));
+}
+
+#[test]
+fn slow_recording_verification_does_not_hold_media_controls_or_shutdown() {
+    use crate::test_support::{self, Server, response};
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_support::config(dir.path());
+    config.settings.mpv = test_support::fake_mpv(dir.path()).to_string_lossy().into();
+    let marker = dir.path().join("verifying");
+    let probe = dir.path().join("probe-wrapper");
+    std::fs::write(&probe,format!("#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in *.part) touch '{}'; exec sleep 30 ;; esac; done\nexec ffprobe \"$@\"\n",marker.display())).unwrap();
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    config.settings.ffprobe = probe.to_string_lossy().into();
+    let bytes = test_support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, s| response(s, 200, "audio/mpeg", &bytes));
+    let stop = Arc::new(AtomicBool::new(false));
+    let engine = Engine::new(config, stop.clone()).unwrap();
+    let mut row = station("record target");
+    row.url = server.url.clone();
+    row.custom = true;
+    engine.store.upsert(&row).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let (sender, receiver) = command::channel(16);
+    let output = shared.clone();
+    let flag = stop.clone();
+    let handle = thread::spawn(move || worker::run(engine, receiver, output, flag));
+    sender.send(Command::Play(row.stationuuid)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !shared.lock().unwrap().status.playing {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    sender
+        .send(Command::Record {
+            uuid: None,
+            duration: Some(Duration::from_secs(1)),
+            dir: None,
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "recording never reached verification: {:?}",
+            shared.lock().unwrap().logs
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let start = Instant::now();
+    sender.send(Command::Volume(42)).unwrap();
+    sender.send(Command::Pause).unwrap();
+    while {
+        let data = shared.lock().unwrap();
+        data.status.volume != 42 || !data.status.paused
+    } {
+        assert!(start.elapsed() < Duration::from_millis(250));
+        thread::sleep(Duration::from_millis(5));
+    }
+    let start = Instant::now();
+    stop.store(true, Ordering::Relaxed);
+    drop(sender);
+    handle.join().unwrap().unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "shutdown ignored verification deadline"
+    );
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let record = store.recordings(1).unwrap().remove(0);
+    assert_eq!(record.status, "failed");
+    assert!(std::path::Path::new(&record.path).exists());
+}
+
+#[test]
+fn priority_controls_bypass_a_full_query_queue() {
+    let (sender, receiver) = command::channel(1);
+    sender.try_send(Command::Search(Filter::default())).unwrap();
+    sender.try_send(Command::Stop).unwrap();
+    assert!(matches!(receiver.try_recv().unwrap(), Command::Stop));
+    assert!(matches!(receiver.try_recv().unwrap(), Command::Search(_)));
+}
+
+#[test]
+fn recording_refresh_preserves_selected_identity() {
+    let recording = |id: &str| {
+        serde_json::from_value(serde_json::json!({
+        "id":id,"stationuuid":"s","station_name":id,"source_url_resolved":"https://example.com","started_at":"2026-01-01","stopped_at":null,"media_duration_ms":null,"codec":"mp3","container":"mp3","path":"/tmp/test","size_bytes":1,"status":"complete","error":null
+    })).unwrap()
+    };
+    let mut data = view();
+    data.recordings = vec![recording("a"), recording("b")];
+    data.rows_revision = 1;
+    let mut app = App::default();
+    app.source = Source::Recordings;
+    app.reconcile(&data);
+    data.recordings.insert(0, recording("new"));
+    data.rows_revision += 1;
+    app.reconcile(&data);
+    assert_eq!(data.recordings[app.list.selected().unwrap()].id, "a");
 }

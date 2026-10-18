@@ -3,7 +3,7 @@ use crate::{
     directory::Directory,
     model::{Filter, Station},
     player::{Event, Player},
-    process::MediaLock,
+    process::{Background, MediaLock},
     recorder::{self, Recorder},
     store::Store,
 };
@@ -34,8 +34,17 @@ pub struct Engine {
     pub directory: Directory,
     pub status: Status,
     pub stop: Arc<AtomicBool>,
-    _lock: MediaLock,
+    _lock: Arc<MediaLock>,
+    background_media: bool,
+    generation: u64,
+    refresh_task: Option<(u64, String, Background<Option<Station>>)>,
+    click_task: Option<Background<()>>,
+    recording_probe: Option<RecordingProbe>,
+    finalizing: Option<Background<crate::model::Recording>>,
+    pub(crate) diagnostics: Option<Background<(serde_json::Value, bool)>>,
     player: Option<Player>,
+    player_start: Option<(u64, u8, Background<Player>)>,
+    retiring: Vec<Background<()>>,
     recorder: Option<Recorder>,
     url: String,
     candidates: VecDeque<String>,
@@ -46,6 +55,15 @@ pub struct Engine {
     random_filter: Option<Filter>,
     random_tried: Vec<String>,
     pub playback_failed: bool,
+}
+
+struct RecordingProbe {
+    generation: u64,
+    station: Station,
+    url: String,
+    dir: std::path::PathBuf,
+    duration: Option<Duration>,
+    task: Background<serde_json::Value>,
 }
 
 impl Engine {
@@ -76,8 +94,17 @@ impl Engine {
             directory,
             status,
             stop,
-            _lock: lock,
+            _lock: Arc::new(lock),
+            background_media: false,
+            generation: 0,
+            refresh_task: None,
+            click_task: None,
+            recording_probe: None,
+            finalizing: None,
+            diagnostics: None,
             player: None,
+            player_start: None,
+            retiring: vec![],
             recorder: None,
             url: String::new(),
             candidates: VecDeque::new(),
@@ -98,8 +125,10 @@ impl Engine {
     }
 
     fn play_station(&mut self, station: Station) -> Result<()> {
+        self.generation = self.generation.wrapping_add(1);
+        self.refresh_task = None;
         self.stop_recording(None)?;
-        self.player = None;
+        self.retire_player();
         self.tried.clear();
         self.candidates.clear();
         self.refreshed = false;
@@ -119,7 +148,19 @@ impl Engine {
         self.status.source_url = self.url.clone();
         self.tried.push(self.url.clone());
         self.config.settings.volume = self.status.volume;
-        self.player = Some(Player::start(&self.config, &self.url, &self.stop)?);
+        if self.background_media {
+            let config = self.config.clone();
+            let url = self.url.clone();
+            self.player_start = Some((
+                self.generation,
+                self.status.volume,
+                Background::start("radio-player-start", move |cancel| {
+                    Player::start(&config, &url, &cancel)
+                })?,
+            ));
+        } else {
+            self.player = Some(Player::start(&self.config, &self.url, &self.stop)?);
+        }
         self.started = Instant::now();
         self.confirmed = false;
         self.status.message = "连接中…".into();
@@ -149,7 +190,7 @@ impl Engine {
     }
 
     fn fail(&mut self, reason: &str) -> Result<()> {
-        self.player = None;
+        self.retire_player();
         self.status.playing = false;
         self.status.paused = false;
         self.stop_recording(Some(reason))?;
@@ -157,20 +198,22 @@ impl Engine {
         if !self.candidates.is_empty() {
             return self.start_candidate();
         }
-        if !self.refreshed {
+        if !self.refreshed && !station.custom {
             self.refreshed = true;
-            if !station.custom
-                && let Ok(Some(updated)) = self.directory.refresh(&station.stationuuid)
-            {
-                self.store.upsert(&updated)?;
-                self.candidates
-                    .extend(updated.stream_candidates(&self.store.backups(&station.stationuuid)?));
-                self.candidates.retain(|url| !self.tried.contains(url));
-            }
+            let mut config = self.config.clone();
+            config.settings.request_timeout_secs = config.settings.request_timeout_secs.min(3);
+            let uuid = station.stationuuid.clone();
+            let task = Background::start("radio-refresh", move |cancel| {
+                Directory::new(&config, cancel)?.refresh(&uuid)
+            })?;
+            self.refresh_task = Some((self.generation, reason.into(), task));
+            self.status.message = "正在后台刷新线路…".into();
+            return Ok(());
         }
-        if !self.candidates.is_empty() {
-            return self.start_candidate();
-        }
+        self.exhausted(reason)
+    }
+
+    fn exhausted(&mut self, reason: &str) -> Result<()> {
         if self.random_filter.is_some() && self.random_tried.len() < 6 && self.pick_random().is_ok()
         {
             return Ok(());
@@ -181,6 +224,7 @@ impl Engine {
     }
 
     pub fn tick(&mut self) -> Result<()> {
+        self.poll_background()?;
         if let Some(player) = self.player.as_mut() {
             let events = player.poll();
             match events {
@@ -194,8 +238,20 @@ impl Engine {
                                     self.confirmed = true;
                                     if let Some(s) = &self.status.station {
                                         self.store.played(&s.stationuuid)?;
-                                        if !s.custom {
-                                            let _ = self.directory.click(&s.stationuuid);
+                                        if !s.custom
+                                            && self
+                                                .click_task
+                                                .as_ref()
+                                                .is_none_or(|t| t.poll().is_some())
+                                        {
+                                            let config = self.config.clone();
+                                            let uuid = s.stationuuid.clone();
+                                            self.click_task = Some(Background::start(
+                                                "radio-click",
+                                                move |cancel| {
+                                                    Directory::new(&config, cancel)?.click(&uuid)
+                                                },
+                                            )?);
                                         }
                                     }
                                 }
@@ -245,7 +301,7 @@ impl Engine {
     }
 
     pub fn toggle_recording(&mut self) -> Result<()> {
-        if self.recorder.is_some() {
+        if self.recorder.is_some() || self.recording_probe.is_some() {
             return self.stop_recording(None);
         }
         self.record_current(None, None)
@@ -260,7 +316,35 @@ impl Engine {
             bail!("请等待电台开始播放后再录音");
         }
         let station = self.status.station.clone().context("尚未播放")?;
-        self.start_recording(station, self.url.clone(), duration, dir)
+        if self.background_media {
+            if self.recorder.is_some()
+                || self.recording_probe.is_some()
+                || self.finalizing.is_some()
+            {
+                bail!("已有录音或收尾任务");
+            }
+            let config = self.config.clone();
+            let url = self.url.clone();
+            let input = url.clone();
+            let task = Background::start("radio-record-probe", move |cancel| {
+                recorder::probe(&config, &input, &cancel)
+            })?;
+            self.recording_probe = Some(RecordingProbe {
+                generation: self.generation,
+                station,
+                url,
+                dir: dir.unwrap_or(&self.config.recording_dir).into(),
+                duration,
+                task,
+            });
+            self.status.recording = true;
+            self.status.recording_ms = 0;
+            self.status.recording_path.clear();
+            self.status.message = "正在后台检测录音编码…".into();
+            Ok(())
+        } else {
+            self.start_recording(station, self.url.clone(), duration, dir)
+        }
     }
 
     pub fn standalone_record(
@@ -365,24 +449,180 @@ impl Engine {
         self.status.message = "正在录音".into();
     }
 
-    pub fn stop_recording(&mut self, reason: Option<&str>) -> Result<()> {
-        if let Some(recorder) = self.recorder.take() {
+    pub(crate) fn enable_background_media(&mut self) {
+        self.background_media = true;
+    }
+
+    fn retire_player(&mut self) {
+        if let Some((_, _, task)) = self.player_start.take() {
+            // A completed task may already contain a Player. Drop it away
+            // from controls so its child reaping cannot block cancellation.
+            let lock = self._lock.clone();
+            if let Ok(cleanup) = Background::start("radio-player-cancel", move |_| {
+                let _lock = lock;
+                drop(task);
+                Ok(())
+            }) {
+                self.retiring.push(cleanup);
+            }
+        }
+        if let Some(player) = self.player.take() {
+            if self.background_media {
+                let lock = self._lock.clone();
+                if let Ok(task) = Background::start("radio-player-stop", move |_| {
+                    let _lock = lock;
+                    drop(player);
+                    Ok(())
+                }) {
+                    self.retiring.push(task);
+                }
+            } else {
+                drop(player);
+            }
+        }
+    }
+
+    fn poll_background(&mut self) -> Result<()> {
+        self.retiring.retain(|task| task.poll().is_none());
+        if let Some(result) = self
+            .player_start
+            .as_ref()
+            .and_then(|(_, _, task)| task.poll())
+        {
+            let (generation, initial_volume, _) = self.player_start.take().unwrap();
+            if generation == self.generation {
+                match result {
+                    Ok(mut player) => {
+                        // Controls accepted while IPC was starting still apply.
+                        let delta = i32::from(self.status.volume) - i32::from(initial_volume);
+                        if delta != 0 {
+                            player.volume(delta)?;
+                        }
+                        self.player = Some(player);
+                        self.started = Instant::now();
+                    }
+                    Err(error) => {
+                        self.playback_failed = true;
+                        self.status.message = format!("播放器启动失败: {error:#}");
+                    }
+                }
+            }
+        }
+        if let Some(result) = self
+            .refresh_task
+            .as_ref()
+            .and_then(|(_, _, task)| task.poll())
+        {
+            let (generation, reason, _) = self.refresh_task.take().unwrap();
+            if generation == self.generation {
+                if let Ok(Some(station)) = result {
+                    self.store.upsert(&station)?;
+                    self.candidates.extend(
+                        station.stream_candidates(&self.store.backups(&station.stationuuid)?),
+                    );
+                    self.candidates.retain(|url| !self.tried.contains(url));
+                }
+                if self.candidates.is_empty() {
+                    self.exhausted(&reason)?;
+                } else {
+                    self.start_candidate()?;
+                }
+            }
+        }
+        if let Some(result) = self
+            .recording_probe
+            .as_ref()
+            .and_then(|probe| probe.task.poll())
+        {
+            let probe = self.recording_probe.take().unwrap();
             self.status.recording = false;
-            let record = recorder.finish(&self.config, &self.store, reason)?;
-            self.status.recording_path = record.path;
-            self.status.message = format!("录音 {}: {}", record.status, self.status.recording_path);
-            if record.status != "complete" {
-                self.status
-                    .message
-                    .push_str(&format!(" ({})", record.error.unwrap_or_default()));
+            if probe.generation == self.generation {
+                match result.and_then(|info| {
+                    Recorder::start_with_info(
+                        &self.config,
+                        &self.store,
+                        &probe.station,
+                        &probe.url,
+                        &probe.dir,
+                        probe.duration,
+                        info,
+                    )
+                }) {
+                    Ok(recorder) => self.attach_recorder(recorder),
+                    Err(error) => self.status.message = format!("录音启动失败: {error:#}"),
+                }
+            }
+        }
+        if let Some(result) = self.finalizing.as_ref().and_then(Background::poll) {
+            self.finalizing = None;
+            match result {
+                Ok(record) => self.recording_finished(record),
+                Err(error) => {
+                    self.status.message =
+                        format!("录音收尾失败，可用 recordings recover 重试: {error:#}")
+                }
             }
         }
         Ok(())
     }
 
-    pub fn shutdown(&mut self) -> Result<()> {
-        self.player = None;
+    fn recording_finished(&mut self, record: crate::model::Recording) {
+        self.status.recording_path = record.path;
+        self.status.message = format!("录音 {}: {}", record.status, self.status.recording_path);
+        if record.status != "complete" {
+            self.status
+                .message
+                .push_str(&format!(" ({})", record.error.unwrap_or_default()));
+        }
+    }
+
+    pub fn stop_recording(&mut self, reason: Option<&str>) -> Result<()> {
+        if self.recording_probe.take().is_some() {
+            self.status.message = "录音检测已取消".into();
+        }
+        self.status.recording = false;
+        if let Some(recorder) = self.recorder.take() {
+            if self.background_media {
+                let config = self.config.clone();
+                let reason = reason.map(str::to_owned);
+                let lock = self._lock.clone();
+                self.finalizing = Some(Background::start("radio-finalize", move |cancel| {
+                    let _lock = lock;
+                    let store = Store::open(&config.data_dir.join("radio.db"))?;
+                    recorder.finish_cancellable(&config, &store, reason.as_deref(), &cancel)
+                })?);
+                self.status.message = "录音正在后台收尾…".into();
+            } else {
+                let record = recorder.finish(&self.config, &self.store, reason)?;
+                self.recording_finished(record);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn stop_playback(&mut self) -> Result<()> {
+        self.generation = self.generation.wrapping_add(1);
+        self.refresh_task = None;
+        self.retire_player();
+        self.status.playing = false;
+        self.status.paused = false;
         self.stop_recording(None)
+    }
+
+    pub fn shutdown(&mut self) -> Result<()> {
+        self.stop_playback()?;
+        self.click_task = None;
+        self.diagnostics = None;
+        // Allow normal finalization, then cancel verification if its budget
+        // expires. Outstanding HTTP results never need joining.
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while (self.finalizing.is_some() || !self.retiring.is_empty()) && Instant::now() < deadline
+        {
+            self.poll_background()?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.finalizing = None;
+        Ok(())
     }
 }
 

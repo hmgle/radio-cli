@@ -44,7 +44,7 @@ impl Player {
             bail!("运行目录过长，无法创建 Unix Socket；请缩短 --data-dir");
         }
         let mut command = Command::new(&config.settings.mpv);
-        let mut child = crate::process::owned_child(&mut command)
+        command
             .args([
                 "--no-config",
                 "--load-scripts=no",
@@ -69,8 +69,8 @@ impl Player {
             .arg(format!("--input-ipc-server={}", socket.display()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        let mut child = crate::process::spawn_owned(command)
             .context("无法启动 mpv；请安装 mpv 并运行 radio doctor")?;
         let deadline = Instant::now() + Duration::from_secs(3);
         let stream = loop {

@@ -527,3 +527,87 @@ fn recording_resolves_backup_and_missing_backend_fails_fast() {
         .unwrap_err();
     assert!(format!("{error:#}").contains("无法启动依赖"));
 }
+
+#[test]
+fn repeated_adjustments_reach_the_player_ipc() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    let fake = support::fake_mpv(dir.path());
+    config.settings.mpv = fake.to_string_lossy().into();
+    config.settings.volume = 80;
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let row = sample("https://example.com/live");
+    engine.store.upsert(&row).unwrap();
+    engine.play(&row.stationuuid).unwrap();
+    for _ in 0..3 {
+        engine.volume(5).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        engine.tick().unwrap();
+        let log = fs::read_to_string(fake.with_extension("commands")).unwrap();
+        if log.matches("[\"add\",\"volume\",5]").count() == 3 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(engine.status.volume, 95);
+    engine.shutdown().unwrap();
+    assert_eq!(
+        fs::read_to_string(fake.with_extension("commands"))
+            .unwrap()
+            .matches("[\"add\",\"volume\",5]")
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn recording_skips_a_source_without_an_audio_track() {
+    let video = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=16x16:d=1",
+            "-an",
+            "-c:v",
+            "mpeg4",
+            "-f",
+            "matroska",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(video.status.success());
+    let audio = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |request, s| {
+        response(
+            s,
+            200,
+            "application/octet-stream",
+            if request.contains("/video") {
+                &video.stdout
+            } else {
+                &audio
+            },
+        )
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let row = sample(&format!("{}/video", server.url));
+    engine.store.upsert(&row).unwrap();
+    let backup = format!("{}/audio", server.url);
+    engine.store.add_backup(&row.stationuuid, &backup).unwrap();
+    engine
+        .standalone_record(&row.stationuuid, Some(Duration::from_secs(1)), None)
+        .unwrap();
+    assert_eq!(
+        engine.store.recordings(1).unwrap()[0].source_url_resolved,
+        backup
+    );
+    engine.shutdown().unwrap();
+}
