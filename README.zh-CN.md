@@ -145,3 +145,8 @@ uv run scripts/measure_resources.py --binary target/release/radio
 首版不提供后台服务、回溯缓存、歌曲识别、歌词、地图和后台全目录探测。目录来源为 [Radio Browser](https://www.radio-browser.info/)，音频直连电台；不使用 RoamDial 私有服务，也不会按同名自动合并备用线路。更详细的设计见 [实现说明](docs/implementation.md)。
 
 Ctrl-C 在所有 TUI 模式下收尾并退出；Esc 取消编辑或关闭弹窗。终端过小时，q 直接退出。
+
+`radio completions bash|zsh|fish` 生成 shell 补全，例如
+`radio completions zsh > _radio` 后放入 zsh 的 `$fpath` 目录。
+`radio man > radio.1` 生成手册页。发布压缩包包含三种 shell 补全和
+`man/radio.1`，生成命令不读取配置、不创建数据目录。

@@ -666,3 +666,36 @@ fn json_v2_is_atomic_preserves_legacy_and_has_stable_exit_codes() {
     );
     assert_eq!(dependency["error"]["code"], "missing_dependency");
 }
+
+#[test]
+fn completions_and_manual_are_generated_without_preparing_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("uncreated");
+    for (args, expected) in [
+        (vec!["completions", "zsh"], "#compdef radio"),
+        (vec!["completions", "bash"], "_radio()"),
+        (vec!["completions", "fish"], "complete -c radio"),
+        (vec!["man"], ".TH radio 1"),
+    ] {
+        let output = radio(&data).args(&args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let content = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            content.contains(expected),
+            "{}",
+            &content[..content.len().min(300)]
+        );
+        assert!(content.contains("recordings"));
+        assert!(!data.exists());
+    }
+    let v2 = radio(&data)
+        .args(["--json-v2", "completions", "zsh"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&v2.stdout).unwrap();
+    assert!(value["data"].as_str().unwrap().contains("#compdef radio"));
+}

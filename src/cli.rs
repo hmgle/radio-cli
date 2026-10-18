@@ -137,6 +137,12 @@ fn list_stations(store: &Store, mut filter: Filter, page: &Page, json: bool) -> 
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// Generate shell completion code without opening the database.
+    Completions {
+        shell: clap_complete::Shell,
+    },
+    /// Generate the radio(1) manual page.
+    Man,
     Countries(FacetArgs),
     Languages(FacetArgs),
     Tags(FacetArgs),
@@ -284,6 +290,16 @@ thread_local! {
 fn run_inner(mut cli: Cli) -> Result<()> {
     cli.json |= cli.json_v2;
     crate::messages::preview(cli.lang.as_deref());
+    if let Some(Action::Completions { shell }) = cli.command.as_ref() {
+        let mut bytes = Vec::new();
+        clap_complete::generate(*shell, &mut Cli::command(), "radio", &mut bytes);
+        return emit_generated(bytes, cli.json);
+    }
+    if matches!(cli.command, Some(Action::Man)) {
+        let mut bytes = Vec::new();
+        clap_mangen::Man::new(Cli::command()).render(&mut bytes)?;
+        return emit_generated(bytes, cli.json);
+    }
     if cli.json_v2 && matches!(cli.command, None | Some(Action::Tui)) {
         bail!(
             crate::error::DomainError::new(crate::error::ErrorCode::UsageError)
@@ -311,6 +327,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, stop.clone())?;
     let mut store = Store::open(&config.data_dir.join("radio.db"))?;
     match action {
+        Action::Completions { .. } | Action::Man => unreachable!(),
         Action::Countries(ref args) | Action::Languages(ref args) | Action::Tags(ref args) => {
             let kind = match action {
                 Action::Countries(_) => crate::model::FacetKind::Country,
@@ -563,6 +580,16 @@ fn run_inner(mut cli: Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn emit_generated(bytes: Vec<u8>, json: bool) -> Result<()> {
+    if json {
+        emit(&String::from_utf8(bytes)?)
+    } else {
+        use std::io::Write;
+        io::stdout().write_all(&bytes)?;
+        Ok(())
+    }
 }
 
 fn playback_loop(engine: &mut Engine, stop: &AtomicBool) -> Result<()> {
