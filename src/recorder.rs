@@ -24,7 +24,6 @@ pub struct Recorder {
     child: Child,
     pub record: Recording,
     partial: PathBuf,
-    final_path: PathBuf,
     deadline: Option<Instant>,
     target_duration: Option<Duration>,
     ended_without_stop: bool,
@@ -83,8 +82,69 @@ pub fn sidecar(record: &Recording) -> Result<()> {
     Ok(())
 }
 
+// Rename without replacement works on filesystems without hard links too.
+fn publish(partial: &Path, final_path: &Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let from = CString::new(partial.as_os_str().as_bytes())?;
+        let to = CString::new(final_path.as_os_str().as_bytes())?;
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        fs::hard_link(partial, final_path)?;
+        fs::remove_file(partial)?;
+    }
+    Ok(())
+}
+
+fn complete_finalization(store: &Store, record: &mut Recording) -> Result<()> {
+    let partial = PathBuf::from(&record.path);
+    let final_path = PathBuf::from(record.final_path.as_ref().context("缺少最终文件路径")?);
+    if partial.exists() {
+        publish(&partial, &final_path).with_context(|| {
+            format!(
+                "发布录音 {}: {} → {}",
+                record.id,
+                partial.display(),
+                final_path.display()
+            )
+        })?;
+    }
+    let size = fs::metadata(&final_path)?.len();
+    if size != record.size_bytes || size == 0 {
+        bail!("最终文件大小不匹配；保留恢复状态");
+    }
+    let mut complete = record.clone();
+    complete.path = final_path.to_string_lossy().into();
+    complete.status = "complete".into();
+    complete.error = None;
+    // The DB remains finalizing until the final sidecar is safely written.
+    sidecar(&complete)?;
+    store.save_recording(&complete)?;
+    let _ = fs::remove_file(format!("{}.json", partial.display()));
+    *record = complete;
+    Ok(())
+}
+
 pub fn recover(store: &Store) -> Result<()> {
     for mut r in store.unfinished_recordings()? {
+        if r.status == "finalizing" {
+            complete_finalization(store, &mut r)?;
+            continue;
+        }
         r.status = "interrupted".into();
         r.stopped_at = Some(chrono::Utc::now().to_rfc3339());
         r.error = Some("上一个会话未正常结束；保留临时文件供恢复".into());
@@ -208,6 +268,7 @@ impl Recorder {
             codec,
             container: muxer.into(),
             path: partial.to_string_lossy().into(),
+            final_path: Some(final_path.to_string_lossy().into()),
             size_bytes: 0,
             status: "recording".into(),
             error: None,
@@ -216,7 +277,6 @@ impl Recorder {
             child,
             record,
             partial,
-            final_path,
             deadline: duration.map(|d| {
                 Instant::now() + d + Duration::from_secs(config.settings.playback_timeout_secs)
             }),
@@ -331,19 +391,30 @@ impl Recorder {
             self.record.media_duration_ms = Some(self.duration_ms);
         }
         if self.record.status == "complete" {
-            // hard_link is atomic and fails if the target already exists.
-            fs::hard_link(&self.partial, &self.final_path)?;
-            fs::remove_file(&self.partial)?;
-            let _ = fs::remove_file(format!("{}.json", self.partial.display()));
-            self.record.path = self.final_path.to_string_lossy().into();
+            // Persist intent before moving the only audio file. A failed DB
+            // write leaves the original recording and its .part file intact.
+            self.record.status = "finalizing".into();
+            store.save_recording(&self.record)?;
+            sidecar(&self.record)?;
+            if let Err(error) = complete_finalization(store, &mut self.record) {
+                self.record.error = Some(format!(
+                    "录音 {} ({}) 收尾待重试: {error:#}",
+                    self.record.id, self.record.path
+                ));
+                let _ = store.save_recording(&self.record);
+                let _ = sidecar(&self.record);
+                return Err(error).context(self.record.error.clone().unwrap());
+            }
         } else {
             let errors = self.errors.lock().unwrap();
             if self.record.error.is_none() {
                 self.record.error = Some(crate::clean_text(reason.unwrap_or(&errors)));
             }
         }
-        store.save_recording(&self.record)?;
-        sidecar(&self.record)?;
+        if self.record.status != "complete" {
+            store.save_recording(&self.record)?;
+            sidecar(&self.record)?;
+        }
         self.finished = true;
         Ok(self.record.clone())
     }
@@ -378,4 +449,93 @@ pub fn parse_duration(value: &str) -> Result<Duration> {
         bail!("时长必须大于零且不超过 365 天");
     }
     Ok(Duration::from_secs(secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending(dir: &Path) -> Recording {
+        let partial = dir.join("test.mp3.part");
+        fs::write(&partial, b"verified audio").unwrap();
+        Recording {
+            id: uuid::Uuid::new_v4().to_string(),
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            station_name: "test".into(),
+            source_url_resolved: "https://example.com/audio".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            stopped_at: Some("2026-01-01T00:00:01Z".into()),
+            media_duration_ms: Some(1000),
+            codec: "mp3".into(),
+            container: "mp3".into(),
+            path: partial.to_string_lossy().into(),
+            final_path: Some(dir.join("test.mp3").to_string_lossy().into()),
+            size_bytes: 14,
+            status: "finalizing".into(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn recovery_repairs_each_publication_boundary_idempotently() {
+        for phase in 0..4 {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("radio.db")).unwrap();
+            let mut r = pending(dir.path());
+            store.save_recording(&r).unwrap();
+            sidecar(&r).unwrap();
+            if phase >= 1 {
+                publish(
+                    Path::new(&r.path),
+                    Path::new(r.final_path.as_ref().unwrap()),
+                )
+                .unwrap();
+            }
+            if phase >= 2 {
+                let mut complete = r.clone();
+                complete.path = complete.final_path.clone().unwrap();
+                complete.status = "complete".into();
+                sidecar(&complete).unwrap();
+            }
+            if phase == 3 {
+                // A blocked DB write after publication must leave recoverable intent.
+                let lock = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+                lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+                assert!(complete_finalization(&store, &mut r).is_err());
+                lock.execute_batch("ROLLBACK").unwrap();
+            }
+            recover(&store).unwrap();
+            recover(&store).unwrap();
+            let saved = store.recordings(1).unwrap().remove(0);
+            assert_eq!(saved.status, "complete");
+            assert_eq!(fs::read(&saved.path).unwrap(), b"verified audio");
+            assert_eq!(
+                serde_json::from_slice::<Recording>(
+                    &fs::read(format!("{}.json", saved.path)).unwrap()
+                )
+                .unwrap()
+                .id,
+                saved.id
+            );
+            assert!(!Path::new(&r.path).exists());
+        }
+    }
+
+    #[test]
+    fn publication_never_overwrites_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let mut r = pending(dir.path());
+        store.save_recording(&r).unwrap();
+        fs::write(r.final_path.as_ref().unwrap(), b"other recording").unwrap();
+        assert!(complete_finalization(&store, &mut r).is_err());
+        assert_eq!(
+            fs::read(r.final_path.as_ref().unwrap()).unwrap(),
+            b"other recording"
+        );
+        assert_eq!(fs::read(&r.path).unwrap(), b"verified audio");
+        fs::remove_file(r.final_path.as_ref().unwrap()).unwrap();
+        recover(&store).unwrap();
+        assert_eq!(store.recordings(1).unwrap()[0].status, "complete");
+    }
 }

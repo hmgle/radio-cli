@@ -74,6 +74,8 @@ pub struct Recording {
     pub codec: String,
     pub container: String,
     pub path: String,
+    #[serde(default)]
+    pub final_path: Option<String>,
     pub size_bytes: u64,
     pub status: String,
     pub error: Option<String>,
