@@ -63,7 +63,57 @@ fn value(text: &str) -> String {
     }
 }
 
+pub(super) fn fit(text: &str, width: usize) -> String {
+    let text = crate::clean_text(text);
+    if text.width() <= width {
+        return format!("{text}{}", " ".repeat(width - text.width()));
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let cells = ch.width().unwrap_or(0);
+        if used + cells >= width {
+            break;
+        }
+        result.push(ch);
+        used += cells;
+    }
+    result.push('…');
+    result.push_str(&" ".repeat(width - used - 1));
+    result
+}
+
 pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
+    draw_content(frame, app, view);
+    let theme = app.theme;
+    if theme == crate::config::Theme::Default {
+        return;
+    }
+    for cell in &mut frame.buffer_mut().content {
+        if theme == crate::config::Theme::Mono {
+            cell.fg = Color::Reset;
+            cell.bg = Color::Reset;
+        } else {
+            let selected = cell.bg == Color::Cyan;
+            cell.fg = if selected {
+                Color::White
+            } else {
+                match cell.fg {
+                    Color::Cyan => Color::Blue,
+                    Color::Yellow => Color::Magenta,
+                    Color::Gray | Color::DarkGray | Color::White | Color::Reset => Color::Black,
+                    color => color,
+                }
+            };
+            cell.bg = if selected { Color::Blue } else { Color::White };
+        }
+    }
+}
+
+fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     let area = frame.area();
     app.rects = [Rect::default(); 5];
     app.source_rows = [Rect::default(); 4];
@@ -79,9 +129,17 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(if area.height >= 20 { 5 } else { 4 }),
+            Constraint::Length(if area.width >= 100 && area.height >= 20 {
+                5
+            } else {
+                4
+            }),
             Constraint::Min(3),
-            Constraint::Length(if area.height >= 20 { 4 } else { 3 }),
+            Constraint::Length(if view.task_active || app.focus == Focus::Activity {
+                4
+            } else {
+                1
+            }),
             Constraint::Length(3),
         ])
         .split(area);
@@ -105,53 +163,55 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             .constraints([Constraint::Length(3), Constraint::Min(0)])
             .split(vertical[1]);
         app.rects[Focus::Sources.index()] = sources[0];
-        if sources[1].height >= 6 {
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(3), Constraint::Length(3)])
-                .split(sources[1]);
-            app.rects[Focus::List.index()] = rows[0];
-            app.rects[Focus::Details.index()] = rows[1];
-        } else {
-            // On short terminals show the focused content; list/details remain reachable.
-            app.rects[Focus::List.index()] = sources[1];
-            app.rects[Focus::Details.index()] = sources[1];
-        }
+        // Narrow screens devote the content region to the list; 3 opens details.
+        app.rects[Focus::List.index()] = sources[1];
+        app.rects[Focus::Details.index()] = sources[1];
     }
     let normal = app.mode == Mode::Normal && !app.help && app.filter_edit.is_none();
     let active = |focus| normal && app.focus == focus;
-    let playing = if view.status.paused {
-        "暂停"
-    } else if view.status.playing {
-        "播放中"
-    } else if view.status.station.is_some() {
-        "未播放"
-    } else {
-        "待机"
+    let playing = match &view.status.playback_state {
+        crate::engine::PlaybackState::Failed { reason } => {
+            format!("播放失败: {} · ?", fit(reason, 12).trim_end())
+        }
+        state => state.label().into(),
     };
-    let recording = if view.status.recording {
-        format!(
-            "  ● REC {} · {}s{}",
-            view.status
-                .station
-                .as_ref()
-                .map(|s| value(&s.name))
-                .unwrap_or_default(),
-            view.status.recording_ms / 1000,
-            if view.status.paused {
-                " · 播放暂停，录音继续"
-            } else {
-                ""
-            }
-        )
-    } else {
-        String::new()
-    };
+    let recording = format!(
+        "{}{}{}",
+        view.status.recording_state.label(),
+        if matches!(
+            view.status.recording_state,
+            crate::engine::RecordingState::Recording
+        ) {
+            format!(
+                " ● REC {}s{}",
+                view.status.recording_ms / 1000,
+                if view.status.paused() {
+                    " · 播放暂停，录音继续"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            String::new()
+        },
+        if matches!(
+            view.status.recording_state,
+            crate::engine::RecordingState::Failed { .. }
+        ) {
+            " · ? 详情"
+        } else {
+            ""
+        }
+    );
     let player_text = if let Some(station) = &view.status.station {
         format!(
-            "{} · {} · 音量 {}%{}\n{} · {}（目录）\n{} · {} · {}",
+            "{} · {} · 音量 {}%\n{} · {} · {}（目录）\n{} · {} · {}",
             playing,
-            value(&station.name),
+            fit(
+                &value(&station.name),
+                usize::from(area.width.saturating_sub(40))
+            )
+            .trim_end(),
             view.status.volume,
             recording,
             codec(station),
@@ -169,6 +229,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             "尚未播放 · 音量 {}%{}\n在列表选择电台，Enter 播放；:sync 同步目录",
             view.status.volume, recording
         )
+    };
+    let player_text = if area.width < 100 {
+        let lines = player_text.lines().collect::<Vec<_>>();
+        format!("{}\n{}", lines[0], lines[1..].join(" · "))
+    } else {
+        player_text
     };
     frame.render_widget(
         Paragraph::new(player_text).block(panel(
@@ -234,7 +300,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
         || app.focus != Focus::Details
     {
         let title = format!(
-            "2 {} · {}/{} 项 · 页 {}",
+            "{} {} · {}/{} 项 · 页 {}",
+            if area.width < 100 {
+                "[2/3] 列表"
+            } else {
+                "2"
+            },
             app.source.label(),
             app.length(view),
             if app.source == Source::Recordings {
@@ -262,7 +333,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             view.rows
                 .iter()
                 .map(|s| {
-                    let current = view.status.playing
+                    let current = view.status.playing()
                         && view
                             .status
                             .station
@@ -272,10 +343,13 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                         "{}{} {} [{}] {} {}{}",
                         if current { "▶" } else { " " },
                         if s.favorite { "★" } else { " " },
-                        value(&s.name),
-                        value(&s.countrycode),
-                        bitrate(s),
-                        codec(s),
+                        fit(
+                            &value(&s.name),
+                            usize::from(app.rects[Focus::List.index()].width.saturating_sub(37))
+                        ),
+                        fit(&s.countrycode, 2),
+                        fit(&bitrate(s), 10),
+                        fit(&codec(s), 7),
                         if s.active { "" } else { " [已失效]" }
                     ))
                 })
@@ -359,7 +433,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             format!(
                 "{}{}\n国家: {} ({})\n语言: {}\n地区: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
                 value(&station.name),
-                if current.is_some() && view.status.playing {
+                if current.is_some() && view.status.playing() {
                     " · 正在播放"
                 } else {
                     " · 列表选中 / 指定电台"
@@ -409,7 +483,15 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                 app.rects[Focus::Details.index()],
                 &mut app.details_scroll,
             )
-            .block(panel("3 详情 · j/k 滚动".into(), active(Focus::Details))),
+            .block(panel(
+                if area.width < 100 {
+                    "[2/3] 详情 · 2 返回 · j/k 滚动"
+                } else {
+                    "3 详情 · j/k 滚动"
+                }
+                .into(),
+                active(Focus::Details),
+            )),
             app.rects[Focus::Details.index()],
         );
     }
@@ -443,13 +525,24 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             .take(end - start)
             .map(|line| Line::from(line.clone())),
     );
-    frame.render_widget(
-        Paragraph::new(logs).block(panel(
-            "5 任务与消息 · :sync / :sync-cancel".into(),
-            active(Focus::Activity),
-        )),
-        rect,
-    );
+    if rect.height == 1 {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "5 {} · {}",
+                crate::clean_text(&task),
+                crate::clean_text(&view.status.message)
+            )),
+            rect,
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(logs).block(panel(
+                "5 任务与消息 · :sync / :sync-cancel".into(),
+                active(Focus::Activity),
+            )),
+            rect,
+        );
+    }
 
     let bottom = vertical[3];
     if app.mode != Mode::Normal {
@@ -581,8 +674,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
         let rect = popup(area, 88, area.height.saturating_sub(2));
         frame.render_widget(Clear, rect);
         frame.render_widget(
-            scroll_text(HELP, rect, &mut app.help_scroll)
-                .block(panel("帮助 · j/k 滚动 · Esc 关闭".into(), true)),
+            scroll_text(
+                app.help_content.as_deref().unwrap_or(HELP),
+                rect,
+                &mut app.help_scroll,
+            )
+            .block(panel("帮助 · j/k 滚动 · Esc 关闭".into(), true)),
             rect,
         );
     }

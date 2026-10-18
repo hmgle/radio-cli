@@ -544,7 +544,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             let mut engine = Engine::new(config, stop.clone())?;
             if engine.store.count()? == 0 {
                 eprintln!("获取热门电台…");
-                engine.directory.bootstrap(&mut engine.store)?;
+                engine.bootstrap()?;
             }
             engine.random(search.filter())?;
             playback_loop(&mut engine, &stop)?;
@@ -559,7 +559,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             eprintln!("检测音频编码…");
             engine.standalone_record(&uuid, duration, output_dir.as_deref())?;
             eprintln!("录音中，Ctrl-C 停止: {}", engine.status.recording_path);
-            while !stop.load(Ordering::Relaxed) && engine.status.recording {
+            while !stop.load(Ordering::Relaxed) && engine.status.recording() {
                 engine.tick()?;
                 thread::sleep(Duration::from_millis(100));
             }

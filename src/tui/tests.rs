@@ -49,10 +49,9 @@ fn view() -> View {
         station: Some(playing),
         title: "Song title".into(),
         message: "播放中".into(),
-        playing: true,
-        paused: false,
+        playback_state: crate::engine::PlaybackState::Playing,
         volume: 80,
-        recording: false,
+        recording_state: crate::engine::RecordingState::Idle,
         recording_ms: 0,
         recording_path: String::new(),
         source_url: "https://example.com/backup".into(),
@@ -924,7 +923,7 @@ fn tui_recording_rejects_a_different_station() {
     let a = station("A");
     let b = station("B");
     engine.status.station = Some(a);
-    engine.status.playing = true;
+    engine.status.playback_state = crate::engine::PlaybackState::Playing;
     let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
     let mut filter = Filter {
         limit: 100,
@@ -944,7 +943,7 @@ fn tui_recording_rejects_a_different_station() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("仅录制当前播放电台"));
-    assert!(!engine.status.recording);
+    assert!(!engine.status.recording());
     engine.status.station = None;
     assert!(
         worker::execute(
@@ -1016,7 +1015,7 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
     sender
         .send(Command::Play(good.stationuuid.clone()))
         .unwrap();
-    wait(&|v| v.status.playing, Duration::from_secs(3));
+    wait(&|v| v.status.playing(), Duration::from_secs(3));
     // Click reporting is still waiting on a slow HTTP response.
     sender.send(Command::Doctor).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -1027,7 +1026,7 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
     sender.send(Command::Volume(37)).unwrap();
     sender.send(Command::Pause).unwrap();
     wait(
-        &|v| v.status.volume == 37 && v.status.paused,
+        &|v| v.status.volume == 37 && v.status.paused(),
         Duration::from_millis(250),
     );
     sender
@@ -1037,11 +1036,11 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
             dir: None,
         })
         .unwrap();
-    wait(&|v| v.status.recording, Duration::from_secs(1));
+    wait(&|v| v.status.recording(), Duration::from_secs(1));
     sender.send(Command::RecordStop).unwrap();
     sender.send(Command::Volume(41)).unwrap();
     wait(
-        &|v| !v.status.recording && v.status.volume == 41,
+        &|v| !v.status.recording() && v.status.volume == 41,
         Duration::from_millis(250),
     );
     sender.send(Command::Play(bad.stationuuid.clone())).unwrap();
@@ -1058,7 +1057,9 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
         .send(Command::Play(good.stationuuid.clone()))
         .unwrap();
     wait(
-        &|v| v.status.playing && v.status.station.as_ref().unwrap().stationuuid == good.stationuuid,
+        &|v| {
+            v.status.playing() && v.status.station.as_ref().unwrap().stationuuid == good.stationuuid
+        },
         Duration::from_secs(2),
     );
     let start = Instant::now();
@@ -1114,7 +1115,7 @@ fn slow_recording_verification_does_not_hold_media_controls_or_shutdown() {
     let handle = thread::spawn(move || worker::run(engine, receiver, output, flag));
     sender.send(Command::Play(row.stationuuid)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
-    while !shared.lock().unwrap().status.playing {
+    while !shared.lock().unwrap().status.playing() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(5));
     }
@@ -1139,7 +1140,7 @@ fn slow_recording_verification_does_not_hold_media_controls_or_shutdown() {
     sender.send(Command::Pause).unwrap();
     while {
         let data = shared.lock().unwrap();
-        data.status.volume != 42 || !data.status.paused
+        data.status.volume != 42 || !data.status.paused()
     } {
         assert!(start.elapsed() < Duration::from_millis(250));
         thread::sleep(Duration::from_millis(5));
@@ -1288,4 +1289,155 @@ fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
     assert!(text(&terminal).contains("FFmpeg disk failure details"));
+}
+
+#[test]
+fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
+    let mut data = view();
+    // Keep fixtures independent of generated station identities and clock time.
+    data.catalog_note = "目录已就绪".into();
+    data.rows[0].stationuuid = "00000000-0000-0000-0000-000000000000".into();
+    for (width, height) in [(80, 24), (100, 24), (160, 48)] {
+        for details in [false, true] {
+            let mut app = App::default();
+            if details {
+                app.focus = Focus::Details;
+            }
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render::draw(frame, &mut app, &data))
+                .unwrap();
+            assert_eq!(app.rects[Focus::Activity.index()].height, 1);
+            if width == 80 {
+                assert!(app.rects[Focus::List.index()].height >= 13);
+            }
+            // UUID is displayed only in the details fixture.
+            let rendered = text(&terminal).replace(
+                &data.rows[0].stationuuid,
+                "00000000-0000-0000-0000-000000000000",
+            );
+            let name = format!(
+                "{}x{}-{}.txt",
+                width,
+                height,
+                if details { "details" } else { "list" }
+            );
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/snapshots")
+                .join(name);
+            if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, &rendered).unwrap();
+            }
+            assert_eq!(
+                rendered,
+                std::fs::read_to_string(&path).unwrap(),
+                "{}",
+                path.display()
+            );
+        }
+    }
+    data.task_active = true;
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    assert_eq!(app.rects[Focus::Activity.index()].height, 4);
+}
+
+#[test]
+fn themes_keep_text_and_focus_legible_at_eighty_columns() {
+    use crate::config::Theme;
+    let data = view();
+    let mut reference = None;
+    for theme in [Theme::Default, Theme::Mono, Theme::Light] {
+        let mut app = App::default();
+        app.theme = theme;
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        let rendered = text(&terminal);
+        assert!(rendered.contains("▶ [2/3]"));
+        if let Some(reference) = &reference {
+            assert_eq!(&rendered, reference);
+        } else {
+            reference = Some(rendered);
+        }
+        for cell in &terminal.backend().buffer().content {
+            match theme {
+                Theme::Mono => assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset)),
+                Theme::Light if !cell.symbol().trim().is_empty() => assert_ne!(cell.fg, cell.bg),
+                _ => {}
+            }
+        }
+        let selected = &terminal.backend().buffer()[(
+            app.rects[Focus::List.index()].x + 1,
+            app.rects[Focus::List.index()].y + 1,
+        )];
+        if theme == Theme::Light {
+            assert_eq!((selected.fg, selected.bg), (Color::White, Color::Blue));
+        }
+    }
+    assert_eq!(Theme::Light.effective(true), Theme::Mono);
+    assert_eq!(Theme::Light.effective(false), Theme::Light);
+}
+
+#[test]
+fn every_media_stage_is_visible_and_failures_have_details() {
+    use crate::engine::{PlaybackState as P, RecordingState as R};
+    let mut data = view();
+    for playback in [
+        P::Idle,
+        P::Connecting,
+        P::Reconnecting { attempt: 2 },
+        P::Playing,
+        P::Paused,
+        P::Failed {
+            reason: "HTTP unavailable".into(),
+        },
+    ] {
+        for recording in [
+            R::Idle,
+            R::Probing,
+            R::Recording,
+            R::Finalizing,
+            R::Done,
+            R::Failed {
+                reason: "FFmpeg: No space left on device".into(),
+            },
+        ] {
+            data.status.playback_state = playback.clone();
+            data.status.recording_state = recording.clone();
+            let mut app = App::default();
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|frame| render::draw(frame, &mut app, &data))
+                .unwrap();
+            let rendered = text(&terminal);
+            assert!(rendered.contains(playback.label()), "{rendered}");
+            assert!(rendered.contains(recording.label()), "{rendered}");
+        }
+    }
+    let mut app = App::default();
+    let (sender, _) = command::channel(4);
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    assert!(
+        app.help_content
+            .as_deref()
+            .unwrap()
+            .contains("No space left on device")
+    );
+    assert!(
+        app.help_content
+            .as_deref()
+            .unwrap()
+            .contains("HTTP unavailable")
+    );
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(render::fit("中文超长name", 5).as_str()),
+        5
+    );
+    assert!(render::fit("中文超长name", 5).contains('…'));
 }

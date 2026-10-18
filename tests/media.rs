@@ -365,7 +365,7 @@ fn edited_custom_station_plays_the_new_url() {
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine.play(&station.stationuuid).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !engine.status.playing {
+    while !engine.status.playing() {
         engine.tick().unwrap();
         assert!(Instant::now() < deadline, "{}", engine.status.message);
         thread::sleep(Duration::from_millis(20));
@@ -411,9 +411,9 @@ fn live_stream_reconnects_after_a_ten_second_outage_without_duplicate_history() 
     let mut reconnecting = false;
     loop {
         engine.tick().unwrap();
-        first_played |= engine.status.playing;
+        first_played |= engine.status.playing();
         reconnecting |= engine.status.message.contains("重连中");
-        if first_played && reconnecting && engine.status.playing {
+        if first_played && reconnecting && engine.status.playing() {
             break;
         }
         assert!(!engine.playback_failed, "{}", engine.status.message);
@@ -467,7 +467,7 @@ fn runtime_preferences_survive_sessions_without_rewriting_config() {
         id = station.stationuuid;
         engine.play(&id).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !engine.status.playing {
+        while !engine.status.playing() {
             engine.tick().unwrap();
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(10));
@@ -506,14 +506,14 @@ fn engine_uses_explicit_backup_without_merging_names() {
         .unwrap();
     engine.play(&station.stationuuid).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !engine.status.playing && Instant::now() < deadline {
+    while !engine.status.playing() && Instant::now() < deadline {
         engine.tick().unwrap();
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(engine.status.playing, "{}", engine.status.message);
+    assert!(engine.status.playing(), "{}", engine.status.message);
     assert!(!engine.playback_failed);
     engine.toggle_recording().unwrap();
-    assert!(engine.status.recording);
+    assert!(engine.status.recording());
     // Finalizing before FFmpeg captured any audio would correctly be
     // reported as a failed recording; wait until the partial file holds a
     // real audio track so the stop always finalizes a verifiable file.
@@ -535,9 +535,9 @@ fn engine_uses_explicit_backup_without_merging_names() {
         thread::sleep(Duration::from_millis(50));
     }
     engine.pause().unwrap();
-    assert!(engine.status.recording, "pause should not end recording");
+    assert!(engine.status.recording(), "pause should not end recording");
     engine.shutdown().unwrap();
-    assert!(!engine.status.recording);
+    assert!(!engine.status.recording());
     let record = engine.store.recordings(1).unwrap().remove(0);
     assert_eq!(record.status, "complete", "{record:?}");
 }
@@ -846,7 +846,7 @@ fn local_recording_plays_to_eof_without_history_or_reconnect() {
     let mut played = false;
     while engine.playback_active() {
         engine.tick().unwrap();
-        played |= engine.status.playing;
+        played |= engine.status.playing();
         assert!(Instant::now() < deadline, "{:?}", engine.status);
         thread::sleep(Duration::from_millis(20));
     }
@@ -863,4 +863,34 @@ fn local_recording_plays_to_eof_without_history_or_reconnect() {
         0
     );
     engine.shutdown().unwrap();
+}
+
+#[test]
+fn probing_has_a_separate_configurable_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    assert_eq!(config.settings.probe_timeout_secs, 5);
+    config.settings.probe_timeout_secs = 1;
+    config.settings.playback_timeout_secs = 30;
+    let executable = dir.path().join("slow-probe");
+    fs::write(&executable, "#!/bin/sh\nexec sleep 10\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    config.settings.ffprobe = executable.to_string_lossy().into();
+    let started = Instant::now();
+    let result = recorder::probe(
+        &config,
+        "https://example.com/live",
+        &Arc::new(AtomicBool::new(false)),
+    );
+    assert_eq!(
+        result
+            .err()
+            .unwrap()
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::ProcessTimeout
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
 }

@@ -137,7 +137,7 @@ impl Store {
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO meta VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            "INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             params![key, value],
         )?;
         Ok(())
@@ -160,7 +160,7 @@ impl Store {
     pub fn begin_sync(&self) -> Result<()> {
         self.conn.execute_batch(
             "DROP TABLE IF EXISTS temp.incoming;
-            CREATE TEMP TABLE incoming AS SELECT * FROM stations WHERE 0;
+            CREATE TEMP TABLE incoming AS SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json FROM stations WHERE 0;
             CREATE UNIQUE INDEX temp.incoming_uuid ON incoming(uuid);",
         )?;
         Ok(())
@@ -186,14 +186,14 @@ impl Store {
         }
         tx.execute("UPDATE stations SET active=0 WHERE custom=0", [])?;
         tx.execute_batch(
-            "INSERT INTO stations SELECT * FROM incoming WHERE true
+            "INSERT INTO stations (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json) SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json FROM incoming WHERE true
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
             bitrate=excluded.bitrate,popularity=excluded.popularity,active=1,json=excluded.json
             WHERE stations.custom=0;",
         )?;
         tx.execute(
-            "INSERT OR REPLACE INTO meta VALUES ('last_sync',?1)",
+            "INSERT OR REPLACE INTO meta(key,value) VALUES ('last_sync',?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
         tx.commit()?;
@@ -363,7 +363,7 @@ impl Store {
         self.station(uuid)?;
         if add {
             self.conn.execute(
-                "INSERT OR IGNORE INTO favorites VALUES (?1,?2)",
+                "INSERT OR IGNORE INTO favorites(uuid,created_at) VALUES (?1,?2)",
                 params![uuid, chrono::Utc::now().to_rfc3339()],
             )?;
         } else {
@@ -386,7 +386,7 @@ impl Store {
         let added = removed == 0;
         if added {
             tx.execute(
-                "INSERT INTO favorites VALUES (?1,?2)",
+                "INSERT INTO favorites(uuid,created_at) VALUES (?1,?2)",
                 params![uuid, chrono::Utc::now().to_rfc3339()],
             )?;
         }
@@ -406,7 +406,7 @@ impl Store {
     pub fn add_backup(&self, uuid: &str, url: &str) -> Result<()> {
         crate::config::validate_url(url)?;
         self.conn.execute(
-            "INSERT OR IGNORE INTO streams VALUES (?1,?2)",
+            "INSERT OR IGNORE INTO streams(uuid,url) VALUES (?1,?2)",
             params![uuid, url],
         )?;
         Ok(())

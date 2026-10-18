@@ -446,6 +446,7 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
         let mut child = radio(dir.path())
             .arg("tui")
             .env("TERM", "xterm-256color")
+            .env("NO_COLOR", if mode == "q" { "1" } else { "" })
             .stdin(slave.try_clone().unwrap())
             .stdout(slave.try_clone().unwrap())
             .stderr(slave.try_clone().unwrap())
@@ -461,6 +462,12 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
             thread::sleep(Duration::from_millis(20));
         }
         assert!(output.contains("radio"), "TUI did not render: {output}");
+        if mode == "q" {
+            for sequence in output.split("\x1b[").skip(1) {
+                let end = sequence.bytes().find(|b| (0x40..=0x7e).contains(b));
+                assert_ne!(end, Some(b'm'), "NO_COLOR emitted SGR: {output}");
+            }
+        }
         // Exercise resize handling before leaving.
         unsafe {
             let size = libc::winsize {
