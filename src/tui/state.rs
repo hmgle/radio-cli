@@ -239,6 +239,7 @@ impl Editor {
 }
 
 pub(super) struct App {
+    pub confirmation: Option<Command>,
     pub focus: Focus,
     pub source: Source,
     pub mode: Mode,
@@ -269,6 +270,7 @@ impl Default for App {
         let mut list = ListState::default();
         list.select(Some(0));
         Self {
+            confirmation: None,
             focus: Focus::List,
             source: Source::Stations,
             mode: Mode::Normal,
@@ -506,6 +508,15 @@ impl App {
                         self.flush_search(sender);
                     }
                     Parsed::Worker(command) => {
+                        if matches!(
+                            command,
+                            Command::Station(crate::cli::StationAction::Remove { .. })
+                        ) {
+                            self.confirmation = Some(command);
+                            self.message =
+                                "确认删除自定义电台？引用名称将保留。y 确认 · n/Esc 取消".into();
+                            return;
+                        }
                         if let Command::Info(uuid, _) = command {
                             self.request_info(uuid, sender);
                             return;
@@ -527,6 +538,18 @@ impl App {
             || self.too_small && key.code == KeyCode::Char('q')
         {
             self.quit = true;
+            return;
+        }
+        if let Some(command) = self.confirmation.take() {
+            match key.code {
+                KeyCode::Char('y') => {
+                    if self.send(sender, command) {
+                        self.message = "删除命令已提交".into();
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Esc => self.message.clear(),
+                _ => self.confirmation = Some(command),
+            }
             return;
         }
         if self.mode != Mode::Normal {

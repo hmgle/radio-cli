@@ -181,6 +181,79 @@ fn cli_language_precedence_and_unknown_locale_notice() {
 }
 
 #[test]
+fn station_cli_supports_edit_backups_list_and_remove() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = radio(dir.path())
+        .args([
+            "--json",
+            "station",
+            "add",
+            "Before",
+            "https://example.com/live",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let station: Station = serde_json::from_slice(&output.stdout).unwrap();
+    let id = station.stationuuid.as_str();
+    for args in [
+        vec![
+            "station",
+            "edit",
+            id,
+            "--name",
+            "After",
+            "--url",
+            "https://example.com/changed",
+        ],
+        vec![
+            "station",
+            "backups",
+            id,
+            "--add",
+            "https://example.com/backup",
+        ],
+    ] {
+        let output = radio(dir.path()).args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let output = radio(dir.path())
+        .args(["--json", "station", "list", "--all"])
+        .output()
+        .unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["items"][0]["name"], "After");
+    let duplicate = radio(dir.path())
+        .args([
+            "station",
+            "add",
+            "Again",
+            "https://EXAMPLE.com:443/changed#ignored",
+        ])
+        .output()
+        .unwrap();
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
+    assert!(
+        radio(dir.path())
+            .args(["station", "remove", id, "--keep-references"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let output = radio(dir.path()).args(["info", id]).output().unwrap();
+    let row: Station = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(row.name, "After");
+    assert!(!row.active);
+}
+
+#[test]
 fn media_lock_blocks_only_competing_media_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let config = support::config(dir.path());

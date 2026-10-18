@@ -32,6 +32,9 @@ Tab / Shift-Tab 循环切换面板；Ctrl-h/j/k/l 或 Ctrl-方向键按位置切
 | `:favorites add [UUID]` / `:favorites remove [UUID]` | 收藏 / 取消收藏，省略 UUID 时使用选中项 |
 | `:history` / `:recordings list` | 最近播放 / 录音列表 |
 | `:station add '我的电台' https://example.com/live --backup-url https://example.com/backup` | 添加自定义电台和备用地址 |
+| `:station list` / `:station edit UUID --name 名称 --url URL` | 列出或修改自定义电台；`--backup-url` 可替换备用地址 |
+| `:station remove UUID [--keep-references]` | 按 `y` 二次确认，`n`/Esc 取消；被引用时保留名称占位并清除播放地址 |
+| `:station backups UUID [--add URL] [--remove URL]` | 查看或修改备用地址，详情面板也展示备用地址 |
 | `:record [UUID] --duration 30m --output-dir './my music'` | 录音；省略 UUID 时录制当前实际播放线路 |
 | `:record stop` | 收尾录音文件 |
 | `:pause` / `:stop` / `:volume 70` | 暂停或恢复 / 停止播放并收尾录音 / 音量 |

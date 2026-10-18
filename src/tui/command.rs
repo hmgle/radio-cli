@@ -98,6 +98,7 @@ impl CommandReceiver {
 }
 
 pub(super) enum Command {
+    Station(crate::cli::StationAction),
     Search(Filter),
     Play(String),
     Random(Filter),
@@ -156,6 +157,10 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "info",
     "current",
     "station add",
+    "station list",
+    "station edit",
+    "station remove",
+    "station backups",
     "doctor",
     "help",
     "quit",
@@ -285,6 +290,20 @@ pub(super) fn parse(
             backups: backup_url,
         }),
         Some(Action::Doctor) => Parsed::Worker(Command::Doctor),
+        Some(Action::Station {
+            action: crate::cli::StationAction::List(page),
+        }) => {
+            if page.all {
+                bail!("TUI 使用 PgUp/PgDn 分页；--all 仅供 CLI 导出");
+            }
+            Parsed::Search(Filter {
+                custom: true,
+                limit: usize::from(page.limit),
+                offset: page.offset,
+                ..Filter::default()
+            })
+        }
+        Some(Action::Station { action }) => Parsed::Worker(Command::Station(action)),
         _ => bail!("未知 TUI 命令；:help 查看帮助"),
     };
     if matches!(&parsed, Parsed::Source(_, page) if page.all) {
@@ -318,6 +337,9 @@ Home / Ctrl-a 行首；End / Ctrl-e 行尾；Ctrl-u 清空\n\n\
 :history                最近播放\n\
 :recordings list        录音记录\n\
 :station add '我的电台' https://example.com/live\n\
+:station list / :station edit UUID --name 名称 --url URL\n\
+:station remove UUID [--keep-references]  y 确认删除\n\
+:station backups UUID [--add URL] [--remove URL]\n\
 :record [UUID] [--duration 30m] [--output-dir 目录]\n\
 :record stop            收尾录音\n\
 :pause / :stop / :volume 70\n\

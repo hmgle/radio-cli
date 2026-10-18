@@ -274,6 +274,113 @@ fn domain_errors_have_stable_codes_and_parameters() {
     assert_eq!(domain.params["codec"], "alac");
 }
 
+#[test]
+fn custom_station_mutations_are_atomic_and_preserve_references() {
+    use radio_cli::{
+        error::{DomainError, ErrorCode},
+        service,
+    };
+    let (_dir, mut store) = db();
+    let station = service::add_station(
+        &mut store,
+        "Original".into(),
+        "https://EXAMPLE.com:443/live#fragment".into(),
+        &["https://example.com/backup".into()],
+    )
+    .unwrap();
+    let duplicate = service::add_station(
+        &mut store,
+        "Duplicate".into(),
+        "https://example.com/live".into(),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        duplicate.downcast_ref::<DomainError>().unwrap().code,
+        ErrorCode::DuplicateStation
+    );
+    assert!(
+        service::add_station(
+            &mut store,
+            "Invalid backup".into(),
+            "https://example.com/new".into(),
+            &["file:///tmp/x".into()]
+        )
+        .is_err()
+    );
+    assert_eq!(store.count().unwrap(), 1);
+    store.favorite(&station.stationuuid, true).unwrap();
+    store.played(&station.stationuuid).unwrap();
+    let edited = service::edit_station(
+        &mut store,
+        &station.stationuuid,
+        Some("Renamed".into()),
+        Some("https://example.com/changed".into()),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(edited.name, "Renamed");
+    assert_eq!(edited.primary_url(), "https://example.com/changed");
+    assert!(edited.favorite);
+    assert_eq!(store.backups(&station.stationuuid).unwrap().len(), 1);
+    assert!(
+        store
+            .update_backups(
+                &station.stationuuid,
+                &["bad".into()],
+                &["https://example.com/backup".into()]
+            )
+            .is_err()
+    );
+    assert_eq!(store.backups(&station.stationuuid).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .update_backups(
+                &station.stationuuid,
+                &["https://example.com/backup2".into()],
+                &["https://example.com/backup".into()]
+            )
+            .unwrap(),
+        vec!["https://example.com/backup2"]
+    );
+    store.remove_custom(&station.stationuuid, false).unwrap();
+    let placeholder = store.station(&station.stationuuid).unwrap();
+    assert_eq!(placeholder.name, "Renamed");
+    assert!(!placeholder.active && !placeholder.custom);
+    assert!(
+        placeholder
+            .stream_candidates(&store.backups(&station.stationuuid).unwrap())
+            .is_empty()
+    );
+    let history = store
+        .search(&Filter {
+            history: true,
+            limit: 100,
+            ..Filter::default()
+        })
+        .unwrap();
+    assert_eq!(history[0].name, "Renamed");
+    assert!(store.remove_custom(&station.stationuuid, false).is_err());
+    let unused = service::add_station(
+        &mut store,
+        "Unused".into(),
+        "https://example.com/unused".into(),
+        &[],
+    )
+    .unwrap();
+    store.remove_custom(&unused.stationuuid, false).unwrap();
+    assert!(store.station(&unused.stationuuid).is_err());
+    assert_eq!(
+        store
+            .search_count(&Filter {
+                custom: true,
+                ..Filter::default()
+            })
+            .unwrap(),
+        0
+    );
+}
+
 /// Run explicitly with `cargo test --release --test storage catalog_benchmark -- --ignored --nocapture`.
 #[test]
 #[ignore]

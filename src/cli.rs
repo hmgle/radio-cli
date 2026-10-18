@@ -1,4 +1,3 @@
-use crate::error::{DomainError, ErrorCode};
 use crate::{
     config::Config,
     directory::Directory,
@@ -175,11 +174,33 @@ pub enum Favorite {
 }
 #[derive(Subcommand)]
 pub enum StationAction {
+    List(Page),
     Add {
         name: String,
         url: String,
         #[arg(long)]
         backup_url: Vec<String>,
+    },
+    Edit {
+        uuid: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        backup_url: Vec<String>,
+    },
+    Remove {
+        uuid: String,
+        #[arg(long)]
+        keep_references: bool,
+    },
+    Backups {
+        uuid: String,
+        #[arg(long)]
+        add: Vec<String>,
+        #[arg(long)]
+        remove: Vec<String>,
     },
 }
 #[derive(Subcommand)]
@@ -307,32 +328,55 @@ pub fn run(cli: Cli) -> Result<()> {
                     backup_url,
                 },
         } => {
-            crate::config::validate_url(&url)?;
-            if name.trim().is_empty() {
-                bail!(DomainError::new(ErrorCode::EmptyStationName));
-            }
-            for backup in &backup_url {
-                crate::config::validate_url(backup)?;
-            }
-            let station = Station {
-                stationuuid: uuid::Uuid::new_v4().to_string(),
-                name,
-                url: url.clone(),
-                url_resolved: url,
-                active: true,
-                custom: true,
-                lastcheckok: 1,
-                ..Station::default()
-            };
-            store.upsert(&station)?;
-            for backup in backup_url {
-                store.add_backup(&station.stationuuid, &backup)?;
-            }
+            let station = crate::service::add_station(&mut store, name, url, &backup_url)?;
             if cli.json {
                 emit(&station)?;
             } else {
                 println!("{}", station.stationuuid);
             }
+        }
+        Action::Station {
+            action: StationAction::List(page),
+        } => list_stations(
+            &store,
+            Filter {
+                custom: true,
+                ..Filter::default()
+            },
+            &page,
+            cli.json,
+        )?,
+        Action::Station {
+            action:
+                StationAction::Edit {
+                    uuid,
+                    name,
+                    url,
+                    backup_url,
+                },
+        } => {
+            emit(&crate::service::edit_station(
+                &mut store,
+                &uuid,
+                name,
+                url,
+                &backup_url,
+            )?)?;
+        }
+        Action::Station {
+            action:
+                StationAction::Remove {
+                    uuid,
+                    keep_references,
+                },
+        } => {
+            store.remove_custom(&uuid, keep_references)?;
+            emit(&serde_json::json!({"stationuuid":uuid,"removed":true}))?;
+        }
+        Action::Station {
+            action: StationAction::Backups { uuid, add, remove },
+        } => {
+            emit(&store.update_backups(&uuid, &add, &remove)?)?;
         }
         Action::Recordings {
             action: RecordingAction::Recover,

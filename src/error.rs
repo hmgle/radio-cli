@@ -59,6 +59,8 @@ codes! {
     ProcessFailed => "process_failed",
     BackgroundFailed => "background_failed",
     EmptyStationName => "empty_station_name",
+    DuplicateStation => "duplicate_station",
+    NotCustom => "not_custom",
 }
 
 #[derive(Debug, Clone)]

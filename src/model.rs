@@ -71,6 +71,7 @@ pub struct Filter {
     pub min_bitrate: u32,
     pub favorites: bool,
     pub history: bool,
+    pub custom: bool,
     pub limit: usize,
     pub offset: usize,
 }

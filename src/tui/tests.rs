@@ -121,6 +121,38 @@ fn context_hints_match_source_and_focus_actions() {
 }
 
 #[test]
+fn station_removal_requires_a_second_confirmation_in_tui() {
+    let data = view();
+    let (sender, receiver) = command::channel(10);
+    let mut app = App::default();
+    for confirm in [false, true] {
+        app.key(key(KeyCode::Char(':')), &data, &sender);
+        app.editor
+            .set(&format!("station remove {}", data.rows[0].stationuuid));
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(app.confirmation.is_some());
+        assert!(receiver.try_recv().is_err());
+        app.key(
+            key(if confirm {
+                KeyCode::Char('y')
+            } else {
+                KeyCode::Esc
+            }),
+            &data,
+            &sender,
+        );
+        assert!(app.confirmation.is_none());
+        assert_eq!(
+            matches!(
+                receiver.try_recv(),
+                Ok(Command::Station(crate::cli::StationAction::Remove { .. }))
+            ),
+            confirm
+        );
+    }
+}
+
+#[test]
 fn commands_use_cli_arguments_and_context_without_shell_execution() {
     let data = view();
     let filter = Filter {

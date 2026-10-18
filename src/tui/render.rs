@@ -352,7 +352,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                 .as_ref()
                 .filter(|s| s.stationuuid == station.stationuuid);
             format!(
-                "{}{}\n国家: {} ({})\n语言: {}\n地区: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n{}官网: {}",
+                "{}{}\n国家: {} ({})\n语言: {}\n地区: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
                 value(&station.name),
                 if current.is_some() && view.status.playing {
                     " · 正在播放"
@@ -377,6 +377,14 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                 },
                 station.stationuuid,
                 crate::clean_text(station.primary_url()),
+                view.backups
+                    .get(&station.stationuuid)
+                    .map(|urls| urls
+                        .iter()
+                        .map(|u| crate::clean_text(u))
+                        .collect::<Vec<_>>()
+                        .join("\n"))
+                    .unwrap_or_default(),
                 if current.is_some() {
                     format!(
                         "当前播放请求地址: {}\n",

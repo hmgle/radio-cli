@@ -83,6 +83,11 @@ CLI 错误和列表文案支持 `--lang en` / `--lang zh-CN`。优先级为 `--l
 `RADIO_LANG`、配置 `language`、`LC_ALL`/`LANG`，未知语言提示一次并回退英文。
 TUI 静态文案和 clap 帮助的迁移将单独处理。
 
+自定义电台支持 `station list --all`、`station edit UUID --name 名称 --url URL`、
+`station remove UUID`。删除有引用的电台时保留名称占位并清除播放地址；
+`--keep-references` 可强制保留无引用占位。`station backups UUID --add URL --remove URL`
+管理备用地址，归一化后重复的 URL 会报出已有 UUID。TUI 删除需按 `y` 二次确认。
+
 - 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - 录音：数据目录下的 `recordings/`
