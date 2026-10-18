@@ -300,6 +300,10 @@ impl Default for App {
     }
 }
 impl App {
+    pub fn update_size(&mut self, width: u16, height: u16) {
+        self.too_small = width < 40 || height < 16;
+    }
+
     pub fn selected<'a>(&self, view: &'a View) -> Option<&'a Station> {
         if self.source == Source::Recordings || self.filter != view.filter {
             None

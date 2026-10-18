@@ -502,10 +502,20 @@ fn ctrl_c_quits_every_mode_and_small_screen_q_quits() {
     }
     let mut app = App::default();
     app.help = true;
-    let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    // Input observes a shrink before the next draw hides the popup.
+    app.update_size(20, 10);
     app.key(key(KeyCode::Char('q')), &data, &tx);
     assert!(app.quit);
+    app.quit = false;
+    let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    // Growing again restores the help popup's ordinary q behavior.
+    app.update_size(100, 24);
+    app.key(key(KeyCode::Char('q')), &data, &tx);
+    assert!(!app.quit);
+    assert!(!app.help);
 }
 
 #[test]
