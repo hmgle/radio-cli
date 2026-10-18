@@ -305,6 +305,27 @@ impl Store {
         Ok(())
     }
 
+    pub fn toggle_favorite(&mut self, uuid: &str) -> Result<bool> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.query_row("SELECT 1 FROM stations WHERE uuid=?1", [uuid], |r| {
+            r.get::<_, u8>(0)
+        })
+        .optional()?
+        .context("本地未找到电台；请先 sync 或 station add")?;
+        let removed = tx.execute("DELETE FROM favorites WHERE uuid=?1", [uuid])?;
+        let added = removed == 0;
+        if added {
+            tx.execute(
+                "INSERT INTO favorites VALUES (?1,?2)",
+                params![uuid, chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(added)
+    }
+
     pub fn played(&self, uuid: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO history(uuid,played_at) VALUES (?1,?2)",

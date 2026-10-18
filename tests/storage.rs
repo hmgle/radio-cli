@@ -217,3 +217,39 @@ fn catalog_benchmark() {
     println!("50,000 stations: search P95 {:.2} ms", samples[94]);
     assert!(samples[94] < 100., "search P95 exceeds 100 ms");
 }
+
+#[test]
+fn concurrent_favorite_toggles_preserve_every_transition() {
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
+    let (dir, store) = db();
+    let row = station("concurrent favorite");
+    store.upsert(&row).unwrap();
+    let ready = Arc::new(Barrier::new(3));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let ready = ready.clone();
+        let path = dir.path().join("radio.db");
+        let id = row.stationuuid.clone();
+        threads.push(thread::spawn(move || {
+            let mut store = Store::open(&path).unwrap();
+            ready.wait();
+            (0..50)
+                .map(|_| store.toggle_favorite(&id).unwrap())
+                .collect::<Vec<_>>()
+        }));
+    }
+    ready.wait();
+    let transitions: Vec<_> = threads
+        .into_iter()
+        .flat_map(|t| t.join().unwrap())
+        .collect();
+    assert_eq!(transitions.iter().filter(|&&added| added).count(), 50);
+    assert_eq!(transitions.iter().filter(|&&added| !added).count(), 50);
+    assert!(!store.station(&row.stationuuid).unwrap().favorite);
+    let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+    assert!(store.toggle_favorite("missing").is_err());
+    assert!(store.toggle_favorite(&row.stationuuid).unwrap());
+}

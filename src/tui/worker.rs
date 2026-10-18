@@ -153,6 +153,26 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
     Ok(())
 }
 
+fn favorite_changed(
+    engine: &Engine,
+    filter: &Filter,
+    view: &Arc<Mutex<View>>,
+    uuid: &str,
+    add: bool,
+) -> Result<()> {
+    let mut data = view.lock().unwrap();
+    data.log(if add {
+        "已收藏电台"
+    } else {
+        "已取消收藏"
+    });
+    if let Some(station) = data.inspected.as_mut().filter(|s| s.stationuuid == uuid) {
+        station.favorite = add;
+    }
+    drop(data);
+    refresh(engine, filter, view)
+}
+
 pub(super) fn execute(
     command: Command,
     engine: &mut Engine,
@@ -169,23 +189,13 @@ pub(super) fn execute(
         Command::Play(uuid) => engine.play(&uuid)?,
         Command::Random(filter) => engine.random(filter)?,
         Command::ToggleFavorite(uuid) => {
-            let add = !engine.store.station(&uuid)?.favorite;
-            return execute(Command::Favorite(uuid, add), engine, filter, job, view);
+            let add = engine.store.toggle_favorite(&uuid)?;
+            favorite_changed(engine, filter, view, &uuid, add)?;
         }
         Command::AdjustVolume(delta) => engine.volume(delta)?,
         Command::Favorite(uuid, add) => {
             engine.store.favorite(&uuid, add)?;
-            let mut data = view.lock().unwrap();
-            data.log(if add {
-                "已收藏电台"
-            } else {
-                "已取消收藏"
-            });
-            if let Some(s) = data.inspected.as_mut().filter(|s| s.stationuuid == uuid) {
-                s.favorite = add;
-            }
-            drop(data);
-            refresh(engine, filter, view)?;
+            favorite_changed(engine, filter, view, &uuid, add)?;
         }
         Command::Pause => engine.pause()?,
         Command::Stop => {
