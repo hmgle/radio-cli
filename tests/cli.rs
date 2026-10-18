@@ -568,3 +568,101 @@ fn large_lists_expose_pages_totals_and_full_exports() {
         }
     }
 }
+
+#[test]
+fn json_v2_is_atomic_preserves_legacy_and_has_stable_exit_codes() {
+    let dir = tempfile::tempdir().unwrap();
+    let _config = support::config(dir.path());
+    let read_json = |output: std::process::Output, code: i32| {
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let station = read_json(
+        radio(dir.path())
+            .args([
+                "--json-v2",
+                "station",
+                "add",
+                "JSON station",
+                "https://example.com/live",
+            ])
+            .output()
+            .unwrap(),
+        0,
+    );
+    assert_eq!(station["ok"], true);
+    let legacy = read_json(
+        radio(dir.path())
+            .args(["--json", "search", "JSON"])
+            .output()
+            .unwrap(),
+        0,
+    );
+    assert!(legacy.is_array());
+    let modern = read_json(
+        radio(dir.path())
+            .args(["--json-v2", "search", "JSON"])
+            .output()
+            .unwrap(),
+        0,
+    );
+    assert_eq!(modern["data"], legacy);
+    for lang in ["en", "zh-CN"] {
+        let failure = read_json(
+            radio(dir.path())
+                .args(["--lang", lang, "--json-v2", "info", "missing"])
+                .output()
+                .unwrap(),
+            1,
+        );
+        assert_eq!(failure["ok"], false);
+        assert_eq!(failure["error"]["code"], "station_not_found");
+        assert!(failure["error"]["params"].is_object());
+    }
+    let usage = read_json(
+        radio(dir.path())
+            .args(["--json-v2", "no-such-command"])
+            .output()
+            .unwrap(),
+        2,
+    );
+    assert_eq!(usage["error"]["code"], "usage_error");
+    let no_command = read_json(radio(dir.path()).arg("--json-v2").output().unwrap(), 2);
+    assert_eq!(no_command["error"]["code"], "usage_error");
+    let config = support::config(dir.path());
+    let lock = radio_cli::process::MediaLock::acquire(&config.runtime_dir).unwrap();
+    let busy = read_json(
+        radio(dir.path())
+            .args([
+                "--json-v2",
+                "play",
+                station["data"]["stationuuid"].as_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        4,
+    );
+    assert_eq!(busy["error"]["code"], "media_busy");
+    drop(lock);
+    let missing_config = dir.path().join("missing-player.toml");
+    fs::write(&missing_config, "mpv = '/does/not/exist'\n").unwrap();
+    let dependency = read_json(
+        radio(dir.path())
+            .arg("--config")
+            .arg(missing_config)
+            .args([
+                "--json-v2",
+                "play",
+                station["data"]["stationuuid"].as_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        3,
+    );
+    assert_eq!(dependency["error"]["code"], "missing_dependency");
+}

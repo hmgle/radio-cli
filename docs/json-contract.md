@@ -1,0 +1,55 @@
+# JSON output and process exits
+
+Use global `--json-v2` for a consistent machine-readable response. On success,
+stdout contains exactly one JSON value: `{"ok":true,"data":...}`. Commands
+without a result use `null`. On failure it contains
+`{"ok":false,"error":{"code":"...","message":"...","params":{...}}}`.
+Progress goes to stderr. Error codes and parameter names are stable across
+English and Chinese; messages follow the selected language. Unclassified I/O
+errors use `general_error`. Do not parse the message text.
+
+`--json-v2` requires an explicit noninteractive command. It conflicts with
+`--json`. Explicit `--help` and `--version` retain their standard text output.
+Usage failures, including unknown commands, return the error envelope when
+`--json-v2` is present. Failed commands never emit a success envelope first.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Success, including help and version |
+| 1 | Operation, configuration, network, storage or media failure |
+| 2 | Invalid command-line usage |
+| 3 | Required executable could not be started |
+| 4 | Another media session owns the runtime lock |
+
+Legacy `--json` remains available throughout 0.3.x. Its success shapes are:
+
+| Command | Legacy data shape (also the `data` of v2) |
+| --- | --- |
+| `search` | Station array; preserved for existing scripts |
+| `info`, `station add`, `station edit` | Station object (`info`/`edit` always JSON) |
+| `favorites list`, `history`, `station list`, `recordings list` | Page object: `items`, `total`, `offset`, `limit`, `has_more` |
+| `countries`, `languages`, `tags` | Array of `{value,count}` |
+| `favorites add/remove` | `{stationuuid,name,favorite}` |
+| `station remove` | `{stationuuid,removed}` |
+| `station backups` | URL array |
+| `sync` | `{stations,last_sync}` |
+| `record` | Array containing the most recent recording |
+| `recordings recover` | `{warnings}` |
+| `recordings remove` | `{id,removed,index_only}` |
+| `doctor` | Object with `checks`, `config`, `database` |
+| `play`, `random`, `recordings play/open` | No legacy JSON result; v2 `data:null` |
+
+Page `limit` is `null` with `--all`; otherwise it is the requested page size.
+`offset` is zero-based. JSON preserves user strings, including Unicode;
+terminal control characters are sanitized only for human-facing output.
+Legacy failures print a diagnostic on stderr and use the same exit codes.
+Legacy doctor/recovery/recording may print their diagnostic data before a
+nonzero exit. Prefer v2 when an atomic success/error response is required.
+
+Examples:
+
+```sh
+radio --json search jazz                  # legacy array
+radio --json-v2 search jazz               # {"ok":true,"data":[...]}
+radio --lang en --json-v2 info missing    # station_not_found; exit 1
+```
