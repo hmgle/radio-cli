@@ -252,8 +252,6 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                     ))
                 })
                 .collect()
-        } else if app.filter != view.filter {
-            vec![]
         } else {
             view.rows
                 .iter()

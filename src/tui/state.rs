@@ -311,8 +311,6 @@ impl App {
             0
         } else if self.source == Source::Recordings {
             view.recordings.len()
-        } else if self.filter != view.filter {
-            0
         } else {
             view.rows.len()
         }
