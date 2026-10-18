@@ -201,7 +201,7 @@ Space 暂停  n 随机  f 收藏选中项  r 录音  +/- 音量\n\
 /  搜索模式（Enter 确认，Esc 恢复原搜索）\n\
 F  筛选对话框     ?  帮助     q 退出\n\n\
 COMMAND 命令模式\n\
-: 输入命令；Enter 执行；Esc / Ctrl-c 返回普通模式\n\
+: 输入命令；Enter 执行；Esc 返回普通模式；Ctrl-c 收尾并退出\n\
 Tab / Shift-Tab 补全；↑/↓ 历史；←/→ 编辑光标\n\
 Home / Ctrl-a 行首；End / Ctrl-e 行尾；Ctrl-u 清空\n\n\
 :sync                   后台同步目录（不停止播放）\n\

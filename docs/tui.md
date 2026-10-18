@@ -56,3 +56,5 @@ Tab / Shift-Tab 循环切换面板；Ctrl-h/j/k/l 或 Ctrl-方向键按位置切
 面板编号、Tab 焦点、分类切换和上下文提示参考 [lazygit 的按键设计](https://github.com/jesseduffield/lazygit/blob/master/docs/keybindings/Keybindings_en.md)；视图导航、搜索与命令入口参考 [tig 手册](https://jonas.github.io/tig/doc/manual.html)，输入模式采用 Vim 风格。保留收音机所需的五个面板与快捷操作，避免引入完整 Vim 编辑器或 shell。
 
 目录任务独立运行，重复同步会提示已有任务，失败与取消保留原目录。媒体命令使用同一有界队列；起播失败的网络回退和 ffprobe 录音探测仍可能暂时延迟后续媒体操作，界面可继续输入。没有后台守护进程；退出后停止媒体并等待任务收尾。
+
+Ctrl-C 在所有 TUI 模式下收尾并退出；Esc 取消编辑或关闭弹窗。终端过小时，q 直接退出。
