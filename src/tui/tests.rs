@@ -448,3 +448,34 @@ fn wait_for(mut predicate: impl FnMut() -> bool) {
         thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[test]
+fn ctrl_w_keeps_unicode_boundaries() {
+    for (input, expected) in [
+        ("one two", "one "),
+        ("甲　乙", "甲　"),
+        ("甲\u{a0}乙", "甲\u{a0}"),
+        ("one  two  ", "one  "),
+        ("中文", ""),
+        ("a e\u{301}", "a "),
+        ("", ""),
+    ] {
+        let mut editor = Editor::default();
+        editor.set(input);
+        editor.key(
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+            false,
+        );
+        assert_eq!(editor.text, expected);
+        assert!(editor.text.is_char_boundary(editor.cursor));
+    }
+    let mut editor = Editor::default();
+    editor.set("甲　乙丙");
+    editor.key(key(KeyCode::Left), false);
+    editor.key(
+        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        false,
+    );
+    assert_eq!(editor.text, "甲　丙");
+    assert_eq!(editor.cursor, "甲　".len());
+}

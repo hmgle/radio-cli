@@ -133,8 +133,10 @@ impl Editor {
                 let prefix = &self.text[..self.cursor];
                 let end = prefix
                     .trim_end()
-                    .rfind(char::is_whitespace)
-                    .map(|i| i + 1)
+                    .char_indices()
+                    .rev()
+                    .find(|(_, c)| c.is_whitespace())
+                    .map(|(i, c)| i + c.len_utf8())
                     .unwrap_or(0);
                 self.text.drain(end..self.cursor);
                 self.cursor = end;
