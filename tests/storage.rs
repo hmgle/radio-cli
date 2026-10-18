@@ -171,6 +171,23 @@ fn random_uses_entire_matching_catalog_and_excludes_candidates() {
     );
     ids.push(last);
     assert!(store.random(&filter, &ids).unwrap().is_none());
+    assert!(
+        store
+            .random(
+                &Filter {
+                    query: "missing".into(),
+                    ..filter.clone()
+                },
+                &[]
+            )
+            .unwrap()
+            .is_none()
+    );
+    let selected = store
+        .random(&filter, &["' OR 1=1 --".into()])
+        .unwrap()
+        .unwrap();
+    assert!(ids.contains(&selected.stationuuid));
 }
 
 #[test]

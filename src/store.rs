@@ -271,24 +271,20 @@ impl Store {
     }
 
     pub fn random(&self, filter: &Filter, exclude: &[String]) -> Result<Option<Station>> {
-        let (conditions, args) = Self::conditions(filter);
+        let (mut conditions, mut args) = Self::conditions(filter);
+        if !exclude.is_empty() {
+            let placeholders = vec!["?"; exclude.len()].join(",");
+            conditions.push_str(&format!(" AND s.uuid NOT IN ({placeholders})"));
+            args.extend(exclude.iter().cloned().map(Value::Text));
+        }
         let sql = format!(
             "SELECT s.uuid FROM stations s LEFT JOIN favorites f ON f.uuid=s.uuid
-            WHERE {conditions}"
+            WHERE {conditions} ORDER BY random() LIMIT 1"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut selected = None;
-        let mut count = 0u64;
-        for uuid in stmt.query_map(params_from_iter(args), |r| r.get::<_, String>(0))? {
-            let uuid = uuid?;
-            if exclude.contains(&uuid) {
-                continue;
-            }
-            count += 1;
-            if rand::random_range(0..count) == 0 {
-                selected = Some(uuid);
-            }
-        }
+        let selected = self
+            .conn
+            .query_row(&sql, params_from_iter(args), |r| r.get::<_, String>(0))
+            .optional()?;
         selected.map(|id| self.station(&id)).transpose()
     }
 
