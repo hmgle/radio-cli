@@ -139,20 +139,54 @@ fn complete_finalization(store: &Store, record: &mut Recording) -> Result<()> {
     Ok(())
 }
 
-pub fn recover(store: &Store) -> Result<()> {
+pub fn recover(store: &Store) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
     for mut r in store.unfinished_recordings()? {
-        if r.status == "finalizing" {
-            complete_finalization(store, &mut r)?;
-            continue;
+        let result = (|| -> Result<()> {
+            if r.status == "finalizing" {
+                return complete_finalization(store, &mut r);
+            }
+            if r.status == "recording" {
+                r.status = "interrupted".into();
+                r.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+                r.error = Some("上一个会话未正常结束；保留临时文件供恢复".into());
+                r.size_bytes = fs::metadata(&r.path).map(|m| m.len()).unwrap_or(0);
+                store.save_recording(&r)?;
+            }
+            let retry = r
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("恢复失败:"));
+            if retry {
+                r.error = Some(
+                    if Path::new(&r.path).exists() {
+                        "上一个会话未正常结束；临时文件保留，元数据已恢复"
+                    } else {
+                        "上一个会话未正常结束；音频文件缺失，元数据已恢复"
+                    }
+                    .into(),
+                );
+            }
+            sidecar(&r)?;
+            if retry {
+                store.save_recording(&r)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let message = format!(
+                "恢复失败: 录音 {} ({})：{error:#}；使用 recordings recover 重试",
+                r.id, r.path
+            );
+            r.error = Some(message.clone());
+            if let Err(db_error) = store.save_recording(&r) {
+                warnings.push(format!("{message}；数据库: {db_error:#}"));
+            } else {
+                warnings.push(message);
+            }
         }
-        r.status = "interrupted".into();
-        r.stopped_at = Some(chrono::Utc::now().to_rfc3339());
-        r.error = Some("上一个会话未正常结束；保留临时文件供恢复".into());
-        r.size_bytes = fs::metadata(&r.path).map(|m| m.len()).unwrap_or(0);
-        store.save_recording(&r)?;
-        sidecar(&r)?;
     }
-    Ok(())
+    Ok(warnings)
 }
 
 impl Recorder {
@@ -519,6 +553,26 @@ mod tests {
             );
             assert!(!Path::new(&r.path).exists());
         }
+    }
+
+    #[test]
+    fn successful_sidecar_retry_clears_recovery_pending_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let mut r = pending(dir.path());
+        r.status = "recording".into();
+        r.path = dir.path().join("missing/old.part").to_string_lossy().into();
+        store.save_recording(&r).unwrap();
+        assert_eq!(recover(&store).unwrap().len(), 1);
+        assert_eq!(store.unfinished_recordings().unwrap().len(), 1);
+        fs::create_dir(dir.path().join("missing")).unwrap();
+        assert!(recover(&store).unwrap().is_empty());
+        assert!(store.unfinished_recordings().unwrap().is_empty());
+        let saved = store.recordings(1).unwrap().remove(0);
+        assert_eq!(saved.status, "interrupted");
+        assert!(saved.error.as_deref().unwrap().contains("音频文件缺失"));
+        assert!(Path::new(&format!("{}.json", saved.path)).exists());
+        assert!(recover(&store).unwrap().is_empty());
     }
 
     #[test]
