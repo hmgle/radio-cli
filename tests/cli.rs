@@ -315,6 +315,7 @@ fn large_lists_expose_pages_totals_and_full_exports() {
             (vec!["--offset", "100"], 5, false),
             (vec!["--offset", "105"], 0, false),
             (vec!["--all"], 105, false),
+            (vec!["--all", "--limit", "10", "--offset", "7"], 98, false),
         ] {
             let output = radio(dir.path())
                 .arg("--json")
@@ -331,6 +332,13 @@ fn large_lists_expose_pages_totals_and_full_exports() {
             assert_eq!(page["items"].as_array().unwrap().len(), len);
             assert_eq!(page["total"], 105);
             assert_eq!(page["has_more"], more);
+            let ids: std::collections::HashSet<_> = page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["id"].as_str().or_else(|| item["stationuuid"].as_str()))
+                .collect();
+            assert_eq!(ids.len(), len, "pages repeated entries");
         }
     }
 }
