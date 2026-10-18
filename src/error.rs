@@ -13,6 +13,7 @@ macro_rules! codes {
 }
 
 codes! {
+    UsageError => "usage_error",
     InvalidUrl => "invalid_url",
     MediaBusy => "media_busy",
     StationNotFound => "station_not_found",
@@ -105,3 +106,21 @@ impl fmt::Display for DomainError {
     }
 }
 impl std::error::Error for DomainError {}
+
+pub fn exit_code(error: &anyhow::Error) -> i32 {
+    match error.downcast_ref::<DomainError>().map(|e| e.code) {
+        Some(ErrorCode::UsageError) => 2,
+        Some(ErrorCode::MissingDependency) => 3,
+        Some(ErrorCode::MediaBusy) => 4,
+        _ => 1,
+    }
+}
+
+pub fn json_error(error: &anyhow::Error) -> serde_json::Value {
+    let domain = error.downcast_ref::<DomainError>();
+    serde_json::json!({"ok":false,"error":{
+        "code":domain.map(|e| e.code.as_str()).unwrap_or("general_error"),
+        "message":crate::clean_text(&format!("{error:#}")),
+        "params":domain.map(|e| e.params.clone()).unwrap_or_default()
+    }})
+}

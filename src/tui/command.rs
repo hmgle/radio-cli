@@ -263,7 +263,12 @@ pub(super) fn parse(
     let cli = Cli::try_parse_from(std::iter::once("radio".to_owned()).chain(words))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     // Global process/config flags have no meaning inside an existing session.
-    if cli.config.is_some() || cli.data_dir.is_some() || cli.api_url.is_some() || cli.json {
+    if cli.config.is_some()
+        || cli.data_dir.is_some()
+        || cli.api_url.is_some()
+        || cli.json
+        || cli.json_v2
+    {
         bail!("TUI 命令不接受进程级配置参数");
     }
     let parsed = match cli.command {

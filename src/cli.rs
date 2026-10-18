@@ -37,6 +37,9 @@ pub struct Cli {
     pub api_url: Option<String>,
     #[arg(long, global = true)]
     pub json: bool,
+    /// Emit one versioned success/error envelope (legacy --json is unchanged).
+    #[arg(long, global = true, conflicts_with = "json")]
+    pub json_v2: bool,
     #[command(subcommand)]
     pub command: Option<Action>,
 }
@@ -232,6 +235,10 @@ pub enum RecordingAction {
 }
 
 fn emit(value: &impl serde::Serialize) -> Result<()> {
+    if JSON_V2.get() {
+        JSON_DATA.set(Some(serde_json::to_value(value)?));
+        return Ok(());
+    }
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
@@ -258,7 +265,31 @@ fn print_stations(rows: &[Station], json: bool) -> Result<()> {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    JSON_V2.set(cli.json_v2);
+    JSON_DATA.set(None);
+    let v2 = cli.json_v2;
+    let result = run_inner(cli);
+    if v2 && result.is_ok() {
+        println!("{}", serde_json::json!({"ok":true,"data":JSON_DATA.take()}));
+    }
+    JSON_V2.set(false);
+    result
+}
+
+thread_local! {
+    static JSON_V2: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static JSON_DATA: std::cell::Cell<Option<serde_json::Value>> = const { std::cell::Cell::new(None) };
+}
+
+fn run_inner(mut cli: Cli) -> Result<()> {
+    cli.json |= cli.json_v2;
     crate::messages::preview(cli.lang.as_deref());
+    if cli.json_v2 && matches!(cli.command, None | Some(Action::Tui)) {
+        bail!(
+            crate::error::DomainError::new(crate::error::ErrorCode::UsageError)
+                .with("detail", "--json-v2 requires a noninteractive subcommand")
+        );
+    }
     let action = match cli.command {
         Some(action) => action,
         None if io::stdin().is_terminal() && io::stdout().is_terminal() => Action::Tui,
