@@ -307,10 +307,10 @@ impl App {
         }
     }
     pub fn length(&self, view: &View) -> usize {
-        if self.source == Source::Recordings {
-            view.recordings.len()
-        } else if self.filter != view.filter {
+        if self.filter != view.filter {
             0
+        } else if self.source == Source::Recordings {
+            view.recordings.len()
         } else {
             view.rows.len()
         }
@@ -349,7 +349,7 @@ impl App {
         if self.send(
             sender,
             if self.source == Source::Recordings {
-                Command::Recordings
+                Command::Recordings(self.filter.clone())
             } else {
                 Command::Search(self.filter.clone())
             },
@@ -454,8 +454,11 @@ impl App {
                         self.help_scroll = 0;
                     }
                     Parsed::Focus(focus) => self.focus = focus,
-                    Parsed::Source(source) => {
+                    Parsed::Source(source, page) => {
+                        self.filter.limit = usize::from(page.limit);
                         self.switch_source(source, sender);
+                        self.filter.offset = page.offset;
+                        self.flush_search(sender);
                         self.focus = Focus::List;
                     }
                     Parsed::Search(mut filter) => {
@@ -626,10 +629,8 @@ impl App {
             KeyCode::Char('g') if gg => self.move_selection(-10000, view),
             KeyCode::Char('g') => self.pending_g = true,
             KeyCode::End | KeyCode::Char('G') => self.move_selection(10000, view),
-            KeyCode::PageDown | KeyCode::PageUp
-                if self.focus == Focus::List && self.source != Source::Recordings =>
-            {
-                if key.code == KeyCode::PageDown && view.rows.len() == self.filter.limit {
+            KeyCode::PageDown | KeyCode::PageUp if self.focus == Focus::List => {
+                if key.code == KeyCode::PageDown && self.length(view) == self.filter.limit {
                     self.filter.offset = self.filter.offset.saturating_add(self.filter.limit);
                 } else if key.code == KeyCode::PageUp {
                     self.filter.offset = self.filter.offset.saturating_sub(self.filter.limit);
@@ -650,7 +651,7 @@ impl App {
                     self.send(sender, Command::Info(station.stationuuid.clone()));
                 }
             }
-            KeyCode::Enter if self.focus == Focus::List && self.source != Source::Recordings => {
+            KeyCode::Enter if self.focus == Focus::List => {
                 if let Some(s) = self.selected(view) {
                     self.send(sender, Command::Play(s.stationuuid.clone()));
                 }

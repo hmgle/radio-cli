@@ -31,10 +31,14 @@ pub(super) struct View {
     pub revision: u64,
     pub rows_revision: u64,
     pub filter: Filter,
+    pub total: usize,
+    pub recordings_total: usize,
 }
 impl View {
     pub fn new(status: Status) -> Self {
         Self {
+            total: 0,
+            recordings_total: 0,
             rows: vec![],
             recordings: vec![],
             status,
@@ -126,9 +130,11 @@ fn catalog_note(store: &Store) -> Result<String> {
 
 fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
     let rows = engine.store.search(filter)?;
-    let recordings = engine.store.recordings(100)?;
+    let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
     let note = catalog_note(&engine.store)?;
     let mut view = view.lock().unwrap();
+    view.total = engine.store.search_count(filter)?;
+    view.recordings_total = engine.store.recordings_count()?;
     view.rows = rows;
     view.recordings = recordings;
     view.catalog_note = note;
@@ -242,7 +248,10 @@ pub(super) fn execute(
             data.task = "正在取消 · 等待当前请求结束…".into();
             data.log("已请求取消目录任务");
         }
-        Command::Recordings => refresh(engine, filter, view)?,
+        Command::Recordings(value) => {
+            *filter = value;
+            refresh(engine, filter, view)?;
+        }
         Command::Info(uuid) => {
             let station = engine.store.station(&uuid)?;
             let mut data = view.lock().unwrap();
