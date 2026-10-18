@@ -11,7 +11,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn panel(title: String, active: bool) -> Block<'static> {
     Block::default()
@@ -446,11 +446,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             "SEARCH /"
         };
         let input = Rect::new(bottom.x, bottom.y, bottom.width, 1);
-        let (text, cursor) = input_window(
-            &app.editor.text,
-            app.editor.cursor,
-            input.width.saturating_sub(label.len() as u16 + 1),
-        );
+        let (input_width, cursor_start) = input_geometry(label, input.width);
+        let (text, cursor) = input_window(&app.editor.text, app.editor.cursor, input_width);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -463,7 +460,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             ])),
             input,
         );
-        frame.set_cursor_position((input.x + label.len() as u16 + 1 + cursor, input.y));
+        frame.set_cursor_position((input.x + cursor_start + cursor, input.y));
         let hint = if app.message.is_empty() {
             if app.mode == Mode::Command {
                 "Enter 执行 · Esc 返回 · Tab 补全 · ↑/↓ 历史 · :help 帮助"
@@ -591,6 +588,14 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 /// Horizontally scroll input by display cells while keeping the Unicode cursor visible.
+pub(super) fn input_geometry(label: &str, width: u16) -> (u16, u16) {
+    let start = label.width().saturating_add(1).min(usize::from(width)) as u16;
+    (
+        width.saturating_sub(start),
+        start.min(width.saturating_sub(1)),
+    )
+}
+
 fn input_window(text: &str, cursor: usize, width: u16) -> (String, u16) {
     if width == 0 {
         return (String::new(), 0);

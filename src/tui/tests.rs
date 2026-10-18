@@ -76,6 +76,15 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
 }
 
 #[test]
+fn input_labels_use_display_cells_and_keep_the_cursor_inside() {
+    assert_eq!(render::input_geometry("SEARCH /", 20), (11, 9));
+    assert_eq!(render::input_geometry("搜索 /", 20), (13, 7));
+    assert_eq!(render::input_geometry("e\u{301}", 20), (18, 2));
+    assert_eq!(render::input_geometry("搜索 /", 3), (0, 2));
+    assert_eq!(render::input_geometry("搜索 /", 0), (0, 0));
+}
+
+#[test]
 fn commands_use_cli_arguments_and_context_without_shell_execution() {
     let data = view();
     let filter = Filter {
