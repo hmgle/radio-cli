@@ -254,6 +254,7 @@ pub(super) struct App {
     pub help_scroll: u16,
     pub details_scroll: u16,
     pub inspect_info: bool,
+    pub info_request: u64,
     pub activity_scroll: u16,
     pub rects: [Rect; 5],
     pub source_rows: [Rect; 4],
@@ -286,6 +287,7 @@ impl Default for App {
             help_scroll: 0,
             details_scroll: 0,
             inspect_info: false,
+            info_request: 0,
             activity_scroll: 0,
             rects: [Rect::default(); 5],
             source_rows: [Rect::default(); 4],
@@ -321,9 +323,12 @@ impl App {
             return;
         }
         if view.rows_revision != self.rows_revision {
-            if self.source != Source::Recordings
-                && let Some(id) = &self.selected_id
-                && let Some(i) = view.rows.iter().position(|s| &s.stationuuid == id)
+            if let Some(id) = &self.selected_id
+                && let Some(i) = if self.source == Source::Recordings {
+                    view.recordings.iter().position(|r| &r.id == id)
+                } else {
+                    view.rows.iter().position(|s| &s.stationuuid == id)
+                }
             {
                 self.list.select(Some(i));
             }
@@ -334,7 +339,22 @@ impl App {
         } else {
             Some(self.list.selected().unwrap_or(0).min(len - 1))
         });
-        self.selected_id = self.selected(view).map(|s| s.stationuuid.clone());
+        self.selected_id = self.selection_id(view);
+    }
+    fn selection_id(&self, view: &View) -> Option<String> {
+        if self.source == Source::Recordings {
+            view.recordings
+                .get(self.list.selected().unwrap_or(0))
+                .map(|r| r.id.clone())
+        } else {
+            self.selected(view).map(|s| s.stationuuid.clone())
+        }
+    }
+    fn request_info(&mut self, uuid: String, sender: &SyncSender<Command>) {
+        self.info_request = self.info_request.wrapping_add(1);
+        self.inspect_info = self.send(sender, Command::Info(uuid, self.info_request));
+        self.focus = Focus::Details;
+        self.details_scroll = 0;
     }
     fn send(&mut self, sender: &SyncSender<Command>, command: Command) -> bool {
         match sender.try_send(command) {
@@ -418,7 +438,7 @@ impl App {
                     .clamp(0, self.length(view).saturating_sub(1) as i64)
                     as usize;
                 self.list.select(Some(index));
-                self.selected_id = self.selected(view).map(|s| s.stationuuid.clone());
+                self.selected_id = self.selection_id(view);
                 self.details_scroll = 0;
                 self.inspect_info = false;
             }
@@ -473,10 +493,9 @@ impl App {
                         self.flush_search(sender);
                     }
                     Parsed::Worker(command) => {
-                        if matches!(command, Command::Info(_)) {
-                            self.focus = Focus::Details;
-                            self.details_scroll = 0;
-                            self.inspect_info = true;
+                        if let Command::Info(uuid, _) = command {
+                            self.request_info(uuid, sender);
+                            return;
                         }
                         if matches!(command, Command::Doctor) {
                             self.focus = Focus::Activity;
@@ -645,10 +664,7 @@ impl App {
             KeyCode::Enter if self.focus == Focus::Sources => self.focus = Focus::List,
             KeyCode::Enter if self.focus == Focus::Player => {
                 if let Some(station) = &view.status.station {
-                    self.inspect_info = true;
-                    self.details_scroll = 0;
-                    self.focus = Focus::Details;
-                    self.send(sender, Command::Info(station.stationuuid.clone()));
+                    self.request_info(station.stationuuid.clone(), sender);
                 }
             }
             KeyCode::Enter if self.focus == Focus::List => {
@@ -671,6 +687,9 @@ impl App {
                         self.filter.min_bitrate.to_string(),
                     ],
                 ))
+            }
+            KeyCode::F(5) => {
+                self.flush_search(sender);
             }
             KeyCode::Char('n') => {
                 self.send(sender, Command::Random(self.filter.clone()));
@@ -717,7 +736,7 @@ impl App {
                         let index = self.list.offset() + usize::from(event.row - rect.y - 1);
                         if index < self.length(view) {
                             self.list.select(Some(index));
-                            self.selected_id = self.selected(view).map(|s| s.stationuuid.clone());
+                            self.selected_id = self.selection_id(view);
                             self.details_scroll = 0;
                             self.inspect_info = false;
                         }

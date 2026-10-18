@@ -332,6 +332,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                     r.error.as_deref().unwrap_or("")
                 )
             }).unwrap_or_else(|| "暂无录音记录".into())
+        } else if app.inspect_info && view.inspected_request != app.info_request {
+            "正在查询详情…".into()
+        } else if app.inspect_info && view.inspected_error.is_some() {
+            view.inspected_error.clone().unwrap()
         } else if let Some(station) = if app.inspect_info {
             view.inspected.as_ref()
         } else {
