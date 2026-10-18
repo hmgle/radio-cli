@@ -130,7 +130,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     };
     let recording = if view.status.recording {
         format!(
-            "  ● REC {}s{}",
+            "  ● REC {} · {}s{}",
+            view.status
+                .station
+                .as_ref()
+                .map(|s| value(&s.name))
+                .unwrap_or_default(),
             view.status.recording_ms / 1000,
             if view.status.paused {
                 " · 播放暂停，录音继续"
