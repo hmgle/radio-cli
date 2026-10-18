@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.3.0 — 2026-10-19
+
+Complete roadmap stages S1–S3 (#36–#57); S4 (#58–#64) remains backlog.
+
+- Fix whitespace search, favorite confirmations, full-catalog SQL random selection,
+  atomic bootstrap, wide-character input cursors and source-specific hints.
+- Introduce stable localized domain error codes and language selection. TUI static
+  text and Clap help remain Chinese pending their separately scoped migration.
+- Add transactional custom station editing, duplicate URL detection, backup URL
+  management, remembered volume, opt-in resume, local filter facets, sorting,
+  automatic stale-catalog refresh and one-action filter reset.
+- Reconnect established streams with bounded retries while preserving history.
+- Play and manage local recordings, confirm TUI deletion, open the recording
+  directory, inspect full FFmpeg errors and refuse insufficient disk space.
+- Add atomic `--json-v2` responses and exit codes; preserve legacy JSON shapes.
+  Document the contract in `docs/json-contract.md`.
+- Generate shell completions and `radio(1)`; include both in release archives.
+- Improve 80×24 layouts; add default/mono/light themes and strict `NO_COLOR`.
+  Show independent playback/recording stages and retain a visible exit hint.
+- Share view snapshots, refresh the active source lazily, throttle progress,
+  index history pruning and separate playback/recording resource ownership.
+- Reuse Unicode editing in filters; add context completion, private persistent
+  command history, command-specific help, runtime settings, mute and copying.
+- Upgrade audited dependencies and check stable/all-features, Rust 1.88 and
+  static x86_64 musl in CI. No advisory exceptions are configured.
+
+### Compatibility
+
+- Existing configuration and schema-v2 databases continue to work. New settings:
+  `auto_sync_days = 7` (0 disables), `resume = false`, `probe_timeout_secs = 5`,
+  `recording_min_free_mb = 16`, `theme = "default"`, `mouse = true`, and optional
+  `language`. Volume is always remembered; resume is opt-in.
+- `--json-v2` is opt-in; `search --json` remains an array throughout 0.3.x.
+- Exit codes: 0 success, 1 operation failure, 2 usage, 3 missing executable,
+  4 competing media session. Scripts that previously assumed every error was
+  exit 1 should handle these specific codes.
+- The supported release target is Linux x86_64. External mpv and FFmpeg/ffprobe
+  remain required. NO_COLOR forces monochrome; clipboard copying uses OSC 52.
+
 ## 0.2.0 — 2026-10-18
 
 ### Fixes and improvements

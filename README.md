@@ -53,6 +53,12 @@ radio recordings list
 
 Name, country, language, and tag searches run locally; country code, language, and tag filters use full values (languages also accept the codes provided by the catalog, e.g. `zh`). The minimum-bitrate filter excludes records with unknown bitrate. `random` samples across the entire matching catalog and is not limited by search pagination. `info` always outputs JSON; query commands accept `--json`. Runtime status and diagnostics go to stderr.
 
+Use `--json-v2` for atomic success/error envelopes and stable error codes; legacy
+`--json` shapes remain unchanged. See the [JSON contract](docs/json-contract.md).
+Recordings support `recordings play ID`, `recordings remove ID [--index-only]`,
+and `recordings open`; TUI Enter / D / o / e provide playback, confirmed deletion,
+directory opening and expanded errors. Disk checks reserve 16 MiB by default.
+
 Stations are identified by their full Radio Browser UUID; custom stations get a local UUID. Favorites, recently played entries, and custom addresses are never overwritten by a catalog sync. A favorite that has disappeared from the catalog can still be played. History keeps the last 1,000 successful playbacks; the interface aggregates it by station to show recent listening.
 
 TUI keys:
@@ -65,7 +71,8 @@ TUI keys:
 | `Ctrl` + arrows / `Ctrl`+`h/j/k/l` | Switch panels by spatial position |
 | Arrows / `j`, `k` | Select, navigate, or scroll the focused panel |
 | `Enter` | Play in lists; view current station details in the player |
-| `Space` | Pause / resume playback; recording continues |
+| `Space` / `m` | Pause / resume / mute; recording continues |
+| `y` / `Y` | Copy UUID / URL (recording ID / path) via OSC 52 |
 | `n` | Random next station under the current filter |
 | `f` | Add / remove the selected station from favorites |
 | `r` | Start / stop recording the current station |
@@ -75,7 +82,7 @@ TUI keys:
 | `[` / `]` | Stations / favorites / recent / recordings categories |
 | `gg` / `G` | First / last item in the list |
 | `PgUp` / `PgDn` | Page through the station list |
-| `?` | Open help |
+| `?` | Open help or current failure details |
 | `q` / `Ctrl-C` | Finalize recordings and quit |
 
 The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and the wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
@@ -83,8 +90,6 @@ The focused panel uses a bright cyan bold border, a `▶` marker, and a number; 
 Inside the TUI, `:sync` runs a background sync, `:sync-cancel` cancels the task, `:current` shows full details of the current station, and `:record --duration 30m` schedules a timed recording of the current station. Commands support quoting, Tab completion, and history; see the [TUI guide](docs/tui.md) for more commands and interaction design (in Chinese).
 
 ## Configuration & Data
-
-Default paths on Linux:
 
 Select the CLI error and list language with `--lang en` or `--lang zh-CN`.
 Precedence is `--lang`, `RADIO_LANG`, config `language`, then `LC_ALL`/`LANG`;
@@ -121,6 +126,8 @@ Cancellation and shrink protection also apply to automatic sync. Clear
 filters with Ctrl-U in `F`, or click the bottom filter summary. Search text
 remains a literal substring; quote multiword CLI arguments in your shell.
 Advanced query operators such as `-tag:` are reserved for a future change.
+
+Default paths on Linux:
 
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
@@ -165,3 +172,9 @@ Generate shell integration with `radio completions bash|zsh|fish`. For example,
 `radio completions zsh > _radio` writes a completion file for your zsh `$fpath`.
 `radio man > radio.1` generates the manual page. Release archives include bash,
 zsh and fish completions plus `man/radio.1`.
+
+Configure `theme = "default"|"mono"|"light"`; nonempty `NO_COLOR` forces mono.
+At 80×24, details open with `3` and the idle task area collapses.
+Use `mouse = false` or `:set mouse false` for native text selection.
+Command history retains 100 entries across sessions. `:help record` shows command
+usage and `:set language en|zh-CN` changes migrated messages for this session.

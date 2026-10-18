@@ -19,3 +19,12 @@ playback_timeout_secs = 12
 
 # Default: recordings/ under the application data directory.
 # recording_dir = "/home/yourname/Music/radio-recordings"
+
+# Independent recording codec-probe budget (1-300 seconds).
+probe_timeout_secs = 5
+# Reserve this many MiB plus the known bitrate x duration estimate.
+recording_min_free_mb = 16
+# default | mono | light; nonempty NO_COLOR forces mono.
+theme = "default"
+# false permits the terminal's native text selection.
+mouse = true
