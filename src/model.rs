@@ -92,4 +92,6 @@ pub struct Recording {
     pub size_bytes: u64,
     pub status: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub recovery_pending: bool,
 }

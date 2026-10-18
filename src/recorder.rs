@@ -145,6 +145,7 @@ fn complete_finalization(store: &Store, record: &mut Recording) -> Result<()> {
     complete.path = final_path.to_string_lossy().into();
     complete.status = "complete".into();
     complete.error = None;
+    complete.recovery_pending = false;
     // The DB remains finalizing until the final sidecar is safely written.
     sidecar(&complete)?;
     store.save_recording(&complete)?;
@@ -165,12 +166,10 @@ pub fn recover(store: &Store) -> Result<Vec<String>> {
                 r.stopped_at = Some(chrono::Utc::now().to_rfc3339());
                 r.error = Some("上一个会话未正常结束；保留临时文件供恢复".into());
                 r.size_bytes = fs::metadata(&r.path).map(|m| m.len()).unwrap_or(0);
+                r.recovery_pending = true;
                 store.save_recording(&r)?;
             }
-            let retry = r
-                .error
-                .as_deref()
-                .is_some_and(|e| e.starts_with("恢复失败:"));
+            let retry = r.recovery_pending;
             if retry {
                 r.error = Some(
                     if Path::new(&r.path).exists() {
@@ -181,6 +180,7 @@ pub fn recover(store: &Store) -> Result<Vec<String>> {
                     .into(),
                 );
             }
+            r.recovery_pending = false;
             sidecar(&r)?;
             if retry {
                 store.save_recording(&r)?;
@@ -193,6 +193,7 @@ pub fn recover(store: &Store) -> Result<Vec<String>> {
                 r.id, r.path
             );
             r.error = Some(message.clone());
+            r.recovery_pending = true;
             if let Err(db_error) = store.save_recording(&r) {
                 warnings.push(format!("{message}；数据库: {db_error:#}"));
             } else {
@@ -333,6 +334,7 @@ impl Recorder {
             size_bytes: 0,
             status: "recording".into(),
             error: None,
+            recovery_pending: false,
         };
         let recorder = Self {
             child,
@@ -467,6 +469,7 @@ impl Recorder {
             store.save_recording(&self.record)?;
             sidecar(&self.record)?;
             if let Err(error) = complete_finalization(store, &mut self.record) {
+                self.record.recovery_pending = true;
                 self.record.error = Some(format!(
                     "录音 {} ({}) 收尾待重试: {error:#}",
                     self.record.id, self.record.path
@@ -543,6 +546,7 @@ mod tests {
             size_bytes: 14,
             status: "finalizing".into(),
             error: None,
+            recovery_pending: false,
         }
     }
 
@@ -601,14 +605,69 @@ mod tests {
         store.save_recording(&r).unwrap();
         assert_eq!(recover(&store).unwrap().len(), 1);
         assert_eq!(store.unfinished_recordings().unwrap().len(), 1);
+        let mut retry = store.recordings(1).unwrap().remove(0);
+        assert!(retry.recovery_pending);
+        retry.error = Some("diagnostic wording has changed".into());
+        store.save_recording(&retry).unwrap();
+        assert_eq!(store.unfinished_recordings().unwrap().len(), 1);
         fs::create_dir(dir.path().join("missing")).unwrap();
         assert!(recover(&store).unwrap().is_empty());
         assert!(store.unfinished_recordings().unwrap().is_empty());
         let saved = store.recordings(1).unwrap().remove(0);
         assert_eq!(saved.status, "interrupted");
+        assert!(!saved.recovery_pending);
         assert!(saved.error.as_deref().unwrap().contains("音频文件缺失"));
         assert!(Path::new(&format!("{}.json", saved.path)).exists());
         assert!(recover(&store).unwrap().is_empty());
+    }
+
+    #[test]
+    fn recovery_selection_uses_the_flag_instead_of_error_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let mut record = pending(dir.path());
+        record.status = "interrupted".into();
+        record.error = Some("恢复失败: diagnostic text alone".into());
+        store.save_recording(&record).unwrap();
+        assert!(store.unfinished_recordings().unwrap().is_empty());
+        record.recovery_pending = true;
+        record.error = None;
+        store.save_recording(&record).unwrap();
+        assert_eq!(store.unfinished_recordings().unwrap().len(), 1);
+        assert!(recover(&store).unwrap().is_empty());
+        assert!(store.unfinished_recordings().unwrap().is_empty());
+    }
+
+    #[test]
+    fn version_one_database_migrates_legacy_recovery_state_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        let mut record = pending(dir.path());
+        record.status = "interrupted".into();
+        record.error = Some("恢复失败: old-format sidecar failure".into());
+        let mut json = serde_json::to_value(&record).unwrap();
+        json.as_object_mut().unwrap().remove("recovery_pending");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE recordings (id TEXT PRIMARY KEY,status TEXT NOT NULL,json TEXT NOT NULL); PRAGMA user_version=1;").unwrap();
+        conn.execute(
+            "INSERT INTO recordings VALUES (?1,?2,?3)",
+            rusqlite::params![record.id, record.status, json.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+        let store = Store::open(&path).unwrap();
+        assert!(store.unfinished_recordings().unwrap()[0].recovery_pending);
+        assert!(recover(&store).unwrap().is_empty());
+        assert!(!store.recordings(1).unwrap()[0].recovery_pending);
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert!(store.unfinished_recordings().unwrap().is_empty());
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+                .unwrap(),
+            2
+        );
     }
 
     #[test]
