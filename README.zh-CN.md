@@ -92,6 +92,9 @@ TUI 静态文案和 clap 帮助的迁移将单独处理。
 不会重复记入历史或点击上报。停止、换台、退出会取消待重试任务；耗尽后进入正常备用线路流程。
 首次起播失败仍按原有线路回退处理。
 
+运行时音量保存在 SQLite；配置 `resume = true` 可在 TUI 启动时恢复上次成功播放的电台和来源，
+默认关闭自动恢复播放。不会修改手写配置文件；无效音量回退配置值，已不可用的上次电台跳过。
+
 - 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - 录音：数据目录下的 `recordings/`

@@ -276,6 +276,38 @@ fn media_lock_blocks_only_competing_media_sessions() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn finished_session_releases_lock_even_while_a_fork_inherits_its_descriptor() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let lock = radio_cli::process::MediaLock::acquire(&config.runtime_dir).unwrap();
+    unsafe {
+        let mut pipe = [0; 2];
+        assert_eq!(libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC), 0);
+        let pid = libc::fork();
+        assert!(pid >= 0);
+        if pid == 0 {
+            // Only async-signal-safe calls after forking the test process.
+            libc::close(pipe[1]);
+            let mut byte = 0u8;
+            libc::read(pipe[0], (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+        libc::close(pipe[0]);
+        drop(lock);
+        let next = radio_cli::process::MediaLock::acquire(&config.runtime_dir);
+        let byte = 1u8;
+        libc::write(pipe[1], (&byte as *const u8).cast(), 1);
+        libc::close(pipe[1]);
+        libc::waitpid(pid, std::ptr::null_mut(), 0);
+        assert!(
+            next.is_ok(),
+            "inherited descriptor prolonged the finished session"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn owned_children_exit_after_frontend_sigkill() {
     if let Some(path) = std::env::var_os("RADIO_TEST_CHILD_PID") {
         let mut command = Command::new("/bin/sleep");

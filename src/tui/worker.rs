@@ -189,6 +189,14 @@ pub(super) fn execute(
 ) -> Result<()> {
     match command {
         Command::Search(value) => {
+            let source = if value.history {
+                super::state::Source::History
+            } else if value.favorites {
+                super::state::Source::Favorites
+            } else {
+                super::state::Source::Stations
+            };
+            engine.store.set_meta("pref_source", source.preference())?;
             *filter = value;
             view.lock().unwrap().inspected = None;
             refresh(engine, filter, view)?;
@@ -303,6 +311,7 @@ pub(super) fn execute(
             data.log("已请求取消目录任务");
         }
         Command::Recordings(value) => {
+            engine.store.set_meta("pref_source", "recordings")?;
             *filter = value;
             refresh(engine, filter, view)?;
         }
@@ -342,11 +351,19 @@ pub(super) fn run(
     stop: Arc<AtomicBool>,
 ) -> Result<()> {
     engine.enable_background_media();
+    let source = super::state::Source::restore(&engine.store, engine.config.settings.resume)?;
     let mut filter = Filter {
+        favorites: source == super::state::Source::Favorites,
+        history: source == super::state::Source::History,
         limit: 100,
         ..Filter::default()
     };
     refresh(&engine, &filter, &view)?;
+    if let Err(error) = engine.resume_last_station() {
+        view.lock()
+            .unwrap()
+            .log(&format!("恢复播放失败: {error:#}"));
+    }
     let mut job = if engine.store.count()? == 0 {
         let mut data = view.lock().unwrap();
         data.task_active = true;

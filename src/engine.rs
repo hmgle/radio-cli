@@ -71,9 +71,16 @@ struct RecordingProbe {
 }
 
 impl Engine {
-    pub fn new(config: Config, stop: Arc<AtomicBool>) -> Result<Self> {
+    pub fn new(mut config: Config, stop: Arc<AtomicBool>) -> Result<Self> {
         let lock = MediaLock::acquire(&config.runtime_dir)?;
         let store = Store::open(&config.data_dir.join("radio.db"))?;
+        if let Some(volume) = store
+            .meta("pref_volume")?
+            .and_then(|v| v.parse::<u8>().ok())
+            .filter(|v| *v <= 100)
+        {
+            config.settings.volume = volume;
+        }
         let recovery_warnings = recorder::recover(&store)?;
         let directory = Directory::new(&config, stop.clone())?;
         let status = Status {
@@ -129,6 +136,20 @@ impl Engine {
         self.random_filter = None;
         self.random_tried.clear();
         self.play_station(self.store.station(uuid)?)
+    }
+
+    /// TUI-only opt-in restoration; CLI media commands remain explicit.
+    pub fn resume_last_station(&mut self) -> Result<()> {
+        if self.config.settings.resume
+            && let Some(uuid) = self.store.meta("pref_last_station")?
+            && let Ok(station) = self.store.station(&uuid)
+            && !station
+                .stream_candidates(&self.store.backups(&uuid)?)
+                .is_empty()
+        {
+            self.play(&uuid)?;
+        }
+        Ok(())
     }
 
     fn play_station(&mut self, station: Station) -> Result<()> {
@@ -291,6 +312,7 @@ impl Engine {
                                         && !self.history_recorded
                                     {
                                         self.store.played(&s.stationuuid)?;
+                                        self.store.set_meta("pref_last_station", &s.stationuuid)?;
                                         self.history_recorded = true;
                                         if !s.custom
                                             && self
@@ -312,7 +334,12 @@ impl Engine {
                             }
                             Event::Title(title) => self.status.title = title,
                             Event::Paused(paused) => self.status.paused = paused,
-                            Event::Volume(volume) => self.status.volume = volume,
+                            Event::Volume(volume) => {
+                                if volume != self.status.volume {
+                                    self.status.volume = volume;
+                                    self.store.set_meta("pref_volume", &volume.to_string())?;
+                                }
+                            }
                             Event::End(reason) if reason == "redirect" => {}
                             Event::End(reason) if matches!(reason.as_str(), "stop" | "quit") => {
                                 self.stop_playback()?;
@@ -363,6 +390,8 @@ impl Engine {
             player.volume(i32::from(value) - i32::from(self.status.volume))?;
         }
         self.status.volume = value;
+        self.config.settings.volume = value;
+        self.store.set_meta("pref_volume", &value.to_string())?;
         Ok(())
     }
 

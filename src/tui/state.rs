@@ -47,6 +47,25 @@ pub(super) enum Source {
     Recordings,
 }
 impl Source {
+    pub fn preference(self) -> &'static str {
+        match self {
+            Self::Stations => "stations",
+            Self::Favorites => "favorites",
+            Self::History => "history",
+            Self::Recordings => "recordings",
+        }
+    }
+    pub fn restore(store: &crate::store::Store, resume: bool) -> anyhow::Result<Self> {
+        if !resume {
+            return Ok(Self::Stations);
+        }
+        Ok(match store.meta("pref_source")?.as_deref() {
+            Some("favorites") => Self::Favorites,
+            Some("history") => Self::History,
+            Some("recordings") => Self::Recordings,
+            _ => Self::Stations,
+        })
+    }
     pub const ALL: [Self; 4] = [
         Self::Stations,
         Self::Favorites,

@@ -153,6 +153,39 @@ fn station_removal_requires_a_second_confirmation_in_tui() {
 }
 
 #[test]
+fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    for source in Source::ALL {
+        let value = Filter {
+            favorites: source == Source::Favorites,
+            history: source == Source::History,
+            limit: 100,
+            ..Filter::default()
+        };
+        let command = if source == Source::Recordings {
+            Command::Recordings(value)
+        } else {
+            Command::Search(value)
+        };
+        worker::execute(command, &mut engine, &mut filter, &mut job, &data).unwrap();
+        assert_eq!(Source::restore(&engine.store, true).unwrap(), source);
+        assert_eq!(
+            Source::restore(&engine.store, false).unwrap(),
+            Source::Stations
+        );
+    }
+}
+
+#[test]
 fn commands_use_cli_arguments_and_context_without_shell_execution() {
     let data = view();
     let filter = Filter {

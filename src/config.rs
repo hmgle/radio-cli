@@ -10,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub resume: bool,
     pub language: Option<String>,
     pub api_url: Option<String>,
     pub mpv: String,
@@ -25,6 +26,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            resume: false,
             language: None,
             api_url: None,
             mpv: "mpv".into(),
