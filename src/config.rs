@@ -10,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub auto_sync_days: u16,
     pub resume: bool,
     pub language: Option<String>,
     pub api_url: Option<String>,
@@ -26,6 +27,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            auto_sync_days: 7,
             resume: false,
             language: None,
             api_url: None,

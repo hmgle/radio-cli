@@ -277,6 +277,7 @@ pub(super) struct App {
     pub info_request: u64,
     pub activity_scroll: u16,
     pub rects: [Rect; 5],
+    pub filter_summary: Rect,
     pub source_rows: [Rect; 4],
     positions: [usize; 4],
     pub quit: bool,
@@ -312,6 +313,7 @@ impl Default for App {
             info_request: 0,
             activity_scroll: 0,
             rects: [Rect::default(); 5],
+            filter_summary: Rect::default(),
             source_rows: [Rect::default(); 4],
             positions: [0; 4],
             quit: false,
@@ -410,6 +412,20 @@ impl App {
         self.selected_id = None;
         self.details_scroll = 0;
         self.inspect_info = false;
+    }
+
+    fn clear_filters(&mut self, sender: &CommandSender) {
+        self.filter = Filter {
+            favorites: self.source == Source::Favorites,
+            history: self.source == Source::History,
+            limit: self.filter.limit,
+            sort: self.filter.sort,
+            ..Filter::default()
+        };
+        self.filter_edit = None;
+        self.reset_selection();
+        self.flush_search(sender);
+        self.message = "已清空筛选".into();
     }
     fn switch_source(
         &mut self,
@@ -618,6 +634,13 @@ impl App {
             }
             return;
         }
+        if self.filter_edit.is_some()
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('u')
+        {
+            self.clear_filters(sender);
+            return;
+        }
         if let Some((selected, values)) = &mut self.filter_edit {
             match key.code {
                 KeyCode::Down | KeyCode::Up if *selected < 3 => {
@@ -801,10 +824,20 @@ impl App {
         }
     }
     pub fn mouse(&mut self, event: MouseEvent, view: &View, sender: &CommandSender) {
-        if self.mode != Mode::Normal || self.help || self.filter_edit.is_some() {
+        if self.mode != Mode::Normal
+            || self.help
+            || self.filter_edit.is_some()
+            || self.confirmation.is_some()
+        {
             return;
         }
         let point = ratatui::layout::Position::new(event.column, event.row);
+        if self.filter_summary.contains(point)
+            && event.kind == MouseEventKind::Down(MouseButton::Left)
+        {
+            self.clear_filters(sender);
+            return;
+        }
         let Some(focus) = std::iter::once(self.focus)
             .chain(Focus::ALL)
             .find(|f| self.rects[f.index()].contains(point))

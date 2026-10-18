@@ -218,6 +218,134 @@ fn filter_popup_selects_local_candidates_with_the_keyboard() {
 }
 
 #[test]
+fn clear_filters_keeps_source_and_pagination_size() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let data = view();
+    for mouse in [false, true] {
+        let (sender, receiver) = command::channel(10);
+        let mut app = App::default();
+        app.source = Source::Favorites;
+        app.filter = Filter {
+            query: "jazz".into(),
+            country: Some("CN".into()),
+            language: Some("zh".into()),
+            tag: Some("public".into()),
+            custom: true,
+            min_bitrate: 128,
+            favorites: true,
+            limit: 25,
+            offset: 25,
+            ..Filter::default()
+        };
+        if mouse {
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|frame| render::draw(frame, &mut app, &data))
+                .unwrap();
+            app.mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: app.filter_summary.x,
+                    row: app.filter_summary.y,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &data,
+                &sender,
+            );
+        } else {
+            app.key(key(KeyCode::Char('F')), &data, &sender);
+            receiver.try_recv().unwrap();
+            app.key(
+                KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+                &data,
+                &sender,
+            );
+        }
+        assert_eq!(
+            app.filter,
+            Filter {
+                favorites: true,
+                limit: 25,
+                ..Filter::default()
+            }
+        );
+        assert!(app.filter_edit.is_none());
+        assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
+    }
+}
+
+#[test]
+fn expired_catalog_syncs_at_startup_and_can_be_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let api = format!("http://{}", listener.local_addr().unwrap());
+    let config = Config::load(None, Some(dir.path()), Some(&api)).unwrap();
+    config.prepare().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let engine = Engine::new(config, stop.clone()).unwrap();
+    assert!(!worker::auto_sync_due(&engine.store, 7).unwrap());
+    let old = station("Old");
+    engine.store.upsert(&old).unwrap();
+    engine
+        .store
+        .set_meta(
+            "last_sync",
+            &(chrono::Utc::now() - chrono::Duration::days(8)).to_rfc3339(),
+        )
+        .unwrap();
+    assert!(worker::auto_sync_due(&engine.store, 7).unwrap());
+    assert!(!worker::auto_sync_due(&engine.store, 0).unwrap());
+    assert!(!worker::auto_sync_due(&engine.store, 9).unwrap());
+    let replacement = station("Automatically synced");
+    let body = serde_json::to_vec(&vec![replacement]).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok((mut stream, _)) = listener.accept() {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 8192];
+                let _ = stream.read(&mut request);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "automatic sync never requested the catalog"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let worker_view = shared.clone();
+    let worker_stop = stop.clone();
+    let (_sender, receiver) = command::channel(10);
+    let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while shared
+        .lock()
+        .unwrap()
+        .rows
+        .first()
+        .is_none_or(|s| s.name != "Automatically synced")
+    {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    stop.store(true, Ordering::Relaxed);
+    handle.join().unwrap().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
 fn commands_use_cli_arguments_and_context_without_shell_execution() {
     let data = view();
     let filter = Filter {

@@ -110,13 +110,20 @@ Inspect local filter values with `countries`, `languages --prefix zh`, or
 with all filters. Random ordering is reshuffled per query. The TUI `F` popup
 loads local candidates in the background; arrows select and fill a value.
 
+At TUI startup, a previously synced catalog older than `auto_sync_days`
+(default: 7) refreshes in the background; set this to 0 to disable it.
+Cancellation and shrink protection also apply to automatic sync. Clear
+filters with Ctrl-U in `F`, or click the bottom filter summary. Search text
+remains a literal substring; quote multiword CLI arguments in your shell.
+Advanced query operators such as `-tag:` are reserved for a future change.
+
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - Recordings: `recordings/` under the data directory
 
 The config file is optional; see [config.example.toml](config.example.toml), pass it with `--config <file>`, and use `--data-dir <dir>` to isolate test data. Relative directories are resolved against the working directory at startup; the recording database stores absolute paths.
 
-Radio Browser servers are discovered automatically with limited retries. Set `api_url`, or use `--api-url https://server` which takes precedence. HTTP requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables; audio backends follow their own proxy support, so a reachable catalog does not imply a reachable audio stream. A catalog older than seven days triggers a refresh hint, never a silent full sync.
+Radio Browser servers are discovered automatically with limited retries. Set `api_url`, or use `--api-url https://server` which takes precedence. HTTP requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables; audio backends follow their own proxy support, so a reachable catalog does not imply a reachable audio stream. Previously synced catalogs refresh in the background at startup according to auto_sync_days; set it to 0 to disable.
 
 A single data directory allows only one playback / recording / TUI session; other CLI queries and favorite operations still work. Leaving the foreground stops the audio; for long-running use, run it inside tmux or systemd.
 
