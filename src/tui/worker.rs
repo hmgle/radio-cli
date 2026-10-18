@@ -299,6 +299,12 @@ pub(super) fn execute(
             favorite_changed(engine, filter, view, &uuid, add)?;
         }
         Command::Pause => engine.pause()?,
+        Command::Mute => engine.mute()?,
+        Command::SetLanguage(language) => {
+            crate::messages::init(Some(&language), None);
+            engine.config.settings.language = Some(language.clone());
+            engine.status.message = format!("language = {language}");
+        }
         Command::Stop => {
             engine.stop_playback()?;
             engine.status.message = "已停止播放".into();

@@ -1591,6 +1591,7 @@ name = "radio-cli"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "clap_complete",

@@ -93,6 +93,9 @@ pub(super) enum Mode {
 
 #[derive(Default)]
 pub(super) struct Editor {
+    pub station_ids: Vec<String>,
+    pub recording_ids: Vec<String>,
+    history_path: Option<std::path::PathBuf>,
     pub text: String,
     /// Byte offset, always at a UTF-8 boundary.
     pub cursor: usize,
@@ -112,13 +115,57 @@ impl Editor {
         self.history_index = None;
         self.draft.clear();
     }
-    pub fn remember(&mut self) {
+    pub fn remember(&mut self) -> anyhow::Result<()> {
         if !self.text.trim().is_empty() && self.history.back() != Some(&self.text) {
             self.history.push_back(self.text.clone());
         }
         while self.history.len() > 100 {
             self.history.pop_front();
         }
+        self.save_history()
+    }
+    pub fn load_history(&mut self, path: std::path::PathBuf) -> anyhow::Result<()> {
+        use std::io::Read;
+        self.history_path = Some(path.clone());
+        match std::fs::File::open(&path) {
+            Ok(file) => {
+                let mut bytes = Vec::new();
+                file.take(512 * 1024).read_to_end(&mut bytes)?;
+                let entries: Vec<String> = serde_json::from_slice(&bytes)?;
+                self.history = entries
+                    .into_iter()
+                    .filter(|s| s.len() <= 4096)
+                    .rev()
+                    .take(100)
+                    .collect();
+                self.history.make_contiguous().reverse();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.history_path = Some(path);
+        Ok(())
+    }
+    fn save_history(&self) -> anyhow::Result<()> {
+        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        let Some(path) = &self.history_path else {
+            return Ok(());
+        };
+        let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| -> anyhow::Result<()> {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp)?;
+            file.write_all(&serde_json::to_vec(&self.history)?)?;
+            std::fs::rename(&temp, path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(temp);
+        }
+        result
     }
     pub fn key(&mut self, key: KeyEvent, command: bool) {
         let previous = |text: &str, cursor: usize| {
@@ -223,30 +270,8 @@ impl Editor {
         if self.cursor != self.text.len() {
             return;
         }
-        let mut choices: Vec<String> = command::COMPLETIONS
-            .iter()
-            .filter(|s| s.starts_with(&self.text))
-            .map(|s| s.to_string())
-            .collect();
-        if choices.is_empty() {
-            let start = self.text.rfind(' ').map(|i| i + 1).unwrap_or(0);
-            let prefix = &self.text[start..];
-            for option in [
-                "--country",
-                "--language",
-                "--tag",
-                "--min-bitrate",
-                "--limit",
-                "--offset",
-                "--duration",
-                "--output-dir",
-                "--backup-url",
-            ] {
-                if prefix.starts_with('-') && option.starts_with(prefix) {
-                    choices.push(format!("{}{option}", &self.text[..start]));
-                }
-            }
-        }
+        let choices =
+            command::completion_candidates(&self.text, &self.station_ids, &self.recording_ids);
         if choices.is_empty() {
             return;
         }
@@ -258,6 +283,9 @@ impl Editor {
 }
 
 pub(super) struct App {
+    pub mouse_enabled: bool,
+    pub clipboard: Option<String>,
+    pub filter_input: Editor,
     pub theme: crate::config::Theme,
     pub recording_error_expanded: bool,
     pub confirmation: Option<Command>,
@@ -294,6 +322,9 @@ impl Default for App {
         let mut list = ListState::default();
         list.select(Some(0));
         Self {
+            mouse_enabled: true,
+            clipboard: None,
+            filter_input: Editor::default(),
             confirmation: None,
             theme: crate::config::Theme::Default,
             recording_error_expanded: false,
@@ -523,9 +554,11 @@ impl App {
             &self.filter,
         ) {
             Ok(parsed) => {
-                self.editor.remember();
                 self.mode = Mode::Normal;
                 self.message.clear();
+                if let Err(error) = self.editor.remember() {
+                    self.message = format!("历史保存失败: {error}");
+                }
                 // A command supersedes any pending incremental search.
                 if self.search_due.is_some()
                     && !matches!(
@@ -536,6 +569,15 @@ impl App {
                     self.flush_search(sender);
                 }
                 match parsed {
+                    Parsed::Mouse(enabled) => {
+                        self.mouse_enabled = enabled;
+                        self.message = format!("mouse = {enabled}");
+                    }
+                    Parsed::HelpText(text) => {
+                        self.help = true;
+                        self.help_content = Some(text);
+                        self.help_scroll = 0;
+                    }
                     Parsed::Quit => self.quit = true,
                     Parsed::Help => {
                         self.help_content = None;
@@ -624,6 +666,20 @@ impl App {
                 }
                 return;
             }
+            if self.mode == Mode::Command && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+                self.editor.station_ids = self
+                    .selected(view)
+                    .into_iter()
+                    .chain(view.status.station.as_ref())
+                    .map(|s| s.stationuuid.clone())
+                    .collect();
+                self.editor.recording_ids = view
+                    .recordings
+                    .iter()
+                    .take(20)
+                    .map(|r| r.id.clone())
+                    .collect();
+            }
             self.editor.key(key, self.mode == Mode::Command);
             if self.mode == Mode::Search {
                 self.filter.query = self.editor.text.clone();
@@ -657,6 +713,9 @@ impl App {
             return;
         }
         if let Some((selected, values)) = &mut self.filter_edit {
+            if self.filter_input.text != values[*selected] {
+                self.filter_input.set(&values[*selected]);
+            }
             match key.code {
                 KeyCode::Down | KeyCode::Up if *selected < 3 => {
                     let candidates = &view.facets[*selected];
@@ -671,28 +730,19 @@ impl App {
                         };
                         self.facet_index = Some(index);
                         values[*selected] = candidates[index].value.clone();
+                        self.filter_input.set(&values[*selected]);
                     }
                 }
                 KeyCode::Esc => self.filter_edit = None,
                 KeyCode::Tab => {
                     *selected = (*selected + 1) % 4;
                     self.facet_index = None;
+                    self.filter_input.set(&values[*selected]);
                 }
                 KeyCode::BackTab => {
                     *selected = (*selected + 3) % 4;
                     self.facet_index = None;
-                }
-                KeyCode::Backspace => {
-                    values[*selected].pop();
-                    self.facet_index = None;
-                }
-                KeyCode::Char(c)
-                    if !c.is_control()
-                        && !key.modifiers.contains(KeyModifiers::CONTROL)
-                        && values[*selected].len() < 200 =>
-                {
-                    values[*selected].push(c);
-                    self.facet_index = None;
+                    self.filter_input.set(&values[*selected]);
                 }
                 KeyCode::Enter => match values[3].parse::<u32>() {
                     Ok(bitrate) => {
@@ -707,7 +757,11 @@ impl App {
                     }
                     Err(_) => self.message = "最低码率必须为非负整数".into(),
                 },
-                _ => {}
+                _ => {
+                    self.filter_input.key(key, false);
+                    values[*selected] = self.filter_input.text.clone();
+                    self.facet_index = None;
+                }
             }
             return;
         }
@@ -840,6 +894,8 @@ impl App {
                 }
             }
             KeyCode::Char('F') if self.source != Source::Recordings => {
+                self.filter_input
+                    .set(self.filter.country.as_deref().unwrap_or(""));
                 self.facet_index = None;
                 self.send(sender, Command::Facets);
                 self.filter_edit = Some((
@@ -861,6 +917,34 @@ impl App {
             KeyCode::Char('r') => {
                 self.send(sender, Command::RecordToggle);
             }
+            KeyCode::Char('m') => {
+                self.send(sender, Command::Mute);
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.clipboard = if self.source == Source::Recordings && self.filter == view.filter
+                {
+                    view.recordings
+                        .get(self.list.selected().unwrap_or(0))
+                        .map(|r| {
+                            if key.code == KeyCode::Char('Y') {
+                                r.path.clone()
+                            } else {
+                                r.id.clone()
+                            }
+                        })
+                } else {
+                    self.selected(view).map(|s| {
+                        if key.code == KeyCode::Char('Y') {
+                            s.primary_url().into()
+                        } else {
+                            s.stationuuid.clone()
+                        }
+                    })
+                };
+                if self.clipboard.is_some() {
+                    self.message = "已发送到终端剪贴板".into();
+                }
+            }
             KeyCode::Char(' ') => {
                 self.send(sender, Command::Pause);
             }
@@ -874,7 +958,8 @@ impl App {
         }
     }
     pub fn mouse(&mut self, event: MouseEvent, view: &View, sender: &CommandSender) {
-        if self.mode != Mode::Normal
+        if !self.mouse_enabled
+            || self.mode != Mode::Normal
             || self.help
             || self.filter_edit.is_some()
             || self.confirmation.is_some()

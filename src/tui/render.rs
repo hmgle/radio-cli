@@ -626,7 +626,16 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                     format!(
                         "{} {name}: {}",
                         if i == *selected { "›" } else { " " },
-                        values[i]
+                        if i == *selected {
+                            input_window(
+                                &values[i],
+                                app.filter_input.cursor.min(values[i].len()),
+                                rect.width.saturating_sub(16),
+                            )
+                            .0
+                        } else {
+                            values[i].clone()
+                        }
                     ),
                     if i == *selected {
                         Style::default().fg(Color::Yellow)
@@ -669,6 +678,16 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             );
         }
         frame.render_widget(Paragraph::new(text).block(panel("筛选".into(), true)), rect);
+        let label_width = format!("› {}: ", names[*selected]).width() as u16;
+        let (_, cursor) = input_window(
+            &values[*selected],
+            app.filter_input.cursor.min(values[*selected].len()),
+            rect.width.saturating_sub(16),
+        );
+        frame.set_cursor_position((
+            rect.x + 1 + label_width + cursor,
+            rect.y + 1 + *selected as u16,
+        ));
     }
     if app.help {
         let rect = popup(area, 88, area.height.saturating_sub(2));

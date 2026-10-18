@@ -4,7 +4,7 @@ use crate::{
     model::{Filter, Station},
 };
 use anyhow::{Result, bail};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use std::{path::PathBuf, time::Duration};
 
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -22,6 +22,7 @@ fn priority(command: &Command) -> bool {
     matches!(
         command,
         Command::Pause
+            | Command::Mute
             | Command::Stop
             | Command::RecordStop
             | Command::Volume(_)
@@ -98,6 +99,8 @@ impl CommandReceiver {
 }
 
 pub(super) enum Command {
+    Mute,
+    SetLanguage(String),
     Facets,
     Station(crate::cli::StationAction),
     Search(Filter),
@@ -136,6 +139,8 @@ pub(super) enum Command {
 }
 
 pub(super) enum Parsed {
+    Mouse(bool),
+    HelpText(String),
     Worker(Command),
     Search(Filter),
     Source(Source, crate::cli::Page),
@@ -152,6 +157,11 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "play",
     "random",
     "pause",
+    "mute",
+    "set language en",
+    "set language zh-CN",
+    "set mouse true",
+    "set mouse false",
     "stop",
     "volume",
     "record",
@@ -212,8 +222,28 @@ pub(super) fn parse(
         }
         "q" | "quit" if words.len() == 1 => return Ok(Parsed::Quit),
         "help" if words.len() == 1 => return Ok(Parsed::Help),
+        "help" => {
+            let mut root = Cli::command();
+            let mut selected = &mut root;
+            for word in &words[1..] {
+                selected = selected
+                    .find_subcommand_mut(word)
+                    .ok_or_else(|| anyhow::anyhow!("未知命令: {word}"))?;
+            }
+            return Ok(Parsed::HelpText(selected.render_long_help().to_string()));
+        }
+        "set" if words.len() == 3 => match words[1].as_str() {
+            "language" if matches!(words[2].as_str(), "en" | "zh-CN") => {
+                return Ok(Parsed::Worker(Command::SetLanguage(words[2].clone())));
+            }
+            "mouse" if matches!(words[2].as_str(), "true" | "false") => {
+                return Ok(Parsed::Mouse(words[2] == "true"));
+            }
+            _ => bail!("用法: set language en|zh-CN / set mouse true|false"),
+        },
         "sync-cancel" if words.len() == 1 => return Ok(Parsed::Worker(Command::Cancel)),
         "pause" if words.len() == 1 => return Ok(Parsed::Worker(Command::Pause)),
+        "mute" if words.len() == 1 => return Ok(Parsed::Worker(Command::Mute)),
         "stop" if words.len() == 1 => return Ok(Parsed::Worker(Command::Stop)),
         "volume" => {
             let value = words
@@ -345,7 +375,8 @@ Ctrl-h/j/k/l 或 Ctrl-方向键  按空间移动焦点\n\
 [ / ] 切换目录分类     j/k、方向键  导航/滚动\n\
 gg / G  首项/末项     Ctrl-u/d  移动十项\n\
 Enter  播放列表选中项（来源面板中进入列表）\n\
-Space 暂停  n 随机  f 收藏选中项  r 录音  +/- 音量\n\
+Space 暂停  m 静音  n 随机  f 收藏选中项  r 录音  +/- 音量\n\
+y 复制 UUID/录音 ID · Y 复制 URL/文件路径（OSC 52）\n\
 /  搜索模式（Enter 确认，Esc 恢复原搜索）\n\
 F  筛选对话框     F5 刷新     ?  帮助     q / Ctrl-C 退出\n\n\
 COMMAND 命令模式\n\
@@ -372,10 +403,96 @@ Home / Ctrl-a 行首；End / Ctrl-e 行尾；Ctrl-u 清空\n\n\
 :station backups UUID [--add URL] [--remove URL]\n\
 :record [UUID] [--duration 30m] [--output-dir 目录]\n\
 :record stop            收尾录音\n\
-:pause / :stop / :volume 70\n\
+:pause / :mute / :stop / :volume 70\n\
+:help record            查看 CLI 命令用法\n\
+:set language en|zh-CN  切换消息语言（静态面板仍为中文）\n\
+:set mouse true|false   鼠标捕获；false 可用终端选择文本\n\
+命令历史持久保存最近 100 条（数据目录 command-history.json）\n\
 :doctor                 检查音频依赖与目录权限\n\
 :focus sources|list|details|player|activity\n\
 :quit / :q              收尾并退出\n\n\
 命令只调用内置操作，不执行 shell。输入支持引号和中文。\n\
 码率/编码来自目录，可能滞后；实际音频由播放器处理。\n\
 Esc / ? 关闭帮助；j/k / PgUp/PgDn 滚动。";
+
+pub(super) fn completion_candidates(
+    text: &str,
+    stations: &[String],
+    recordings: &[String],
+) -> Vec<String> {
+    let mut result: Vec<String> = COMPLETIONS
+        .iter()
+        .filter(|s| s.starts_with(text))
+        .map(|s| (*s).into())
+        .collect();
+    let Ok(words) = shell_words::split(text) else {
+        return result;
+    };
+    let Some(command) = words.first().map(String::as_str) else {
+        return result;
+    };
+    let start = text.rfind(char::is_whitespace).map_or(0, |i| i + 1);
+    let base = &text[..start];
+    let prefix = &text[start..];
+    let mut values: Vec<String> = vec![];
+    let preceding = if prefix.is_empty() {
+        words.last()
+    } else {
+        words.iter().rev().nth(1)
+    }
+    .map(String::as_str);
+    if preceding == Some("--duration") {
+        values.extend(["10m", "30m", "1h"].map(String::from));
+    } else if preceding == Some("--sort") {
+        values.extend(["name", "bitrate", "votes", "clickcount", "random"].map(String::from));
+    } else {
+        let options: &[&str] = match command {
+            "record" => &["--duration", "--output-dir"],
+            "search" | "random" => &[
+                "--country",
+                "--language",
+                "--tag",
+                "--min-bitrate",
+                "--limit",
+                "--offset",
+                "--sort",
+            ],
+            "station" if words.get(1).map(String::as_str) == Some("add") => &["--backup-url"],
+            "station" if words.get(1).map(String::as_str) == Some("edit") => {
+                &["--name", "--url", "--backup-url"]
+            }
+            "station" if words.get(1).map(String::as_str) == Some("remove") => {
+                &["--keep-references"]
+            }
+            "station" if words.get(1).map(String::as_str) == Some("backups") => {
+                &["--add", "--remove"]
+            }
+            "recordings" if words.get(1).map(String::as_str) == Some("remove") => &["--index-only"],
+            "history" | "favorites" | "recordings" => &["--limit", "--offset"],
+            _ => &[],
+        };
+        values.extend(options.iter().map(|s| (*s).into()));
+        if matches!(command, "record" | "play" | "info")
+            && words.len() <= if prefix.is_empty() { 1 } else { 2 }
+        {
+            values.extend_from_slice(stations);
+        }
+        if command == "recordings"
+            && matches!(words.get(1).map(String::as_str), Some("play" | "remove"))
+        {
+            values.extend_from_slice(recordings);
+        }
+        if text == "station add " {
+            values.push("'Station name' https://example.com/live".into());
+        }
+    }
+    result.extend(
+        values
+            .into_iter()
+            .filter(|value| value.starts_with(prefix))
+            .map(|value| format!("{base}{value}")),
+    );
+    let mut unique = std::collections::HashSet::new();
+    result.retain(|candidate| unique.insert(candidate.clone()));
+    result
+}

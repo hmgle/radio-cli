@@ -228,6 +228,13 @@ impl Engine {
     pub fn pause(&mut self) -> Result<()> {
         self.playback.pause(&mut self.session, &mut self.recording)
     }
+    pub fn mute(&mut self) -> Result<()> {
+        self.playback
+            .player
+            .as_mut()
+            .context(DomainError::new(ErrorCode::NotPlaying))?
+            .toggle_mute()
+    }
 
     pub fn volume(&mut self, delta: i32) -> Result<()> {
         self.playback

@@ -442,7 +442,7 @@ fn editor_handles_unicode_cursor_completion_and_history_draft() {
     assert_eq!(editor.text, "sync-cancel");
     editor.key(key(KeyCode::BackTab), true);
     assert_eq!(editor.text, "sync");
-    editor.remember();
+    editor.remember().unwrap();
     editor.begin("draft");
     editor.key(key(KeyCode::Up), true);
     assert_eq!(editor.text, "sync");
@@ -1500,5 +1500,107 @@ fn station_refresh_does_not_read_recordings_until_that_source_is_selected() {
             &data
         )
         .is_err()
+    );
+}
+
+#[test]
+fn filter_popup_reuses_unicode_cursor_and_word_editing() {
+    let mut app = App::default();
+    let data = view();
+    let (sender, _) = command::channel(10);
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    app.key(key(KeyCode::Tab), &data, &sender);
+    for c in "中文 jazz".chars() {
+        app.key(key(KeyCode::Char(c)), &data, &sender);
+    }
+    app.key(key(KeyCode::Home), &data, &sender);
+    app.key(key(KeyCode::Right), &data, &sender);
+    app.key(key(KeyCode::Delete), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[1], "中 jazz");
+    app.key(key(KeyCode::End), &data, &sender);
+    app.key(
+        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[1], "中 ");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert_eq!(app.filter.language.as_deref(), Some("中"));
+}
+
+#[test]
+fn command_completions_are_scoped_to_arguments_and_selected_items() {
+    let stations = vec!["selected-uuid".into()];
+    let candidates = command::completion_candidates("record ", &stations, &[]);
+    assert!(candidates.contains(&"record selected-uuid".into()));
+    assert!(candidates.contains(&"record --duration".into()));
+    assert!(!candidates.iter().any(|s| s.contains("--country")));
+    let add = command::completion_candidates("station add ", &[], &[]);
+    assert!(add.iter().any(|s| s.contains("https://")));
+    let backup =
+        command::completion_candidates("station add '中文 name' https://example.com --b", &[], &[]);
+    assert_eq!(
+        backup,
+        vec!["station add '中文 name' https://example.com --backup-url"]
+    );
+    assert_eq!(
+        command::completion_candidates("record --duration ", &stations, &[]),
+        vec![
+            "record --duration 10m",
+            "record --duration 30m",
+            "record --duration 1h"
+        ]
+    );
+    assert!(
+        matches!(command::parse("help record",None,None,&Filter::default()).unwrap(),Parsed::HelpText(text) if text.contains("--duration"))
+    );
+    assert!(command::parse("set language invalid", None, None, &Filter::default()).is_err());
+}
+
+#[test]
+fn command_history_survives_sessions_with_private_bounded_storage() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("command-history.json");
+    let mut editor = Editor::default();
+    editor.load_history(path.clone()).unwrap();
+    for i in 0..105 {
+        editor.set(&format!("search station {i}"));
+        editor.remember().unwrap();
+    }
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let saved: Vec<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved.len(), 100);
+    assert_eq!(saved[0], "search station 5");
+    let mut next = Editor::default();
+    next.load_history(path).unwrap();
+    next.begin("draft");
+    next.key(key(KeyCode::Up), true);
+    assert_eq!(next.text, "search station 104");
+    next.key(key(KeyCode::Down), true);
+    assert_eq!(next.text, "draft");
+}
+
+#[test]
+fn mute_copy_and_mouse_setting_route_without_shell_execution() {
+    let data = view();
+    let mut app = App::default();
+    let (sender, receiver) = command::channel(10);
+    app.key(key(KeyCode::Char('m')), &data, &sender);
+    assert!(matches!(receiver.try_recv(), Ok(Command::Mute)));
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert_eq!(
+        app.clipboard.as_deref(),
+        Some(data.rows[0].stationuuid.as_str())
+    );
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    app.editor.set("set mouse false");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(!app.mouse_enabled);
+    assert!(
+        matches!(command::parse("set language en",None,None,&Filter::default()).unwrap(),Parsed::Worker(Command::SetLanguage(language)) if language == "en")
     );
 }
