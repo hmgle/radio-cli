@@ -694,12 +694,14 @@ impl App {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => self.help = false,
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.help_scroll = self.help_scroll.saturating_add(1).min(60)
+                    self.help_scroll = self.help_scroll.saturating_add(1).min(4096)
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.help_scroll = self.help_scroll.saturating_sub(1)
                 }
-                KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(10).min(60),
+                KeyCode::PageDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(10).min(4096)
+                }
                 KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
                 _ => {}
             }

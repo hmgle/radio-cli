@@ -1605,3 +1605,34 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
         matches!(command::parse("set language en",None,None,&Filter::default()).unwrap(),Parsed::Worker(Command::SetLanguage(language)) if language == "en")
     );
 }
+
+#[test]
+fn failure_details_sanitize_external_control_text_and_scroll_the_full_tail() {
+    let mut data = view();
+    data.status.recording_state = crate::engine::RecordingState::Failed {
+        reason: format!(
+            "\x1b]0;injected\x07\n{}\nlast FFmpeg failure",
+            "detail line\n".repeat(150)
+        ),
+    };
+    let mut app = App::default();
+    let (sender, _) = command::channel(4);
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    let mut initial = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    initial
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    assert!(!text(&initial).contains('\x1b'));
+    assert!(!text(&initial).contains('\x07'));
+    for _ in 0..30 {
+        app.key(key(KeyCode::PageDown), &data, &sender);
+    }
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let rendered = text(&terminal);
+    assert!(!rendered.contains('\x1b'));
+    assert!(!rendered.contains('\x07'));
+    assert!(rendered.contains("last FFmpeg failure"));
+}

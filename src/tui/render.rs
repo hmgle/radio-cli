@@ -710,18 +710,19 @@ fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> Paragraph<'a>
     let width = usize::from(rect.width.saturating_sub(2).max(1));
     let mut lines = Vec::new();
     for line in text.lines() {
+        let line = crate::clean_text(line);
         let mut start = 0;
         let mut cells = 0;
         for (index, c) in line.char_indices() {
             let size = c.width().unwrap_or(0);
             if cells + size > width && index > start {
-                lines.push(Line::from(&line[start..index]));
+                lines.push(Line::from(line[start..index].to_owned()));
                 start = index;
                 cells = 0;
             }
             cells += size;
         }
-        lines.push(Line::from(&line[start..]));
+        lines.push(Line::from(line[start..].to_owned()));
     }
     let visible = usize::from(rect.height.saturating_sub(2));
     let maximum = lines.len().saturating_sub(visible).min(u16::MAX as usize) as u16;

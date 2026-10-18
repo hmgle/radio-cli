@@ -47,7 +47,7 @@ uv run scripts/measure_resources.py --binary target/release/radio
 
 ## 0.3.0 / S1–S3 validation — 2026-10-19
 
-- All 100 default tests pass, including real mpv/FFmpeg and pseudo-terminal cases;
+- All 101 default tests pass, including real mpv/FFmpeg and pseudo-terminal cases;
   the opt-in 50,000-station benchmark also passes. Tests use isolated data and
   local HTTP sources. A null audio backend exercises real IPC and media EOF.
 - Coverage includes atomic bootstrap cancellation/rollback, literal Unicode
@@ -71,3 +71,8 @@ uv run scripts/measure_resources.py --binary target/release/radio
 
 This release implements #36–#57. S4 (#58–#64) remains backlog. Static TUI/Clap
 translation is the explicitly separate follow-up to the i18n foundation #42.
+
+The extracted 0.3.0 archive also passes CLI/JSON/exits/doctor and real local mpv
+playback-to-EOF/deletion smoke tests. Completion files and man output match the
+binary; bash/zsh syntax checks and SHA-256 verification pass. Repackaging the same
+commit produces the same archive hash. The internal roadmap is not archived.
