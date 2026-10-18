@@ -4,11 +4,11 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     if args.iter().any(|s| s == "--version") { println!("fake mpv"); return; }
     let socket = args.iter().find_map(|s| s.strip_prefix("--input-ipc-server=")).unwrap();
+    let path = std::env::current_exe().unwrap().with_extension("commands");
+    let mut log = OpenOptions::new().create(true).append(true).open(path).unwrap();
     let listener = UnixListener::bind(socket).unwrap();
     let (mut stream, _) = listener.accept().unwrap();
     let input = BufReader::new(stream.try_clone().unwrap());
-    let path = std::env::current_exe().unwrap().with_extension("commands");
-    let mut log = OpenOptions::new().create(true).append(true).open(path).unwrap();
     let mut volume = args.iter().find_map(|s| s.strip_prefix("--volume=")).unwrap_or("80").parse::<i32>().unwrap();
     let mut paused = false;
     for line in input.lines() {
