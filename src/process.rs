@@ -86,6 +86,15 @@ impl MediaLock {
     }
 }
 
+impl Drop for MediaLock {
+    fn drop(&mut self) {
+        // A concurrent fork may briefly inherit the open description before
+        // exec closes it. Explicitly unlock when the last owner finishes;
+        // unrelated children must not prolong the media-session lifetime.
+        let _ = fs2::FileExt::unlock(&self._file);
+    }
+}
+
 pub fn drain(mut reader: impl Read + Send + 'static, cap: usize) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut result = Vec::new();
