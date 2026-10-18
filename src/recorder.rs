@@ -139,20 +139,37 @@ fn complete_finalization(store: &Store, record: &mut Recording) -> Result<()> {
     Ok(())
 }
 
-pub fn recover(store: &Store) -> Result<()> {
+pub fn recover(store: &Store) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
     for mut r in store.unfinished_recordings()? {
-        if r.status == "finalizing" {
-            complete_finalization(store, &mut r)?;
-            continue;
+        let result = (|| -> Result<()> {
+            if r.status == "finalizing" {
+                return complete_finalization(store, &mut r);
+            }
+            if r.status == "recording" {
+                r.status = "interrupted".into();
+                r.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+                r.error = Some("上一个会话未正常结束；保留临时文件供恢复".into());
+                r.size_bytes = fs::metadata(&r.path).map(|m| m.len()).unwrap_or(0);
+                store.save_recording(&r)?;
+            }
+            sidecar(&r)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let message = format!(
+                "恢复失败: 录音 {} ({})：{error:#}；使用 recordings recover 重试",
+                r.id, r.path
+            );
+            r.error = Some(message.clone());
+            if let Err(db_error) = store.save_recording(&r) {
+                warnings.push(format!("{message}；数据库: {db_error:#}"));
+            } else {
+                warnings.push(message);
+            }
         }
-        r.status = "interrupted".into();
-        r.stopped_at = Some(chrono::Utc::now().to_rfc3339());
-        r.error = Some("上一个会话未正常结束；保留临时文件供恢复".into());
-        r.size_bytes = fs::metadata(&r.path).map(|m| m.len()).unwrap_or(0);
-        store.save_recording(&r)?;
-        sidecar(&r)?;
     }
-    Ok(())
+    Ok(warnings)
 }
 
 impl Recorder {

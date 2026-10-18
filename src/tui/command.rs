@@ -166,7 +166,9 @@ pub(super) fn parse(
             crate::cli::Favorite::Add { uuid } => Parsed::Worker(Command::Favorite(uuid, true)),
             crate::cli::Favorite::Remove { uuid } => Parsed::Worker(Command::Favorite(uuid, false)),
         },
-        Some(Action::Recordings { .. }) => Parsed::Source(Source::Recordings),
+        Some(Action::Recordings {
+            action: crate::cli::RecordingAction::List,
+        }) => Parsed::Source(Source::Recordings),
         Some(Action::Record {
             uuid,
             duration,

@@ -122,6 +122,7 @@ pub enum StationAction {
 #[derive(Subcommand)]
 pub enum RecordingAction {
     List,
+    Recover,
 }
 
 fn emit(value: &impl serde::Serialize) -> Result<()> {
@@ -239,6 +240,24 @@ pub fn run(cli: Cli) -> Result<()> {
             }
         }
         Action::Recordings {
+            action: RecordingAction::Recover,
+        } => {
+            let _lock = crate::process::MediaLock::acquire(&config.runtime_dir)?;
+            let warnings = recorder::recover(&store)?;
+            if cli.json {
+                emit(&serde_json::json!({"warnings": warnings}))?;
+            } else if warnings.is_empty() {
+                println!("恢复完成");
+            } else {
+                for warning in &warnings {
+                    eprintln!("{warning}");
+                }
+            }
+            if !warnings.is_empty() {
+                bail!("部分录音仍需恢复，详见 recordings list");
+            }
+        }
+        Action::Recordings {
             action: RecordingAction::List,
         } => {
             let records = store.recordings(100)?;
@@ -251,7 +270,11 @@ pub fn run(cli: Cli) -> Result<()> {
                         r.id,
                         r.status,
                         crate::clean_text(&r.station_name),
-                        crate::clean_text(&r.path)
+                        crate::clean_text(&format!(
+                            "{} {}",
+                            r.path,
+                            r.error.as_deref().unwrap_or("")
+                        ))
                     );
                 }
             }

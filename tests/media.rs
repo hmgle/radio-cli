@@ -453,3 +453,25 @@ fn progress_flood_does_not_lose_final_duration() {
     assert_eq!(record.status, "complete", "{record:?}");
     assert_eq!(record.media_duration_ms, Some(2000));
 }
+
+#[test]
+fn inaccessible_old_recordings_do_not_block_media_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    for i in 0..2 {
+        let r: radio_cli::model::Recording = serde_json::from_value(serde_json::json!({
+            "id":format!("old-{i}"), "stationuuid":"old", "station_name":"old", "source_url_resolved":"https://example.com", "started_at":"2026-01-01", "stopped_at":null,
+            "media_duration_ms":null, "codec":"mp3", "container":"mp3", "path":dir.path().join(format!("missing-{i}/old.part")), "size_bytes":0,"status":"recording","error":null
+        })).unwrap();
+        store.save_recording(&r).unwrap();
+    }
+    drop(store);
+    let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    assert!(engine.status.message.contains("old-0"));
+    assert!(engine.status.message.contains("old-1"));
+    for r in engine.store.recordings(10).unwrap() {
+        assert_eq!(r.status, "interrupted");
+        assert!(r.error.unwrap().contains(&r.path));
+    }
+}

@@ -52,12 +52,16 @@ impl Engine {
     pub fn new(config: Config, stop: Arc<AtomicBool>) -> Result<Self> {
         let lock = MediaLock::acquire(&config.runtime_dir)?;
         let store = Store::open(&config.data_dir.join("radio.db"))?;
-        recorder::recover(&store)?;
+        let recovery_warnings = recorder::recover(&store)?;
         let directory = Directory::new(&config, stop.clone())?;
         let status = Status {
             station: None,
             title: String::new(),
-            message: "就绪".into(),
+            message: if recovery_warnings.is_empty() {
+                "就绪".into()
+            } else {
+                recovery_warnings.join("\n")
+            },
             playing: false,
             paused: false,
             volume: config.settings.volume,
