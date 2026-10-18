@@ -46,6 +46,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         bail!("TUI 需要交互终端");
     }
     let engine = Engine::new(config, stop.clone())?;
+    let source = state::Source::restore(&engine.store, engine.config.settings.resume)?;
     let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
     let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
@@ -56,6 +57,9 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
         terminal.clear()?;
         let mut app = App::default();
+        app.source = source;
+        app.filter.favorites = source == state::Source::Favorites;
+        app.filter.history = source == state::Source::History;
         let mut revision = 0;
         let mut dirty = true;
         while !stop.load(Ordering::Relaxed) && !app.quit {

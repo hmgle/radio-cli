@@ -440,6 +440,55 @@ fn live_stream_reconnects_after_a_ten_second_outage_without_duplicate_history() 
 }
 
 #[test]
+fn runtime_preferences_survive_sessions_without_rewriting_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let original = "# handwritten\nvolume = 80\nresume = true\n";
+    fs::write(&config_path, original).unwrap();
+    let mut config = radio_cli::config::Config::load(
+        Some(&config_path),
+        Some(dir.path()),
+        Some("http://127.0.0.1:1"),
+    )
+    .unwrap();
+    config.prepare().unwrap();
+    config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into();
+    let stop = Arc::new(AtomicBool::new(false));
+    let id;
+    {
+        let mut engine = Engine::new(config.clone(), stop.clone()).unwrap();
+        let station = radio_cli::service::add_station(
+            &mut engine.store,
+            "Remembered".into(),
+            "https://example.com/live".into(),
+            &[],
+        )
+        .unwrap();
+        id = station.stationuuid;
+        engine.play(&id).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !engine.status.playing {
+            engine.tick().unwrap();
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        engine.volume(-15).unwrap();
+        engine.shutdown().unwrap();
+    }
+    let mut resumed = Engine::new(config.clone(), stop.clone()).unwrap();
+    assert_eq!(resumed.status.volume, 65);
+    assert_eq!(resumed.config.settings.volume, 65);
+    resumed.resume_last_station().unwrap();
+    assert_eq!(resumed.status.station.as_ref().unwrap().stationuuid, id);
+    resumed.shutdown().unwrap();
+    resumed.store.set_meta("pref_volume", "999").unwrap();
+    drop(resumed);
+    let fresh = Engine::new(config, stop).unwrap();
+    assert_eq!(fresh.status.volume, 80);
+    assert_eq!(fs::read_to_string(config_path).unwrap(), original);
+}
+
+#[test]
 fn engine_uses_explicit_backup_without_merging_names() {
     let dir = tempfile::tempdir().unwrap();
     let Some(config) = mpv_config(dir.path()) else {

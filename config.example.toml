@@ -3,6 +3,8 @@ mpv = "mpv"
 ffmpeg = "ffmpeg"
 ffprobe = "ffprobe"
 volume = 80
+# Resume the last TUI station and source; volume is always remembered.
+resume = false
 # Language precedence: --lang > RADIO_LANG > language > LC_ALL/LANG > en.
 # language = "en" # or "zh-CN"
 connect_timeout_secs = 5

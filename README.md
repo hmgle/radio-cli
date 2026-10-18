@@ -99,6 +99,11 @@ and does not duplicate history or click reports. Stop, switching stations,
 and exit cancel pending retries. Exhausted retries use the normal fallback
 chain; initial connection failures retain their existing fallback behavior.
 
+Runtime volume is remembered in SQLite. Set `resume = true` to restore the
+last successfully played station and TUI source on startup (default: false).
+The handwritten config file is never rewritten. Invalid saved volume values
+fall back to the validated config setting; unavailable last stations are skipped.
+
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - Recordings: `recordings/` under the data directory
