@@ -8,6 +8,8 @@ Linux 优先的轻量 CLI / TUI 网络收音机。Rust 管理本地目录与交�
 
 需要 Rust 1.88+、mpv、FFmpeg（含 ffprobe）。SQLite 已编入程序，不要求安装 SQLite 命令行工具。
 
+[发布页面](https://github.com/hmgle/radio-cli/releases)提供 Linux x86_64 预编译程序和校验和。使用静态程序无需 Rust 工具链，仍需单独安装 mpv 和 FFmpeg。升级兼容性变化见[更新日志](CHANGELOG.md)。
+
 ```sh
 # Debian / Ubuntu
 sudo apt install mpv ffmpeg

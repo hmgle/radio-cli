@@ -10,6 +10,8 @@ Homepage: <https://github.com/hmgle/radio-cli>
 
 Requires Rust 1.88+, mpv, and FFmpeg (including ffprobe). SQLite is compiled into the binary, so no SQLite command-line tools are needed.
 
+Prebuilt Linux x86_64 binaries and checksums are available on the [releases page](https://github.com/hmgle/radio-cli/releases). The static binary needs no Rust toolchain; install mpv and FFmpeg separately. See the [changelog](CHANGELOG.md) for upgrade compatibility notes.
+
 ```sh
 # Debian / Ubuntu
 sudo apt install mpv ffmpeg

@@ -2,7 +2,7 @@
 
 复核基于第一轮汇总提交 `5ff086b`。八条建议中，1、2、4、5 是值得修复的问题，
 3、6 是值得采纳的实现改进，7 做了低成本防御性完善，8 保留现有取舍。
-全部后续提交已纳入本地 `fix/issues-integration`。
+全部后续提交已纳入 `fix/issues-integration`，通过逐项 PR 合入 `main`。
 
 ## 逐条结论
 
@@ -20,15 +20,16 @@
 ## 分支与提交
 
 以下分支按表中顺序堆叠，第一项基于 `5ff086b`，后续以前一项为基线。
-第一轮的 13 个 issue 分支保持原提交，后续修复由这些 review 分支承载。
+第一轮的 13 项修复提交均保留，后续修复由这些 review 分支承载。发布前将 CI
+发现的重复条件清理和测试播放器日志初始化竞态修正补入对应 issue PR，并同步到后续分支。
 
-| 分支 | 对应条目 | 提交 |
-|---|---|---|
-| `fix/review-pagination` | 1、2、3 | `cf2b1d9`、`853b65f` |
-| `fix/review-recovery-state` | 4 | `8b180af` |
-| `fix/review-atomic-favorites` | 5 | `67bd743` |
-| `fix/review-sync-policy` | 6 | `4963c62` |
-| `fix/review-terminal-size` | 7 | `f1a8fcd` |
+| 分支 | 对应条目 | 提交 | PR |
+|---|---|---|---|
+| `fix/review-pagination` | 1、2、3 | `cf2b1d9`、`853b65f` | [#27](https://github.com/hmgle/radio-cli/pull/27) |
+| `fix/review-recovery-state` | 4 | `8b180af` | [#28](https://github.com/hmgle/radio-cli/pull/28) |
+| `fix/review-atomic-favorites` | 5 | `67bd743` | [#29](https://github.com/hmgle/radio-cli/pull/29) |
+| `fix/review-sync-policy` | 6 | `4963c62` | [#30](https://github.com/hmgle/radio-cli/pull/30) |
+| `fix/review-terminal-size` | 7 | `f1a8fcd` | [#31](https://github.com/hmgle/radio-cli/pull/31) |
 
 ## 兼容性与验证
 
@@ -39,6 +40,7 @@
 - `cargo test --all-targets --locked`：57 项通过，1 项性能基准显式忽略；配置实际 mpv，媒体用例未因缺少 mpv 提前返回。
 - `cargo clippy --all-targets --locked -- -D warnings`、`cargo fmt --check`、`git diff --check` 均通过。
 - `cargo build --release --locked` 通过。
+- 发布前额外验证 musl 静态 release 目标，包含性能基准的全部 58 项测试通过；录音发布直接调用 Linux `renameat2` 系统调用，继续保证禁止覆盖已有目标。
 
 实际媒体测试环境的复现方式见[第一轮修复记录](issues-2026-10-18.md)。
-未推送分支、创建 PR、评论或关闭 GitHub issue。
+发布版本及兼容性说明见[更新日志](../CHANGELOG.md)和[GitHub Releases](https://github.com/hmgle/radio-cli/releases)。
