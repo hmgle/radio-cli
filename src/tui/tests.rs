@@ -537,3 +537,41 @@ fn rapid_shortcuts_apply_against_owner_state() {
             .favorite
     );
 }
+
+#[test]
+fn full_queue_retries_every_view_query_with_latest_filter() {
+    let mut data = view();
+    data.rows.resize(100, station("row"));
+    for action in 0..5 {
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send(Command::Pause).unwrap();
+        let mut app = App::default();
+        match action {
+            0 => app.key(key(KeyCode::Char(']')), &data, &tx),
+            1 => app.key(key(KeyCode::PageDown), &data, &tx),
+            2 => {
+                app.key(key(KeyCode::Char(':')), &data, &tx);
+                app.editor.set("search jazz");
+                app.key(key(KeyCode::Enter), &data, &tx);
+            }
+            3 => {
+                app.key(key(KeyCode::Char('F')), &data, &tx);
+                app.key(key(KeyCode::Enter), &data, &tx);
+            }
+            _ => {
+                for _ in 0..3 {
+                    app.key(key(KeyCode::Char(']')), &data, &tx);
+                }
+            }
+        }
+        assert!(app.search_due.is_some(), "action {action}");
+        rx.recv().unwrap();
+        app.flush_search(&tx);
+        assert!(app.search_due.is_none());
+        match rx.recv().unwrap() {
+            Command::Search(filter) => assert_eq!(filter, app.filter),
+            Command::Recordings => assert_eq!(app.source, Source::Recordings),
+            _ => panic!("expected retryable query"),
+        }
+    }
+}

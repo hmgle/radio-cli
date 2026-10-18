@@ -346,7 +346,14 @@ impl App {
         }
     }
     pub fn flush_search(&mut self, sender: &SyncSender<Command>) {
-        if self.send(sender, Command::Search(self.filter.clone())) {
+        if self.send(
+            sender,
+            if self.source == Source::Recordings {
+                Command::Recordings
+            } else {
+                Command::Search(self.filter.clone())
+            },
+        ) {
             self.search_due = None;
         } else {
             self.search_due = Some(Instant::now() + Duration::from_millis(200));
@@ -368,15 +375,7 @@ impl App {
         self.filter.favorites = source == Source::Favorites;
         self.filter.history = source == Source::History;
         self.filter.offset = 0;
-        self.search_due = None;
-        self.send(
-            sender,
-            if source == Source::Recordings {
-                Command::Recordings
-            } else {
-                Command::Search(self.filter.clone())
-            },
-        );
+        self.flush_search(sender);
     }
     fn focus_direction(&mut self, dx: i32, dy: i32) {
         let origin = self.rects[self.focus.index()];
@@ -468,7 +467,7 @@ impl App {
                         self.filter = filter;
                         self.reset_selection();
                         self.focus = Focus::List;
-                        self.send(sender, Command::Search(self.filter.clone()));
+                        self.flush_search(sender);
                     }
                     Parsed::Worker(command) => {
                         if matches!(command, Command::Info(_)) {
@@ -564,7 +563,7 @@ impl App {
                         self.filter.offset = 0;
                         self.filter_edit = None;
                         self.reset_selection();
-                        self.send(sender, Command::Search(self.filter.clone()));
+                        self.flush_search(sender);
                     }
                     Err(_) => self.message = "最低码率必须为非负整数".into(),
                 },
@@ -638,7 +637,7 @@ impl App {
                     return;
                 }
                 self.reset_selection();
-                self.send(sender, Command::Search(self.filter.clone()));
+                self.flush_search(sender);
             }
             KeyCode::PageDown => self.move_selection(10, view),
             KeyCode::PageUp => self.move_selection(-10, view),
