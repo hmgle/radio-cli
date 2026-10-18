@@ -86,7 +86,7 @@ fn commands_use_cli_arguments_and_context_without_shell_execution() {
     let current = data.status.station.as_ref();
     assert!(matches!(
         command::parse("sync", selected, current, &filter).unwrap(),
-        Parsed::Worker(Command::Sync)
+        Parsed::Worker(Command::Sync(false))
     ));
     match command::parse("station add '中文 电台' 'https://example.com/live?a=1&b=2' --backup-url https://example.com/backup",selected,current,&filter).unwrap(){
         Parsed::Worker(Command::Add{name,url,backups})=>{assert_eq!(name,"中文 电台");assert!(url.contains("&b=2"));assert_eq!(backups.len(),1);},_=>panic!()}
@@ -407,9 +407,9 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
     let worker_view = view.clone();
     let worker_stop = stop.clone();
     let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
-    sender.send(Command::Sync).unwrap();
+    sender.send(Command::Sync(false)).unwrap();
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    sender.send(Command::Sync).unwrap();
+    sender.send(Command::Sync(false)).unwrap();
     sender.send(Command::Volume(37)).unwrap();
     wait_for(|| view.lock().unwrap().status.volume == 37);
     assert!(view.lock().unwrap().task_active);
@@ -426,7 +426,7 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
     wait_for(|| !view.lock().unwrap().task_active);
     assert!(store.meta("last_sync").unwrap().is_none());
     assert!(store.station(&old.stationuuid).unwrap().active);
-    sender.send(Command::Sync).unwrap();
+    sender.send(Command::Sync(false)).unwrap();
     wait_for(|| store.meta("last_sync").unwrap().is_some());
     wait_for(|| {
         view.lock()

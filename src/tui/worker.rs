@@ -80,7 +80,7 @@ pub(super) struct CatalogJob {
     bootstrap: bool,
 }
 impl CatalogJob {
-    fn start(config: Config, bootstrap: bool) -> Result<Self> {
+    fn start(config: Config, bootstrap: bool, accept_shrink: bool) -> Result<Self> {
         let cancel = Arc::new(AtomicBool::new(false));
         let progress = Arc::new(AtomicUsize::new(0));
         let job_cancel = cancel.clone();
@@ -95,9 +95,13 @@ impl CatalogJob {
                     if bootstrap {
                         directory.bootstrap(&store)
                     } else {
-                        directory.sync(&mut store, |n| {
-                            job_progress.store(n, Ordering::Relaxed);
-                        })
+                        directory.sync_with_policy(
+                            &mut store,
+                            |n| {
+                                job_progress.store(n, Ordering::Relaxed);
+                            },
+                            accept_shrink,
+                        )
                     }
                 })();
                 let _ = tx.send(result);
@@ -233,11 +237,15 @@ pub(super) fn execute(
             ));
             refresh(engine, filter, view)?;
         }
-        Command::Sync => {
+        Command::Sync(accept_shrink) => {
             if job.is_some() {
                 bail!("目录任务正在运行；使用 :sync-cancel 取消");
             }
-            *job = Some(CatalogJob::start(engine.config.clone(), false)?);
+            *job = Some(CatalogJob::start(
+                engine.config.clone(),
+                false,
+                accept_shrink,
+            )?);
             let mut data = view.lock().unwrap();
             data.task_active = true;
             data.task = "同步中 · 已获取 0 台".into();
@@ -301,7 +309,7 @@ pub(super) fn run(
         data.task_active = true;
         data.task = "获取热门电台…".into();
         data.log("开始获取热门目录");
-        Some(CatalogJob::start(engine.config.clone(), true)?)
+        Some(CatalogJob::start(engine.config.clone(), true, false)?)
     } else {
         None
     };

@@ -64,7 +64,7 @@ fn sync_fetches_pages_and_deduplicates_uuid() {
     let mut client = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
     let mut progress = vec![];
     assert_eq!(client.sync(&mut store, |n| progress.push(n)).unwrap(), 2);
-    assert_eq!(progress, vec![1000, 1001]);
+    assert_eq!(progress, vec![0, 1000, 1001]);
 }
 
 #[test]
@@ -99,5 +99,51 @@ fn invalid_upstream_identity_does_not_truncate_pagination() {
     let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
     let mut client = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
     assert_eq!(client.sync(&mut store, |_| {}).unwrap(), 1);
+    assert_eq!(store.count().unwrap(), 1);
+}
+
+#[test]
+fn shrink_requires_diagnosable_explicit_acceptance() {
+    let row = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "new".into(),
+        ..Station::default()
+    };
+    let body = serde_json::to_vec(&vec![row]).unwrap();
+    let server = Server::new(move |_, s| response(s, 200, "application/json", &body));
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.api_url = Some(server.url.clone());
+    let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+    for i in 0..8 {
+        store
+            .upsert(&Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: format!("old {i}"),
+                active: true,
+                ..Station::default()
+            })
+            .unwrap();
+    }
+    let mut directory = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
+    assert!(
+        directory
+            .sync(&mut store, |_| {})
+            .unwrap_err()
+            .to_string()
+            .contains("accept-shrink")
+    );
+    assert_eq!(store.count().unwrap(), 8);
+    let report: serde_json::Value =
+        serde_json::from_str(&store.meta("last_sync_attempt").unwrap().unwrap()).unwrap();
+    assert_eq!(report["raw"], 1);
+    assert_eq!(report["previous"], 8);
+    assert_eq!(report["server"], server.url);
+    assert_eq!(
+        directory
+            .sync_with_policy(&mut store, |_| {}, true)
+            .unwrap(),
+        1
+    );
     assert_eq!(store.count().unwrap(), 1);
 }

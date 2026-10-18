@@ -130,7 +130,10 @@ fn list_stations(store: &Store, mut filter: Filter, page: &Page, json: bool) -> 
 #[derive(Subcommand)]
 pub enum Action {
     Tui,
-    Sync,
+    Sync {
+        #[arg(long)]
+        accept_shrink: bool,
+    },
     Search(Search),
     Info {
         uuid: String,
@@ -230,9 +233,13 @@ pub fn run(cli: Cli) -> Result<()> {
             crate::tui::run(config, stop)?;
         }
         Action::Doctor => doctor(&config, cli.json, &stop)?,
-        Action::Sync => {
+        Action::Sync { accept_shrink } => {
             let mut directory = Directory::new(&config, stop.clone())?;
-            let count = directory.sync(&mut store, |n| eprintln!("已获取 {n} 台…"))?;
+            let count = directory.sync_with_policy(
+                &mut store,
+                |n| eprintln!("已获取 {n} 台…"),
+                accept_shrink,
+            )?;
             if cli.json {
                 emit(&serde_json::json!({"stations":count,"last_sync":store.meta("last_sync")?}))?;
             } else {

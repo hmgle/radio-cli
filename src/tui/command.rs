@@ -29,7 +29,7 @@ pub(super) enum Command {
         url: String,
         backups: Vec<String>,
     },
-    Sync,
+    Sync(bool),
     Cancel,
     Recordings(Filter),
     Info(String, u64),
@@ -158,7 +158,7 @@ pub(super) fn parse(
         bail!("TUI 命令不接受进程级配置参数");
     }
     let parsed = match cli.command {
-        Some(Action::Sync) => Parsed::Worker(Command::Sync),
+        Some(Action::Sync { accept_shrink }) => Parsed::Worker(Command::Sync(accept_shrink)),
         Some(Action::Search(search)) => Parsed::Search(search.filter()),
         Some(Action::Play { uuid }) => Parsed::Worker(Command::Play(uuid)),
         Some(Action::Random(search)) => Parsed::Worker(Command::Random(search.filter())),
