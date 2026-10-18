@@ -32,6 +32,8 @@ toml = "0.9"
 tokio = { version = "1", features = ["rt", "time"] }
 unicode-width = "0.2"
 uuid = { version = "1", features = ["v4", "serde"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

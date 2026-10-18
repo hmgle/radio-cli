@@ -160,3 +160,8 @@ Tests use local HTTP/ICY/HLS sources and do not depend on public stations. Recor
 The first release does not provide a background service, time-shift caching, song recognition, lyrics, maps, or background full-catalog probing. The catalog comes from [Radio Browser](https://www.radio-browser.info/); audio connects directly to stations. RoamDial's private services are not used, and backup links are never auto-merged by name. See the [implementation notes](docs/implementation.md) for more design details (in Chinese).
 
 Ctrl-C quits and finalizes recordings from every TUI mode. Esc cancels editing or closes a popup.
+
+Generate shell integration with `radio completions bash|zsh|fish`. For example,
+`radio completions zsh > _radio` writes a completion file for your zsh `$fpath`.
+`radio man > radio.1` generates the manual page. Release archives include bash,
+zsh and fish completions plus `man/radio.1`.

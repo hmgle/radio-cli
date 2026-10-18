@@ -53,3 +53,7 @@ radio --json search jazz                  # legacy array
 radio --json-v2 search jazz               # {"ok":true,"data":[...]}
 radio --lang en --json-v2 info missing    # station_not_found; exit 1
 ```
+
+`completions <shell>` and `man` return generated text normally; with `--json`
+it is a JSON string, and with `--json-v2` it is the envelope's `data` string.
+Generation does not read configuration, create data directories or open SQLite.
