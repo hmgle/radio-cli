@@ -313,7 +313,7 @@ impl Store {
     pub fn unfinished_recordings(&self) -> Result<Vec<Recording>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT json FROM recordings WHERE status='recording'")?;
+            .prepare("SELECT json FROM recordings WHERE status IN ('recording','finalizing')")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|json| Ok(serde_json::from_str(&json?)?)).collect()
     }
