@@ -93,6 +93,12 @@ its name for favorites, history, and recordings and clears its stream URLs;
 UUID --add URL --remove URL` to manage fallback URLs. Normalized duplicate URLs
 are rejected with the existing UUID. TUI removal asks for a second confirmation.
 
+Established live streams reconnect after unexpected EOF/errors at most three
+times, after 1, 3, and 7 seconds. A reconnect keeps the same station and URL
+and does not duplicate history or click reports. Stop, switching stations,
+and exit cancel pending retries. Exhausted retries use the normal fallback
+chain; initial connection failures retain their existing fallback behavior.
+
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - Recordings: `recordings/` under the data directory

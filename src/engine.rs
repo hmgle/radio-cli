@@ -52,6 +52,9 @@ pub struct Engine {
     tried: Vec<String>,
     refreshed: bool,
     confirmed: bool,
+    history_recorded: bool,
+    reconnect_attempts: usize,
+    reconnect_due: Option<Instant>,
     started: Instant,
     random_filter: Option<Filter>,
     random_tried: Vec<String>,
@@ -112,6 +115,9 @@ impl Engine {
             tried: vec![],
             refreshed: false,
             confirmed: false,
+            history_recorded: false,
+            reconnect_attempts: 0,
+            reconnect_due: None,
             started: Instant::now(),
             random_filter: None,
             random_tried: vec![],
@@ -134,6 +140,9 @@ impl Engine {
         self.candidates.clear();
         self.refreshed = false;
         self.confirmed = false;
+        self.history_recorded = false;
+        self.reconnect_attempts = 0;
+        self.reconnect_due = None;
         self.playback_failed = false;
         self.status.title.clear();
         self.status.playing = false;
@@ -151,6 +160,10 @@ impl Engine {
             .context(DomainError::new(ErrorCode::NoStream))?;
         self.status.source_url = self.url.clone();
         self.tried.push(self.url.clone());
+        self.start_url()
+    }
+
+    fn start_url(&mut self) -> Result<()> {
         self.config.settings.volume = self.status.volume;
         if self.background_media {
             let config = self.config.clone();
@@ -170,6 +183,27 @@ impl Engine {
         self.status.message = "连接中…".into();
         self.status.playing = false;
         Ok(())
+    }
+
+    fn stream_failed(&mut self, reason: &str) -> Result<()> {
+        // Three bounded attempts span a ten-second outage even when the
+        // unavailable source rejects each connection immediately.
+        const BACKOFF: [u64; 3] = [1, 3, 7];
+        if self.history_recorded && self.reconnect_attempts < BACKOFF.len() {
+            let delay = BACKOFF[self.reconnect_attempts];
+            self.reconnect_attempts += 1;
+            self.retire_player();
+            self.status.playing = false;
+            self.status.paused = false;
+            self.reconnect_due = Some(Instant::now() + Duration::from_secs(delay));
+            self.status.message = format!(
+                "重连中 · {}/{} · {delay}s: {reason}",
+                self.reconnect_attempts,
+                BACKOFF.len()
+            );
+            return Ok(());
+        }
+        self.fail(reason)
     }
 
     pub fn random(&mut self, filter: Filter) -> Result<()> {
@@ -236,6 +270,12 @@ impl Engine {
 
     pub fn tick(&mut self) -> Result<()> {
         self.poll_background()?;
+        if self.reconnect_due.is_some_and(|due| Instant::now() >= due) {
+            self.reconnect_due = None;
+            if let Err(error) = self.start_url() {
+                self.stream_failed(&format!("{error:#}"))?;
+            }
+        }
         if let Some(player) = self.player.as_mut() {
             let events = player.poll();
             match events {
@@ -247,8 +287,11 @@ impl Engine {
                                 self.status.message = "播放中".into();
                                 if !self.confirmed {
                                     self.confirmed = true;
-                                    if let Some(s) = &self.status.station {
+                                    if let Some(s) = &self.status.station
+                                        && !self.history_recorded
+                                    {
                                         self.store.played(&s.stationuuid)?;
+                                        self.history_recorded = true;
                                         if !s.custom
                                             && self
                                                 .click_task
@@ -271,21 +314,30 @@ impl Engine {
                             Event::Paused(paused) => self.status.paused = paused,
                             Event::Volume(volume) => self.status.volume = volume,
                             Event::End(reason) if reason == "redirect" => {}
+                            Event::End(reason) if matches!(reason.as_str(), "stop" | "quit") => {
+                                self.stop_playback()?;
+                                self.status.message = "已停止播放".into();
+                                break;
+                            }
                             Event::End(reason) => {
-                                self.fail(&format!("音频流结束 ({reason})"))?;
+                                if matches!(reason.as_str(), "eof" | "error") {
+                                    self.stream_failed(&format!("音频流结束 ({reason})"))?;
+                                } else {
+                                    self.fail(&format!("音频流结束 ({reason})"))?;
+                                }
                                 break;
                             }
                         }
                     }
                 }
-                Err(e) => self.fail(&e.to_string())?,
+                Err(e) => self.stream_failed(&e.to_string())?,
             }
             if self.player.is_some()
                 && !self.confirmed
                 && self.started.elapsed()
                     > Duration::from_secs(self.config.settings.playback_timeout_secs)
             {
-                self.fail("起播超时")?;
+                self.stream_failed("起播超时")?;
             }
         }
         if let Some(recorder) = self.recorder.as_mut() {
@@ -520,8 +572,7 @@ impl Engine {
                         self.started = Instant::now();
                     }
                     Err(error) => {
-                        self.playback_failed = true;
-                        self.status.message = format!("播放器启动失败: {error:#}");
+                        self.stream_failed(&format!("播放器启动失败: {error:#}"))?;
                     }
                 }
             }
@@ -619,6 +670,7 @@ impl Engine {
     }
 
     pub fn stop_playback(&mut self) -> Result<()> {
+        self.reconnect_due = None;
         self.generation = self.generation.wrapping_add(1);
         self.refresh_task = None;
         self.retire_player();
@@ -647,5 +699,46 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         let _ = self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_budget_is_bounded_and_stop_cancels_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+        config.prepare().unwrap();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine.status.station = Some(Station {
+            custom: true,
+            name: "Test".into(),
+            ..Station::default()
+        });
+        engine.history_recorded = true;
+        for delay in [1, 3, 7] {
+            engine.stream_failed("EOF").unwrap();
+            let remaining = engine
+                .reconnect_due
+                .unwrap()
+                .saturating_duration_since(Instant::now());
+            assert!(remaining <= Duration::from_secs(delay));
+            assert!(remaining > Duration::from_millis(delay * 1000 - 100));
+            assert!(!engine.playback_failed);
+        }
+        engine.reconnect_due = None;
+        engine.stream_failed("EOF").unwrap();
+        assert!(engine.playback_failed);
+        assert!(engine.reconnect_due.is_none());
+        engine.reconnect_attempts = 0;
+        engine.stream_failed("EOF").unwrap();
+        engine.stop_playback().unwrap();
+        assert!(engine.reconnect_due.is_none());
+        let generation = engine.generation;
+        engine.tick().unwrap();
+        assert_eq!(engine.generation, generation);
+        assert!(engine.player.is_none() && engine.player_start.is_none());
     }
 }

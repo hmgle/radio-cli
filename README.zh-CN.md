@@ -88,6 +88,10 @@ TUI 静态文案和 clap 帮助的迁移将单独处理。
 `--keep-references` 可强制保留无引用占位。`station backups UUID --add URL --remove URL`
 管理备用地址，归一化后重复的 URL 会报出已有 UUID。TUI 删除需按 `y` 二次确认。
 
+已起播的直播流遇到 EOF/错误时，按 1、3、7 秒退避最多重连三次，保持电台和当前地址，
+不会重复记入历史或点击上报。停止、换台、退出会取消待重试任务；耗尽后进入正常备用线路流程。
+首次起播失败仍按原有线路回退处理。
+
 - 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - 录音：数据目录下的 `recordings/`
