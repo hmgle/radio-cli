@@ -408,6 +408,7 @@ fn commands_use_cli_arguments_and_context_without_shell_execution() {
     for invalid in [
         "sync extra",
         "sync --data-dir /tmp",
+        "sync --lang en",
         "volume 101",
         "search 'unclosed",
         "!echo test",

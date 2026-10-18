@@ -294,6 +294,7 @@ pub(super) fn parse(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     // Global process/config flags have no meaning inside an existing session.
     if cli.config.is_some()
+        || cli.lang.is_some()
         || cli.data_dir.is_some()
         || cli.api_url.is_some()
         || cli.json
