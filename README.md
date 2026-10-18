@@ -86,6 +86,13 @@ Precedence is `--lang`, `RADIO_LANG`, config `language`, then `LC_ALL`/`LANG`;
 unknown languages fall back to English with one notice. TUI text and clap
 help migration follow separately.
 
+Manage custom stations with `station list --all`, `station edit UUID --name NAME
+--url URL`, and `station remove UUID`. Removing a referenced station preserves
+its name for favorites, history, and recordings and clears its stream URLs;
+`--keep-references` also keeps an unreferenced placeholder. Use `station backups
+UUID --add URL --remove URL` to manage fallback URLs. Normalized duplicate URLs
+are rejected with the existing UUID. TUI removal asks for a second confirmation.
+
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - Recordings: `recordings/` under the data directory

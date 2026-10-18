@@ -8,6 +8,7 @@ pub mod model;
 pub mod player;
 pub mod process;
 pub mod recorder;
+pub mod service;
 pub mod store;
 pub mod tui;
 

@@ -338,6 +338,43 @@ fn mpv_ipc_reads_icy_titles_and_reaps_child() {
 }
 
 #[test]
+fn edited_custom_station_plays_the_new_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(config) = mpv_config(dir.path()) else {
+        return;
+    };
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+    let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = radio_cli::service::add_station(
+        &mut store,
+        "Editable".into(),
+        "http://127.0.0.1:1/old".into(),
+        &[],
+    )
+    .unwrap();
+    radio_cli::service::edit_station(
+        &mut store,
+        &station.stationuuid,
+        None,
+        Some(server.url.clone()),
+        &[],
+    )
+    .unwrap();
+    drop(store);
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.play(&station.stationuuid).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !engine.status.playing {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline, "{}", engine.status.message);
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(engine.status.source_url, server.url);
+    engine.shutdown().unwrap();
+}
+
+#[test]
 fn engine_uses_explicit_backup_without_merging_names() {
     let dir = tempfile::tempdir().unwrap();
     let Some(config) = mpv_config(dir.path()) else {

@@ -88,15 +88,25 @@ impl Store {
     }
 
     fn write_station(conn: &Connection, table: &str, s: &Station) -> Result<()> {
+        Self::write_station_with_policy(conn, table, s, false)
+    }
+
+    fn write_station_with_policy(
+        conn: &Connection,
+        table: &str,
+        s: &Station,
+        custom: bool,
+    ) -> Result<()> {
         if s.stationuuid.is_empty() || s.name.trim().is_empty() {
             bail!(DomainError::new(ErrorCode::InvalidStation));
         }
         uuid::Uuid::parse_str(&s.stationuuid).context(DomainError::new(ErrorCode::InvalidUuid))?;
-        let sql = format!("INSERT INTO {table} VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+        let sql = format!("INSERT INTO {table} (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
-            bitrate=excluded.bitrate,popularity=excluded.popularity,active=excluded.active,json=excluded.json
-            WHERE {table}.custom=0");
+            bitrate=excluded.bitrate,popularity=excluded.popularity,custom=excluded.custom,active=excluded.active,json=excluded.json
+            WHERE {table}.custom=0 OR {custom}");
         let normalize = |value: &str| {
             value
                 .split(',')
@@ -241,6 +251,9 @@ impl Store {
         if filter.favorites {
             clauses.push("f.uuid IS NOT NULL".into());
         }
+        if filter.custom {
+            clauses.push("s.custom=1".into());
+        }
         if filter.history {
             clauses[0] = "EXISTS(SELECT 1 FROM history h WHERE h.uuid=s.uuid)".into();
         }
@@ -362,6 +375,97 @@ impl Store {
             params![uuid, url],
         )?;
         Ok(())
+    }
+
+    pub fn save_custom(&mut self, station: &Station, backups: Option<&[String]>) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let key = crate::service::normalized_url(station.primary_url())?;
+        {
+            let mut stmt =
+                tx.prepare("SELECT uuid,json FROM stations WHERE uuid<>?1 AND active=1")?;
+            let rows = stmt.query_map([&station.stationuuid], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (uuid, json) = row?;
+                let other: Station = serde_json::from_str(&json)?;
+                if crate::service::normalized_url(other.primary_url())
+                    .ok()
+                    .as_ref()
+                    == Some(&key)
+                {
+                    bail!(DomainError::new(ErrorCode::DuplicateStation).with("uuid", uuid));
+                }
+            }
+        }
+        Self::write_station_with_policy(&tx, "stations", station, true)?;
+        if let Some(backups) = backups {
+            tx.execute("DELETE FROM streams WHERE uuid=?1", [&station.stationuuid])?;
+            for url in backups {
+                crate::config::validate_url(url)?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO streams(uuid,url) VALUES (?1,?2)",
+                    params![station.stationuuid, url],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn remove_custom(&mut self, uuid: &str, keep_references: bool) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let json: String = tx
+            .query_row(
+                "SELECT json FROM stations WHERE uuid=?1 AND custom=1",
+                [uuid],
+                |r| r.get(0),
+            )
+            .optional()?
+            .context(DomainError::new(ErrorCode::NotCustom))?;
+        let mut station: Station = serde_json::from_str(&json)?;
+        let referenced: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM favorites WHERE uuid=?1) OR EXISTS(SELECT 1 FROM history WHERE uuid=?1) OR EXISTS(SELECT 1 FROM recordings WHERE json_extract(json,'$.stationuuid')=?1)", [uuid], |r| r.get(0))?;
+        tx.execute("DELETE FROM streams WHERE uuid=?1", [uuid])?;
+        if referenced || keep_references {
+            station.custom = false;
+            station.active = false;
+            station.url.clear();
+            station.url_resolved.clear();
+            Self::write_station_with_policy(&tx, "stations", &station, true)?;
+        } else {
+            tx.execute("DELETE FROM stations WHERE uuid=?1", [uuid])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn update_backups(
+        &mut self,
+        uuid: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> Result<Vec<String>> {
+        self.station(uuid)?;
+        let tx = self.conn.transaction()?;
+        for url in remove {
+            tx.execute(
+                "DELETE FROM streams WHERE uuid=?1 AND url=?2",
+                params![uuid, url],
+            )?;
+        }
+        for url in add {
+            crate::config::validate_url(url)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO streams(uuid,url) VALUES (?1,?2)",
+                params![uuid, url],
+            )?;
+        }
+        tx.commit()?;
+        self.backups(uuid)
     }
 
     pub fn backups(&self, uuid: &str) -> Result<Vec<String>> {

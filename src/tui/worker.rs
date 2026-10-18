@@ -21,6 +21,7 @@ use std::{
 
 #[derive(Clone)]
 pub(super) struct View {
+    pub backups: std::collections::BTreeMap<String, Vec<String>>,
     pub rows: Vec<Station>,
     pub recordings: Vec<Recording>,
     pub status: Status,
@@ -40,6 +41,7 @@ pub(super) struct View {
 impl View {
     pub fn new(status: Status) -> Self {
         Self {
+            backups: Default::default(),
             total: 0,
             recordings_total: 0,
             rows: vec![],
@@ -139,12 +141,17 @@ fn catalog_note(store: &Store) -> Result<String> {
 
 fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
     let rows = engine.store.search(filter)?;
+    let backups = rows
+        .iter()
+        .map(|s| Ok((s.stationuuid.clone(), engine.store.backups(&s.stationuuid)?)))
+        .collect::<Result<_>>()?;
     let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
     let note = catalog_note(&engine.store)?;
     let mut view = view.lock().unwrap();
     view.total = engine.store.search_count(filter)?;
     view.recordings_total = engine.store.recordings_count()?;
     view.rows = rows;
+    view.backups = backups;
     view.recordings = recordings;
     view.catalog_note = note;
     view.rows_revision += 1;
@@ -231,31 +238,45 @@ pub(super) fn execute(
             }
         }
         Command::Add { name, url, backups } => {
-            if name.trim().is_empty() {
-                bail!("电台名称不能为空");
-            }
-            crate::config::validate_url(&url)?;
-            for backup in &backups {
-                crate::config::validate_url(backup)?;
-            }
-            let station = Station {
-                stationuuid: uuid::Uuid::new_v4().to_string(),
-                name,
-                url: url.clone(),
-                url_resolved: url,
-                active: true,
-                custom: true,
-                lastcheckok: 1,
-                ..Station::default()
-            };
-            engine.store.upsert(&station)?;
-            for backup in backups {
-                engine.store.add_backup(&station.stationuuid, &backup)?;
-            }
+            let station = crate::service::add_station(&mut engine.store, name, url, &backups)?;
             view.lock().unwrap().log(&format!(
                 "已添加 {} ({})",
                 station.name, station.stationuuid
             ));
+            refresh(engine, filter, view)?;
+        }
+        Command::Station(action) => {
+            use crate::cli::StationAction;
+            let output = match action {
+                StationAction::Edit {
+                    uuid,
+                    name,
+                    url,
+                    backup_url,
+                } => {
+                    let station = crate::service::edit_station(
+                        &mut engine.store,
+                        &uuid,
+                        name,
+                        url,
+                        &backup_url,
+                    )?;
+                    format!("已更新 {} ({uuid})", station.name)
+                }
+                StationAction::Remove {
+                    uuid,
+                    keep_references,
+                } => {
+                    engine.store.remove_custom(&uuid, keep_references)?;
+                    format!("已删除自定义电台 {uuid}；引用名称保留")
+                }
+                StationAction::Backups { uuid, add, remove } => {
+                    let backups = engine.store.update_backups(&uuid, &add, &remove)?;
+                    format!("备用地址 {uuid}: {}", backups.join(" · "))
+                }
+                _ => unreachable!("station list/add use their existing commands"),
+            };
+            view.lock().unwrap().log(&output);
             refresh(engine, filter, view)?;
         }
         Command::Sync(accept_shrink) => {
@@ -288,7 +309,9 @@ pub(super) fn execute(
         Command::Refresh => refresh(engine, filter, view)?,
         Command::Info(uuid, request) => {
             let result = engine.store.station(&uuid);
+            let backups = engine.store.backups(&uuid)?;
             let mut data = view.lock().unwrap();
+            data.backups.insert(uuid, backups);
             data.inspected_request = request;
             data.inspected = None;
             data.inspected_error = None;
