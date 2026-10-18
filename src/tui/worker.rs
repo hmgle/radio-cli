@@ -131,10 +131,25 @@ impl Drop for CatalogJob {
     }
 }
 
-fn catalog_note(store: &Store) -> Result<String> {
+pub(super) fn auto_sync_due(store: &Store, days: u16) -> Result<bool> {
+    if days == 0 {
+        return Ok(false);
+    }
+    Ok(store.meta("last_sync")?.is_some_and(|time| {
+        chrono::DateTime::parse_from_rfc3339(&time).map_or(true, |time| {
+            chrono::Utc::now().signed_duration_since(time).num_days() >= i64::from(days)
+        })
+    }))
+}
+
+fn catalog_note(store: &Store, days: u16) -> Result<String> {
     Ok(match store.meta("last_sync")? {
         Some(time) => match chrono::DateTime::parse_from_rfc3339(&time) {
-            Ok(time) if chrono::Utc::now().signed_duration_since(time).num_days() < 7 => {
+            Ok(time)
+                if days == 0
+                    || chrono::Utc::now().signed_duration_since(time).num_days()
+                        < i64::from(days) =>
+            {
                 format!("目录同步: {time}")
             }
             _ => "目录已过期；:sync 刷新".into(),
@@ -150,7 +165,7 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
         .map(|s| Ok((s.stationuuid.clone(), engine.store.backups(&s.stationuuid)?)))
         .collect::<Result<_>>()?;
     let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
-    let note = catalog_note(&engine.store)?;
+    let note = catalog_note(&engine.store, engine.config.settings.auto_sync_days)?;
     let mut view = view.lock().unwrap();
     view.total = engine.store.search_count(filter)?;
     view.recordings_total = engine.store.recordings_count()?;
@@ -401,12 +416,20 @@ pub(super) fn run(
             .unwrap()
             .log(&format!("恢复播放失败: {error:#}"));
     }
-    let mut job = if engine.store.count()? == 0 {
+    let empty = engine.store.count()? == 0;
+    let expired = auto_sync_due(&engine.store, engine.config.settings.auto_sync_days)?;
+    let mut job = if empty || expired {
         let mut data = view.lock().unwrap();
         data.task_active = true;
-        data.task = "获取热门电台…".into();
-        data.log("开始获取热门目录");
-        Some(CatalogJob::start(engine.config.clone(), true, false)?)
+        data.task = if empty {
+            "获取热门电台…"
+        } else {
+            "目录已过期，后台同步中…"
+        }
+        .into();
+        let message = data.task.clone();
+        data.log(&message);
+        Some(CatalogJob::start(engine.config.clone(), empty, false)?)
     } else {
         None
     };

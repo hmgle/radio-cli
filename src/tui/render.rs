@@ -67,6 +67,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     let area = frame.area();
     app.rects = [Rect::default(); 5];
     app.source_rows = [Rect::default(); 4];
+    app.filter_summary = Rect::default();
     app.update_size(area.width, area.height);
     if app.too_small {
         frame.render_widget(
@@ -485,6 +486,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             Rect::new(bottom.x, bottom.y + 1, bottom.width, 2),
         );
     } else {
+        app.filter_summary = Rect::new(bottom.x, bottom.y, bottom.width, 1);
         let filter = format!(
             "/{}  {} {} {} ≥{}k",
             crate::clean_text(&app.filter.query),
@@ -537,7 +539,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                 ))
             })
             .chain([
-                Line::from("Tab 下一项 · ↑/↓ 选择候选 · Enter 应用 · Esc 取消"),
+                Line::from("Tab 下一项 · ↑/↓ 候选 · Enter 应用 · Ctrl-U 清空 · Esc 取消"),
                 Line::from(app.message.clone()),
             ])
             .collect::<Vec<_>>();

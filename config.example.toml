@@ -5,6 +5,9 @@ ffprobe = "ffprobe"
 volume = 80
 # Resume the last TUI station and source; volume is always remembered.
 resume = false
+# Background-refresh an expired, previously synced catalog at TUI startup.
+# Set to 0 to disable.
+auto_sync_days = 7
 # Language precedence: --lang > RADIO_LANG > language > LC_ALL/LANG > en.
 # language = "en" # or "zh-CN"
 connect_timeout_secs = 5

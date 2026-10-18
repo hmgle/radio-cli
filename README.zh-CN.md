@@ -99,13 +99,17 @@ TUI 静态文案和 clap 帮助的迁移将单独处理。
 搜索支持 `--sort name|bitrate|votes|clickcount|random`，默认按点击数，能与全部筛选组合；
 随机排序每次查询重新排列。TUI 的 `F` 弹窗后台加载候选，↑/↓ 选择并填入。
 
+TUI 启动时自动后台刷新已完整同步且超过 `auto_sync_days` 天的目录（默认 7，0 关闭），
+自动同步也保留取消与缩减保护。`F` 弹窗 Ctrl-U 或点击底栏筛选摘要可清空筛选。
+查询仍按字面子串匹配，多词 CLI 参数用 shell 引号分组；`-tag:` 等高级语法留待后续。
+
 - 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - 录音：数据目录下的 `recordings/`
 
 配置文件可选。参见 [config.example.toml](config.example.toml)，使用 `--config 文件` 指定；`--data-dir 目录` 可隔离测试数据。相对目录按启动时的工作目录解释；录音数据库保存绝对路径。
 
-默认发现 Radio Browser 服务器并有限重试。可设置 `api_url`，或使用优先级更高的 `--api-url https://服务器`。HTTP 请求支持 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 等标准环境变量；音频后端遵循其各自的代理支持，目录可达不代表音频流可达。目录超过七天提示刷新，不会静默启动全量同步。
+默认发现 Radio Browser 服务器并有限重试。可设置 `api_url`，或使用优先级更高的 `--api-url https://服务器`。HTTP 请求支持 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 等标准环境变量；音频后端遵循其各自的代理支持，目录可达不代表音频流可达。过期目录按 auto_sync_days 配置自动后台刷新，可设 0 关闭。
 
 同一数据目录只允许一个播放 / 录音 / TUI 会话；其他 CLI 查询和收藏操作仍可使用。退出前台即停止音频，长时间运行可放在 tmux 或 systemd 中。
 
