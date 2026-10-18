@@ -79,9 +79,17 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(if area.height >= 20 { 5 } else { 4 }),
+            Constraint::Length(if area.width >= 100 && area.height >= 20 {
+                5
+            } else {
+                4
+            }),
             Constraint::Min(3),
-            Constraint::Length(if area.height >= 20 { 4 } else { 3 }),
+            Constraint::Length(if view.task_active || app.focus == Focus::Activity {
+                4
+            } else {
+                1
+            }),
             Constraint::Length(3),
         ])
         .split(area);
@@ -105,18 +113,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             .constraints([Constraint::Length(3), Constraint::Min(0)])
             .split(vertical[1]);
         app.rects[Focus::Sources.index()] = sources[0];
-        if sources[1].height >= 6 {
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(3), Constraint::Length(3)])
-                .split(sources[1]);
-            app.rects[Focus::List.index()] = rows[0];
-            app.rects[Focus::Details.index()] = rows[1];
-        } else {
-            // On short terminals show the focused content; list/details remain reachable.
-            app.rects[Focus::List.index()] = sources[1];
-            app.rects[Focus::Details.index()] = sources[1];
-        }
+        // Narrow screens devote the content region to the list; 3 opens details.
+        app.rects[Focus::List.index()] = sources[1];
+        app.rects[Focus::Details.index()] = sources[1];
     }
     let normal = app.mode == Mode::Normal && !app.help && app.filter_edit.is_none();
     let active = |focus| normal && app.focus == focus;
@@ -169,6 +168,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             "尚未播放 · 音量 {}%{}\n在列表选择电台，Enter 播放；:sync 同步目录",
             view.status.volume, recording
         )
+    };
+    let player_text = if area.width < 100 {
+        let lines = player_text.lines().collect::<Vec<_>>();
+        format!("{}\n{}", lines[0], lines[1..].join(" · "))
+    } else {
+        player_text
     };
     frame.render_widget(
         Paragraph::new(player_text).block(panel(
@@ -234,7 +239,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
         || app.focus != Focus::Details
     {
         let title = format!(
-            "2 {} · {}/{} 项 · 页 {}",
+            "{} {} · {}/{} 项 · 页 {}",
+            if area.width < 100 {
+                "[2/3] 列表"
+            } else {
+                "2"
+            },
             app.source.label(),
             app.length(view),
             if app.source == Source::Recordings {
@@ -409,7 +419,15 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
                 app.rects[Focus::Details.index()],
                 &mut app.details_scroll,
             )
-            .block(panel("3 详情 · j/k 滚动".into(), active(Focus::Details))),
+            .block(panel(
+                if area.width < 100 {
+                    "[2/3] 详情 · 2 返回 · j/k 滚动"
+                } else {
+                    "3 详情 · j/k 滚动"
+                }
+                .into(),
+                active(Focus::Details),
+            )),
             app.rects[Focus::Details.index()],
         );
     }
@@ -443,13 +461,24 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
             .take(end - start)
             .map(|line| Line::from(line.clone())),
     );
-    frame.render_widget(
-        Paragraph::new(logs).block(panel(
-            "5 任务与消息 · :sync / :sync-cancel".into(),
-            active(Focus::Activity),
-        )),
-        rect,
-    );
+    if rect.height == 1 {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "5 {} · {}",
+                crate::clean_text(&task),
+                crate::clean_text(&view.status.message)
+            )),
+            rect,
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(logs).block(panel(
+                "5 任务与消息 · :sync / :sync-cancel".into(),
+                active(Focus::Activity),
+            )),
+            rect,
+        );
+    }
 
     let bottom = vertical[3];
     if app.mode != Mode::Normal {

@@ -1289,3 +1289,58 @@ fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
         .unwrap();
     assert!(text(&terminal).contains("FFmpeg disk failure details"));
 }
+
+#[test]
+fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
+    let mut data = view();
+    // Keep fixtures independent of generated station identities and clock time.
+    data.catalog_note = "目录已就绪".into();
+    data.rows[0].stationuuid = "00000000-0000-0000-0000-000000000000".into();
+    for (width, height) in [(80, 24), (100, 24), (160, 48)] {
+        for details in [false, true] {
+            let mut app = App::default();
+            if details {
+                app.focus = Focus::Details;
+            }
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| render::draw(frame, &mut app, &data))
+                .unwrap();
+            assert_eq!(app.rects[Focus::Activity.index()].height, 1);
+            if width == 80 {
+                assert!(app.rects[Focus::List.index()].height >= 13);
+            }
+            // UUID is displayed only in the details fixture.
+            let rendered = text(&terminal).replace(
+                &data.rows[0].stationuuid,
+                "00000000-0000-0000-0000-000000000000",
+            );
+            let name = format!(
+                "{}x{}-{}.txt",
+                width,
+                height,
+                if details { "details" } else { "list" }
+            );
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/snapshots")
+                .join(name);
+            if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, &rendered).unwrap();
+            }
+            assert_eq!(
+                rendered,
+                std::fs::read_to_string(&path).unwrap(),
+                "{}",
+                path.display()
+            );
+        }
+    }
+    data.task_active = true;
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    assert_eq!(app.rects[Focus::Activity.index()].height, 4);
+}
