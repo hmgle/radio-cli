@@ -204,7 +204,17 @@ pub(super) fn execute(
             dir,
         } => {
             if let Some(uuid) = uuid {
-                engine.standalone_record(&uuid, duration, dir.as_deref())?;
+                if engine
+                    .status
+                    .station
+                    .as_ref()
+                    .is_none_or(|s| s.stationuuid != uuid)
+                {
+                    bail!(
+                        "TUI 仅录制当前播放电台；请先播放目标电台，或退出后用 radio record UUID 独立录音"
+                    );
+                }
+                engine.record_current(duration, dir.as_deref())?;
             } else {
                 engine.record_current(duration, dir.as_deref())?;
             }

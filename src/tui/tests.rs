@@ -633,3 +633,50 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
     .unwrap();
     assert!(shared.lock().unwrap().rows[0].favorite);
 }
+
+#[test]
+fn tui_recording_rejects_a_different_station() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let a = station("A");
+    let b = station("B");
+    engine.status.station = Some(a);
+    engine.status.playing = true;
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    let error = worker::execute(
+        Command::Record {
+            uuid: Some(b.stationuuid),
+            duration: None,
+            dir: None,
+        },
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("仅录制当前播放电台"));
+    assert!(!engine.status.recording);
+    engine.status.station = None;
+    assert!(
+        worker::execute(
+            Command::Record {
+                uuid: Some("B".into()),
+                duration: None,
+                dir: None
+            },
+            &mut engine,
+            &mut filter,
+            &mut job,
+            &shared
+        )
+        .is_err()
+    );
+}
