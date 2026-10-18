@@ -1,6 +1,8 @@
 use crate::model::{Filter, Recording, Station};
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value};
+use rusqlite::{
+    Connection, OptionalExtension, TransactionBehavior, params, params_from_iter, types::Value,
+};
 use std::path::Path;
 
 pub struct Store {
@@ -9,40 +11,51 @@ pub struct Store {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             bail!("数据库版本较新，请升级 radio");
         }
-        if version == 0 {
-            conn.execute_batch(
-                "BEGIN;
-                CREATE TABLE stations (
-                    uuid TEXT PRIMARY KEY, name TEXT NOT NULL, search TEXT NOT NULL,
-                    country TEXT NOT NULL, languages TEXT NOT NULL, tags TEXT NOT NULL,
-                    bitrate INTEGER NOT NULL, popularity INTEGER NOT NULL,
-                    custom INTEGER NOT NULL, active INTEGER NOT NULL, json TEXT NOT NULL);
-                CREATE INDEX station_country ON stations(country, bitrate);
-                CREATE INDEX station_popularity ON stations(popularity DESC);
-                CREATE TABLE favorites (
-                    uuid TEXT PRIMARY KEY REFERENCES stations(uuid), created_at TEXT NOT NULL);
-                CREATE TABLE history (
-                    id INTEGER PRIMARY KEY, uuid TEXT NOT NULL REFERENCES stations(uuid),
-                    played_at TEXT NOT NULL);
-                CREATE INDEX history_station ON history(uuid);
-                CREATE TABLE streams (
-                    uuid TEXT NOT NULL REFERENCES stations(uuid), url TEXT NOT NULL,
-                    PRIMARY KEY(uuid,url));
-                CREATE TABLE recordings (
-                    id TEXT PRIMARY KEY, status TEXT NOT NULL, json TEXT NOT NULL);
-                CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                PRAGMA user_version=1; COMMIT;",
-            )?;
+        if version < 2 {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            // Another process may have migrated while we waited for the lock.
+            let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+            match version {
+                0 => tx.execute_batch(
+                    "CREATE TABLE stations (
+                        uuid TEXT PRIMARY KEY, name TEXT NOT NULL, search TEXT NOT NULL,
+                        country TEXT NOT NULL, languages TEXT NOT NULL, tags TEXT NOT NULL,
+                        bitrate INTEGER NOT NULL, popularity INTEGER NOT NULL,
+                        custom INTEGER NOT NULL, active INTEGER NOT NULL, json TEXT NOT NULL);
+                    CREATE INDEX station_country ON stations(country, bitrate);
+                    CREATE INDEX station_popularity ON stations(popularity DESC);
+                    CREATE TABLE favorites (
+                        uuid TEXT PRIMARY KEY REFERENCES stations(uuid), created_at TEXT NOT NULL);
+                    CREATE TABLE history (
+                        id INTEGER PRIMARY KEY, uuid TEXT NOT NULL REFERENCES stations(uuid), played_at TEXT NOT NULL);
+                    CREATE INDEX history_station ON history(uuid);
+                    CREATE TABLE streams (
+                        uuid TEXT NOT NULL REFERENCES stations(uuid), url TEXT NOT NULL, PRIMARY KEY(uuid,url));
+                    CREATE TABLE recordings (
+                        id TEXT PRIMARY KEY, status TEXT NOT NULL, json TEXT NOT NULL,
+                        recovery_pending INTEGER NOT NULL DEFAULT 0 CHECK(recovery_pending IN (0,1)));
+                    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                )?,
+                1 => tx.execute_batch(
+                    "ALTER TABLE recordings ADD COLUMN recovery_pending INTEGER NOT NULL DEFAULT 0 CHECK(recovery_pending IN (0,1));
+                    -- Translate legacy diagnostics once, never during normal queries.
+                    UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
+                )?,
+                2 => {},
+                _ => bail!("数据库版本较新，请升级 radio"),
+            }
+            tx.pragma_update(None, "user_version", 2)?;
+            tx.commit()?;
         }
         Ok(Self { conn })
     }
@@ -321,11 +334,12 @@ impl Store {
 
     pub fn save_recording(&self, recording: &Recording) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO recordings VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET status=excluded.status,json=excluded.json",
+            "INSERT INTO recordings (id,status,json,recovery_pending) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET status=excluded.status,json=excluded.json,recovery_pending=excluded.recovery_pending",
             params![
                 recording.id,
                 recording.status,
-                serde_json::to_string(recording)?
+                serde_json::to_string(recording)?,
+                recording.recovery_pending
             ],
         )?;
         Ok(())
@@ -347,22 +361,28 @@ impl Store {
     }
 
     pub fn recordings_page(&self, limit: usize, offset: usize) -> Result<Vec<Recording>> {
-        let mut stmt = self.conn.prepare("SELECT json FROM recordings ORDER BY json_extract(json,'$.started_at') DESC,id DESC LIMIT ?1 OFFSET ?2")?;
+        let mut stmt = self.conn.prepare("SELECT json,recovery_pending FROM recordings ORDER BY json_extract(json,'$.started_at') DESC,id DESC LIMIT ?1 OFFSET ?2")?;
         let rows = stmt.query_map(
             params![
                 limit.clamp(1, 1000) as i64,
                 offset.min(i64::MAX as usize) as i64
             ],
-            |r| r.get::<_, String>(0),
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)),
         )?;
-        rows.map(|json| Ok(serde_json::from_str(&json?)?)).collect()
+        rows.map(|row| Self::read_recording(row?)).collect()
+    }
+
+    fn read_recording((json, recovery_pending): (String, bool)) -> Result<Recording> {
+        let mut record: Recording = serde_json::from_str(&json)?;
+        record.recovery_pending = recovery_pending;
+        Ok(record)
     }
 
     pub fn unfinished_recordings(&self) -> Result<Vec<Recording>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT json FROM recordings WHERE status IN ('recording','finalizing') OR (status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%')")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.map(|json| Ok(serde_json::from_str(&json?)?)).collect()
+            .prepare("SELECT json,recovery_pending FROM recordings WHERE status IN ('recording','finalizing') OR recovery_pending=1")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)))?;
+        rows.map(|row| Self::read_recording(row?)).collect()
     }
 }
