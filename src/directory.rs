@@ -161,7 +161,8 @@ impl Directory {
     ) -> Result<usize> {
         self.discover()?;
         let previous = store.directory_count()?;
-        let mut last = None;
+        let mut failures = Vec::new();
+        let mut attempts = Vec::new();
         // A failed page discards the entire staging snapshot before failover.
         for server in self.servers.iter().take(3) {
             store.begin_sync()?;
@@ -169,7 +170,7 @@ impl Directory {
             let mut offset = 0usize;
             let mut invalid = 0usize;
             let mut valid = 0usize;
-            let result = (|| -> Result<usize> {
+            let result = (|| -> Result<()> {
                 loop {
                     let rows = self.fetch(
                         server,
@@ -201,30 +202,44 @@ impl Directory {
                         bail!("目录超过安全上限，请检查服务器分页");
                     }
                 }
-                if self.stop.load(Ordering::Relaxed) {
-                    bail!("操作已取消");
+                if store.incoming_count()? == 0 {
+                    bail!("服务器返回空目录，保留原有数据");
                 }
-                let count = store.incoming_count()?;
-                let suspicious =
-                    previous > 0 && count.saturating_mul(4) < previous.saturating_mul(3);
-                let report = serde_json::json!({"server":server,"raw":offset,"valid":valid,"invalid":invalid,"duplicates":valid.saturating_sub(count),"unique":count,"previous":previous,"shrink_requires_acceptance":suspicious,"accepted":accept_shrink});
-                store.set_meta("last_sync_attempt", &report.to_string())?;
-                if suspicious && !accept_shrink {
-                    bail!(
-                        "目录由 {previous} 缩减为 {count}，超过 25%；保留旧目录。核实服务器 {server} 后用 sync --accept-shrink 明确接受"
-                    );
-                }
-                store.finish_sync()
+                Ok(())
             })();
-            match result {
-                Ok(count) => return Ok(count),
-                Err(error) => last = Some(error),
-            }
             if self.stop.load(Ordering::Relaxed) {
                 bail!("操作已取消");
             }
+            let count = store.incoming_count()?;
+            let suspicious = result.is_ok()
+                && previous > 0
+                && count.saturating_mul(4) < previous.saturating_mul(3);
+            let error = result.as_ref().err().map(|error| format!("{error:#}"));
+            let mut report = serde_json::json!({
+                "server":server, "raw":offset, "valid":valid, "invalid":invalid,
+                "duplicates":valid.saturating_sub(count), "unique":count, "previous":previous,
+                "shrink_requires_acceptance":suspicious, "accepted":accept_shrink, "error":error,
+            });
+            attempts.push(report.clone());
+            report["attempts"] = serde_json::json!(attempts);
+            store.set_meta("last_sync_attempt", &report.to_string())?;
+            match result {
+                Ok(()) => {
+                    if suspicious && !accept_shrink {
+                        failures.push(format!(
+                            "{server}: 目录由 {previous} 缩减为 {count}，超过 25%"
+                        ));
+                        bail!(
+                            "目录同步被缩减保护拒绝，保留旧目录。尝试服务器：{}；核实后用 sync --accept-shrink 明确接受",
+                            failures.join("；")
+                        );
+                    }
+                    return store.finish_sync();
+                }
+                Err(error) => failures.push(format!("{server}: {error:#}")),
+            }
         }
-        Err(last.context("目录同步失败")?)
+        bail!("目录同步失败；尝试服务器：{}", failures.join("；"))
     }
 
     pub fn refresh(&mut self, uuid: &str) -> Result<Option<Station>> {
@@ -312,5 +327,84 @@ mod tests {
         assert!(store.station(&second.stationuuid).unwrap().active);
         assert!(a_handle.join().unwrap()[1].contains("offset=1000"));
         assert!(b_handle.join().unwrap()[0].contains("offset=0"));
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use crate::test_support::{self, Server, response};
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn shrink_rejection_does_not_fetch_another_full_replica() {
+        let row = Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "smaller".into(),
+            ..Station::default()
+        };
+        let body = serde_json::to_vec(&vec![row]).unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let first = Server::new(move |_, stream| {
+            count.fetch_add(1, Ordering::Relaxed);
+            response(stream, 200, "application/json", &body);
+        });
+        let backup_requests = Arc::new(AtomicUsize::new(0));
+        let count = backup_requests.clone();
+        let second = Server::new(move |_, stream| {
+            count.fetch_add(1, Ordering::Relaxed);
+            response(stream, 200, "application/json", b"[]");
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_support::config(dir.path());
+        let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+        for i in 0..8 {
+            store
+                .upsert(&Station {
+                    stationuuid: uuid::Uuid::new_v4().to_string(),
+                    name: format!("old {i}"),
+                    active: true,
+                    ..Station::default()
+                })
+                .unwrap();
+        }
+        let mut directory = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
+        directory.servers = vec![first.url.clone(), second.url.clone()];
+        let error = directory.sync(&mut store, |_| {}).unwrap_err().to_string();
+        assert!(error.contains("accept-shrink"));
+        assert!(error.contains(&first.url));
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+        assert_eq!(backup_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(store.count().unwrap(), 8);
+        assert_eq!(
+            directory
+                .sync_with_policy(&mut store, |_| {}, true)
+                .unwrap(),
+            1
+        );
+        assert_eq!(requests.load(Ordering::Relaxed), 2);
+        assert_eq!(backup_requests.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn exhausted_failover_reports_every_attempted_server() {
+        let first = Server::new(|_, stream| response(stream, 500, "application/json", b"{}"));
+        let second = Server::new(|_, stream| response(stream, 503, "application/json", b"{}"));
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_support::config(dir.path());
+        let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let mut directory = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
+        directory.servers = vec![first.url.clone(), second.url.clone()];
+        let error = directory.sync(&mut store, |_| {}).unwrap_err().to_string();
+        assert!(error.contains(&first.url));
+        assert!(error.contains(&second.url));
+        assert!(error.contains("500"));
+        assert!(error.contains("503"));
+        let report: serde_json::Value =
+            serde_json::from_str(&store.meta("last_sync_attempt").unwrap().unwrap()).unwrap();
+        assert_eq!(report["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(report["attempts"][0]["server"], first.url);
+        assert_eq!(report["attempts"][1]["server"], second.url);
     }
 }
