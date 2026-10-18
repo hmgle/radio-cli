@@ -479,3 +479,31 @@ fn ctrl_w_keeps_unicode_boundaries() {
     assert_eq!(editor.text, "甲　丙");
     assert_eq!(editor.cursor, "甲　".len());
 }
+
+#[test]
+fn ctrl_c_quits_every_mode_and_small_screen_q_quits() {
+    let data = view();
+    let (tx, _rx) = mpsc::sync_channel(16);
+    for mode in [Mode::Normal, Mode::Search, Mode::Command] {
+        for popup in 0..3 {
+            let mut app = App::default();
+            app.mode = mode;
+            app.help = popup == 1;
+            if popup == 2 {
+                app.filter_edit = Some((0, Default::default()));
+            }
+            app.key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &data,
+                &tx,
+            );
+            assert!(app.quit);
+        }
+    }
+    let mut app = App::default();
+    app.help = true;
+    let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.key(key(KeyCode::Char('q')), &data, &tx);
+    assert!(app.quit);
+}

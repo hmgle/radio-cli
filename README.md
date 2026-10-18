@@ -115,3 +115,5 @@ uv run scripts/measure_resources.py --binary target/release/radio
 Tests use local HTTP/ICY/HLS sources and do not depend on public stations. Recording tests require FFmpeg; mpv IPC tests use a null audio output and can be pointed at a specific binary with `RADIO_TEST_MPV=/absolute/path/to/mpv`, skipping when mpv is not found. CI installs and runs the real mpv tests. Resource targets and results are in the [validation log](docs/validation.md) (in Chinese).
 
 The first release does not provide a background service, time-shift caching, song recognition, lyrics, maps, or background full-catalog probing. The catalog comes from [Radio Browser](https://www.radio-browser.info/); audio connects directly to stations. RoamDial's private services are not used, and backup links are never auto-merged by name. See the [implementation notes](docs/implementation.md) for more design details (in Chinese).
+
+Ctrl-C quits and finalizes recordings from every TUI mode. Esc cancels editing or closes a popup.

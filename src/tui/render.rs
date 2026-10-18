@@ -67,7 +67,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     let area = frame.area();
     app.rects = [Rect::default(); 5];
     app.source_rows = [Rect::default(); 4];
-    if area.width < 40 || area.height < 16 {
+    app.too_small = area.width < 40 || area.height < 16;
+    if app.too_small {
         frame.render_widget(
             Paragraph::new("radio · 请将终端调整到至少 40×16；q 退出"),
             area,

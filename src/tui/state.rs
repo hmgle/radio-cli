@@ -259,6 +259,7 @@ pub(super) struct App {
     pub source_rows: [Rect; 4],
     positions: [usize; 4],
     pub quit: bool,
+    pub too_small: bool,
     pending_g: bool,
     rows_revision: u64,
     selected_id: Option<String>,
@@ -290,6 +291,7 @@ impl Default for App {
             source_rows: [Rect::default(); 4],
             positions: [0; 4],
             quit: false,
+            too_small: false,
             pending_g: false,
             rows_revision: 0,
             selected_id: None,
@@ -487,10 +489,14 @@ impl App {
         }
     }
     pub fn key(&mut self, key: KeyEvent, view: &View, sender: &SyncSender<Command>) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
+            || self.too_small && key.code == KeyCode::Char('q')
+        {
+            self.quit = true;
+            return;
+        }
         if self.mode != Mode::Normal {
-            if key.code == KeyCode::Esc
-                || key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
-            {
+            if key.code == KeyCode::Esc {
                 if self.mode == Mode::Search {
                     self.filter.query = self.original_query.clone();
                     self.filter.offset = 0;
