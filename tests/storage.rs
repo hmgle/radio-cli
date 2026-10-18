@@ -506,3 +506,26 @@ fn concurrent_favorite_toggles_preserve_every_transition() {
     assert!(store.toggle_favorite("missing").is_err());
     assert!(store.toggle_favorite(&row.stationuuid).unwrap());
 }
+
+#[test]
+fn history_retention_uses_an_indexed_id_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("radio.db");
+    let store = Store::open(&path).unwrap();
+    let station = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "History".into(),
+        ..Default::default()
+    };
+    store.upsert(&station).unwrap();
+    for _ in 0..1200 {
+        store.played(&station.stationuuid).unwrap();
+    }
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let (count, min, max): (i64, i64, i64) = connection
+        .query_row("SELECT count(*),min(id),max(id) FROM history", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!((count, min, max), (1000, 201, 1200));
+}

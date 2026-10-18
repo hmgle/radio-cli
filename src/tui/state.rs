@@ -356,7 +356,12 @@ impl App {
         if self.source != Source::Recordings && self.filter != view.filter {
             return;
         }
-        if view.rows_revision != self.rows_revision {
+        let revision = if self.source == Source::Recordings {
+            view.recordings_revision
+        } else {
+            view.rows_revision
+        };
+        if revision != self.rows_revision {
             if let Some(id) = &self.selected_id
                 && let Some(i) = if self.source == Source::Recordings {
                     view.recordings.iter().position(|r| &r.id == id)
@@ -366,7 +371,7 @@ impl App {
             {
                 self.list.select(Some(i));
             }
-            self.rows_revision = view.rows_revision;
+            self.rows_revision = revision;
         }
         self.list.select(if len == 0 {
             None
@@ -424,6 +429,7 @@ impl App {
         self.filter = Filter {
             favorites: self.source == Source::Favorites,
             history: self.source == Source::History,
+            recordings: self.source == Source::Recordings,
             limit: self.filter.limit,
             sort: self.filter.sort,
             ..Filter::default()
@@ -447,6 +453,7 @@ impl App {
         self.inspect_info = false;
         self.filter.favorites = source == Source::Favorites;
         self.filter.history = source == Source::History;
+        self.filter.recordings = source == Source::Recordings;
         self.filter.offset = page.as_ref().map_or(0, |p| p.offset);
         if let Some(page) = page {
             self.filter.limit = usize::from(page.limit);

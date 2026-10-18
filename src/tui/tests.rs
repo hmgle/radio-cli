@@ -56,7 +56,7 @@ fn view() -> View {
         recording_path: String::new(),
         source_url: "https://example.com/backup".into(),
     });
-    data.rows = vec![selected, station("Another Station")];
+    data.rows = vec![selected, station("Another Station")].into();
     data
 }
 fn text(terminal: &Terminal<TestBackend>) -> String {
@@ -187,7 +187,7 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
 #[test]
 fn filter_popup_selects_local_candidates_with_the_keyboard() {
     let mut data = view();
-    data.facets[0] = vec![
+    Arc::make_mut(&mut data.facets)[0] = vec![
         crate::model::Facet {
             value: "CN".into(),
             count: 2,
@@ -603,7 +603,7 @@ fn focus_navigation_mouse_and_stale_results_follow_visible_panels() {
     app.focus = Focus::List;
     app.reconcile(&data);
     let selected_id = app.selected(&data).unwrap().stationuuid.clone();
-    data.rows.swap(0, 1);
+    Arc::make_mut(&mut data.rows).swap(0, 1);
     data.rows_revision += 1;
     app.reconcile(&data);
     assert_eq!(app.selected(&data).unwrap().stationuuid, selected_id);
@@ -820,7 +820,7 @@ fn rapid_shortcuts_apply_against_owner_state() {
 #[test]
 fn full_queue_retries_every_view_query_with_latest_filter() {
     let mut data = view();
-    data.rows.resize(100, station("row"));
+    Arc::make_mut(&mut data.rows).resize(100, station("row"));
     data.total = 200;
     for action in 0..5 {
         let (tx, rx) = command::channel(1);
@@ -1176,13 +1176,13 @@ fn recording_refresh_preserves_selected_identity() {
     })).unwrap()
     };
     let mut data = view();
-    data.recordings = vec![recording("a"), recording("b")];
-    data.rows_revision = 1;
+    data.recordings = vec![recording("a"), recording("b")].into();
+    data.recordings_revision = 1;
     let mut app = App::default();
     app.source = Source::Recordings;
     app.reconcile(&data);
-    data.recordings.insert(0, recording("new"));
-    data.rows_revision += 1;
+    Arc::make_mut(&mut data.recordings).insert(0, recording("new"));
+    data.recordings_revision += 1;
     app.reconcile(&data);
     assert_eq!(data.recordings[app.list.selected().unwrap()].id, "a");
 }
@@ -1227,7 +1227,7 @@ fn page_down_uses_totals_and_waits_for_the_current_query() {
         data.total = 100;
         data.recordings_total = 100;
         // Even a full last page must stay put.
-        data.rows.resize(100, station("row"));
+        Arc::make_mut(&mut data.rows).resize(100, station("row"));
         app.key(key(KeyCode::PageDown), &data, &sender);
         assert_eq!(app.filter.offset, 0);
         assert!(receiver.try_recv().is_err());
@@ -1261,7 +1261,8 @@ fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
             "error":"first line\nFFmpeg disk failure details"
         }))
         .unwrap(),
-    ];
+    ]
+    .into();
     let mut app = App::default();
     app.source = Source::Recordings;
     let (sender, receiver) = command::channel(10);
@@ -1296,7 +1297,7 @@ fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.
     data.catalog_note = "目录已就绪".into();
-    data.rows[0].stationuuid = "00000000-0000-0000-0000-000000000000".into();
+    Arc::make_mut(&mut data.rows)[0].stationuuid = "00000000-0000-0000-0000-000000000000".into();
     for (width, height) in [(80, 24), (100, 24), (160, 48)] {
         for details in [false, true] {
             let mut app = App::default();
@@ -1440,4 +1441,64 @@ fn every_media_stage_is_visible_and_failures_have_details() {
         5
     );
     assert!(render::fit("中文超长name", 5).contains('…'));
+}
+
+#[test]
+fn view_snapshots_share_partitions_and_skip_unchanged_publications() {
+    let mut data = view();
+    let first = data.snapshot();
+    assert!(Arc::ptr_eq(&first, &data.snapshot()));
+    data.status.volume = 42;
+    data.revision += 1;
+    let second = data.snapshot();
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(&first.rows, &second.rows));
+    assert!(Arc::ptr_eq(&first.recordings, &second.recordings));
+    assert!(Arc::ptr_eq(&first.logs, &second.logs));
+    assert_eq!(first.rows_revision, second.rows_revision);
+    let mut status = data.status.clone();
+    status.recording_ms = 900;
+    assert!(data.status.ui_eq(&status));
+    status.recording_ms = 1000;
+    assert!(!data.status.ui_eq(&status));
+    assert!(data.status.control_eq(&status));
+    status.volume = 43;
+    assert!(!data.status.control_eq(&status));
+}
+
+#[test]
+fn station_refresh_does_not_read_recordings_until_that_source_is_selected() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.store.upsert(&station("lazy")).unwrap();
+    rusqlite::Connection::open(dir.path().join("radio.db")).unwrap()
+        .execute("INSERT INTO recordings(id,status,json,recovery_pending) VALUES ('broken','complete','not json',0)",[]).unwrap();
+    let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Default::default()
+    };
+    let mut job = None;
+    worker::execute(
+        Command::Search(filter.clone()),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &data,
+    )
+    .unwrap();
+    assert_eq!(data.lock().unwrap().rows.len(), 1);
+    assert_eq!(data.lock().unwrap().recordings_revision, 0);
+    assert!(
+        worker::execute(
+            Command::Recordings(filter.clone()),
+            &mut engine,
+            &mut filter,
+            &mut job,
+            &data
+        )
+        .is_err()
+    );
 }

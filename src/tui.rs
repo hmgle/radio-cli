@@ -71,14 +71,23 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         app.source = source;
         app.filter.favorites = source == state::Source::Favorites;
         app.filter.history = source == state::Source::History;
+        app.filter.recordings = source == state::Source::Recordings;
         let mut revision = 0;
+        let mut immediate_revision = 0;
+        let mut last_draw = Instant::now();
         let mut dirty = true;
         while !stop.load(Ordering::Relaxed) && !app.quit {
-            let snapshot = view.lock().unwrap().clone();
+            let snapshot = view.lock().unwrap().snapshot();
             app.reconcile(&snapshot);
-            if dirty || revision != snapshot.revision {
+            if dirty
+                || revision != snapshot.revision
+                    && (immediate_revision != snapshot.immediate_revision
+                        || last_draw.elapsed() >= Duration::from_secs(1))
+            {
                 terminal.draw(|frame| render::draw(frame, &mut app, &snapshot))?;
                 revision = snapshot.revision;
+                immediate_revision = snapshot.immediate_revision;
+                last_draw = Instant::now();
                 dirty = false;
             }
             if app.search_due.is_some_and(|due| Instant::now() >= due) {

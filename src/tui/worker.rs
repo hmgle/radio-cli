@@ -21,16 +21,20 @@ use std::{
 
 #[derive(Clone)]
 pub(super) struct View {
-    pub facets: [Vec<crate::model::Facet>; 3],
+    published: Option<(u64, Arc<View>)>,
+    pub immediate_revision: u64,
+    pub recordings_revision: u64,
+    pub logs_revision: u64,
+    pub facets: Arc<[Vec<crate::model::Facet>; 3]>,
     pub facets_loading: bool,
-    pub backups: std::collections::BTreeMap<String, Vec<String>>,
-    pub rows: Vec<Station>,
-    pub recordings: Vec<Recording>,
+    pub backups: Arc<std::collections::BTreeMap<String, Vec<String>>>,
+    pub rows: Arc<Vec<Station>>,
+    pub recordings: Arc<Vec<Recording>>,
     pub status: Status,
     pub catalog_note: String,
     pub task: String,
     pub task_active: bool,
-    pub logs: VecDeque<String>,
+    pub logs: Arc<VecDeque<String>>,
     pub inspected: Option<Station>,
     pub inspected_request: u64,
     pub inspected_error: Option<String>,
@@ -43,18 +47,22 @@ pub(super) struct View {
 impl View {
     pub fn new(status: Status) -> Self {
         Self {
+            published: None,
+            immediate_revision: 1,
+            recordings_revision: 0,
+            logs_revision: 0,
             facets: Default::default(),
             facets_loading: false,
             backups: Default::default(),
             total: 0,
             recordings_total: 0,
-            rows: vec![],
-            recordings: vec![],
+            rows: Default::default(),
+            recordings: Default::default(),
             status,
             catalog_note: "目录加载中…".into(),
             task: String::new(),
             task_active: false,
-            logs: VecDeque::new(),
+            logs: Default::default(),
             inspected: None,
             inspected_request: 0,
             inspected_error: None,
@@ -66,16 +74,30 @@ impl View {
             },
         }
     }
+    pub fn snapshot(&mut self) -> Arc<Self> {
+        if let Some((revision, view)) = &self.published
+            && *revision == self.revision
+        {
+            return view.clone();
+        }
+        let mut view = self.clone();
+        view.published = None;
+        let snapshot = Arc::new(view);
+        self.published = Some((self.revision, snapshot.clone()));
+        snapshot
+    }
     fn log(&mut self, message: &str) {
         let message = crate::clean_text(message);
-        self.logs.push_back(format!(
+        Arc::make_mut(&mut self.logs).push_back(format!(
             "{} {message}",
             chrono::Local::now().format("%H:%M:%S")
         ));
         while self.logs.len() > 200 {
-            self.logs.pop_front();
+            Arc::make_mut(&mut self.logs).pop_front();
         }
         self.revision += 1;
+        self.logs_revision += 1;
+        self.immediate_revision += 1;
     }
 }
 
@@ -159,23 +181,32 @@ fn catalog_note(store: &Store, days: u16) -> Result<String> {
 }
 
 fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
-    let rows = engine.store.search(filter)?;
-    let backups = rows
-        .iter()
-        .map(|s| Ok((s.stationuuid.clone(), engine.store.backups(&s.stationuuid)?)))
-        .collect::<Result<_>>()?;
-    let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
     let note = catalog_note(&engine.store, engine.config.settings.auto_sync_days)?;
-    let mut view = view.lock().unwrap();
-    view.total = engine.store.search_count(filter)?;
-    view.recordings_total = engine.store.recordings_count()?;
-    view.rows = rows;
-    view.backups = backups;
-    view.recordings = recordings;
-    view.catalog_note = note;
-    view.rows_revision += 1;
-    view.filter = filter.clone();
-    view.revision += 1;
+    if filter.recordings {
+        let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
+        let total = engine.store.recordings_count()?;
+        let mut data = view.lock().unwrap();
+        data.recordings = Arc::new(recordings);
+        data.recordings_total = total;
+        data.recordings_revision += 1;
+    } else {
+        let rows = engine.store.search(filter)?;
+        let backups = rows
+            .iter()
+            .map(|s| Ok((s.stationuuid.clone(), engine.store.backups(&s.stationuuid)?)))
+            .collect::<Result<_>>()?;
+        let total = engine.store.search_count(filter)?;
+        let mut data = view.lock().unwrap();
+        data.rows = Arc::new(rows);
+        data.backups = Arc::new(backups);
+        data.total = total;
+        data.rows_revision += 1;
+    }
+    let mut data = view.lock().unwrap();
+    data.catalog_note = note;
+    data.filter = filter.clone();
+    data.revision += 1;
+    data.immediate_revision += 1;
     Ok(())
 }
 
@@ -229,7 +260,7 @@ pub(super) fn execute(
                             let mut data = shared.lock().unwrap();
                             data.facets_loading = false;
                             match result {
-                                Ok(facets) => data.facets = facets,
+                                Ok(facets) => data.facets = Arc::new(facets),
                                 Err(error) => data.log(&format!("筛选候选加载失败: {error:#}")),
                             }
                             data.revision += 1;
@@ -366,6 +397,7 @@ pub(super) fn execute(
         Command::Recordings(value) => {
             engine.store.set_meta("pref_source", "recordings")?;
             *filter = value;
+            filter.recordings = true;
             refresh(engine, filter, view)?;
         }
         Command::Refresh => refresh(engine, filter, view)?,
@@ -373,7 +405,7 @@ pub(super) fn execute(
             let result = engine.store.station(&uuid);
             let backups = engine.store.backups(&uuid)?;
             let mut data = view.lock().unwrap();
-            data.backups.insert(uuid, backups);
+            Arc::make_mut(&mut data.backups).insert(uuid, backups);
             data.inspected_request = request;
             data.inspected = None;
             data.inspected_error = None;
@@ -408,6 +440,7 @@ pub(super) fn run(
     let mut filter = Filter {
         favorites: source == super::state::Source::Favorites,
         history: source == super::state::Source::History,
+        recordings: source == super::state::Source::Recordings,
         limit: 100,
         ..Filter::default()
     };
@@ -434,7 +467,6 @@ pub(super) fn run(
     } else {
         None
     };
-    let mut last_status = String::new();
     let mut last_message = String::new();
     let mut was_recording = false;
     let mut revision = engine.store.revision()?;
@@ -521,10 +553,11 @@ pub(super) fn run(
                 refresh(&engine, &filter, &view)?;
             }
             was_recording = engine.status.recording();
-            let state = format!("{:?}", engine.status);
-            if state != last_status {
-                last_status = state;
-                let mut data = view.lock().unwrap();
+            let mut data = view.lock().unwrap();
+            if !data.status.ui_eq(&engine.status) {
+                if !data.status.control_eq(&engine.status) {
+                    data.immediate_revision += 1;
+                }
                 data.status = engine.status.clone();
                 data.revision += 1;
                 if engine.status.message != last_message {
