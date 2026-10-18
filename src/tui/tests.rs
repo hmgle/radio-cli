@@ -542,6 +542,7 @@ fn rapid_shortcuts_apply_against_owner_state() {
 fn full_queue_retries_every_view_query_with_latest_filter() {
     let mut data = view();
     data.rows.resize(100, station("row"));
+    data.total = 200;
     for action in 0..5 {
         let (tx, rx) = command::channel(1);
         tx.send(Command::Search(data.filter.clone())).unwrap();
@@ -903,4 +904,66 @@ fn recording_refresh_preserves_selected_identity() {
     data.rows_revision += 1;
     app.reconcile(&data);
     assert_eq!(data.recordings[app.list.selected().unwrap()].id, "a");
+}
+
+#[test]
+fn source_commands_submit_only_the_requested_page() {
+    let data = view();
+    for (line, source) in [
+        ("favorites list --limit 25 --offset 50", Source::Favorites),
+        ("history --limit 25 --offset 50", Source::History),
+        ("recordings list --limit 25 --offset 50", Source::Recordings),
+    ] {
+        let (sender, receiver) = command::channel(1);
+        let mut app = App::default();
+        app.search_due = Some(Instant::now());
+        app.mode = Mode::Command;
+        app.editor.set(line);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        let filter = match receiver.try_recv().unwrap() {
+            Command::Search(filter) | Command::Recordings(filter) => filter,
+            _ => panic!("expected a source query"),
+        };
+        assert_eq!(app.source, source);
+        assert_eq!(filter.limit, 25);
+        assert_eq!(filter.offset, 50);
+        assert_eq!(filter, app.filter);
+        assert!(receiver.try_recv().is_err());
+        assert!(
+            app.search_due.is_none(),
+            "an obsolete query filled the queue"
+        );
+    }
+}
+
+#[test]
+fn page_down_uses_totals_and_waits_for_the_current_query() {
+    for source in Source::ALL {
+        let (sender, receiver) = command::channel(16);
+        let mut app = App::default();
+        app.source = source;
+        let mut data = view();
+        data.total = 100;
+        data.recordings_total = 100;
+        // Even a full last page must stay put.
+        data.rows.resize(100, station("row"));
+        app.key(key(KeyCode::PageDown), &data, &sender);
+        assert_eq!(app.filter.offset, 0);
+        assert!(receiver.try_recv().is_err());
+        data.total = 200;
+        data.recordings_total = 200;
+        app.key(key(KeyCode::PageDown), &data, &sender);
+        assert_eq!(app.filter.offset, 100);
+        receiver.try_recv().unwrap();
+        // Repeated keys cannot page using the previous query's total.
+        app.key(key(KeyCode::PageDown), &data, &sender);
+        assert!(receiver.try_recv().is_err());
+        data.filter = app.filter.clone();
+        app.key(key(KeyCode::PageDown), &data, &sender);
+        assert_eq!(app.filter.offset, 100);
+        assert!(receiver.try_recv().is_err());
+        app.key(key(KeyCode::PageUp), &data, &sender);
+        assert_eq!(app.filter.offset, 0);
+        assert!(receiver.try_recv().is_ok());
+    }
 }

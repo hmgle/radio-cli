@@ -112,14 +112,13 @@ fn list_stations(store: &Store, mut filter: Filter, page: &Page, json: bool) -> 
     filter.limit = usize::from(page.limit);
     filter.offset = page.offset;
     let mut rows = store.search(&filter)?;
-    while page.all && filter.offset.saturating_add(rows.len()) < total {
+    while page.all && page.offset.saturating_add(rows.len()) < total {
         filter.offset = page.offset.saturating_add(rows.len());
         let next = store.search(&filter)?;
         if next.is_empty() {
             break;
         }
         rows.extend(next);
-        filter.offset = page.offset;
     }
     if !json {
         print_stations(&rows, false)?;

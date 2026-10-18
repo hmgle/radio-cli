@@ -384,7 +384,12 @@ impl App {
         self.details_scroll = 0;
         self.inspect_info = false;
     }
-    fn switch_source(&mut self, source: Source, sender: &CommandSender) {
+    fn switch_source(
+        &mut self,
+        source: Source,
+        page: Option<crate::cli::Page>,
+        sender: &CommandSender,
+    ) {
         self.positions[self.source.index()] = self.list.selected().unwrap_or(0);
         self.source = source;
         self.list = ListState::default().with_selected(Some(self.positions[source.index()]));
@@ -393,7 +398,10 @@ impl App {
         self.inspect_info = false;
         self.filter.favorites = source == Source::Favorites;
         self.filter.history = source == Source::History;
-        self.filter.offset = 0;
+        self.filter.offset = page.as_ref().map_or(0, |p| p.offset);
+        if let Some(page) = page {
+            self.filter.limit = usize::from(page.limit);
+        }
         self.flush_search(sender);
     }
     fn focus_direction(&mut self, dx: i32, dy: i32) {
@@ -463,7 +471,12 @@ impl App {
                 self.mode = Mode::Normal;
                 self.message.clear();
                 // A command supersedes any pending incremental search.
-                if self.search_due.is_some() {
+                if self.search_due.is_some()
+                    && !matches!(
+                        &parsed,
+                        Parsed::Search(_) | Parsed::Source(..) | Parsed::Quit
+                    )
+                {
                     self.flush_search(sender);
                 }
                 match parsed {
@@ -474,10 +487,7 @@ impl App {
                     }
                     Parsed::Focus(focus) => self.focus = focus,
                     Parsed::Source(source, page) => {
-                        self.filter.limit = usize::from(page.limit);
-                        self.switch_source(source, sender);
-                        self.filter.offset = page.offset;
-                        self.flush_search(sender);
+                        self.switch_source(source, Some(page), sender);
                         self.focus = Focus::List;
                     }
                     Parsed::Search(mut filter) => {
@@ -628,16 +638,16 @@ impl App {
             KeyCode::BackTab => self.focus = Focus::ALL[(self.focus.index() + 4) % 5],
             KeyCode::Char(c @ '1'..='5') => self.focus = Focus::ALL[c as usize - '1' as usize],
             KeyCode::Char('[') => {
-                self.switch_source(Source::ALL[(self.source.index() + 3) % 4], sender)
+                self.switch_source(Source::ALL[(self.source.index() + 3) % 4], None, sender)
             }
             KeyCode::Char(']') => {
-                self.switch_source(Source::ALL[(self.source.index() + 1) % 4], sender)
+                self.switch_source(Source::ALL[(self.source.index() + 1) % 4], None, sender)
             }
             KeyCode::Up | KeyCode::Char('k') if self.focus == Focus::Sources => {
-                self.switch_source(Source::ALL[(self.source.index() + 3) % 4], sender)
+                self.switch_source(Source::ALL[(self.source.index() + 3) % 4], None, sender)
             }
             KeyCode::Down | KeyCode::Char('j') if self.focus == Focus::Sources => {
-                self.switch_source(Source::ALL[(self.source.index() + 1) % 4], sender)
+                self.switch_source(Source::ALL[(self.source.index() + 1) % 4], None, sender)
             }
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1, view),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1, view),
@@ -648,8 +658,17 @@ impl App {
             KeyCode::Char('g') => self.pending_g = true,
             KeyCode::End | KeyCode::Char('G') => self.move_selection(10000, view),
             KeyCode::PageDown | KeyCode::PageUp if self.focus == Focus::List => {
-                if key.code == KeyCode::PageDown && self.length(view) == self.filter.limit {
-                    self.filter.offset = self.filter.offset.saturating_add(self.filter.limit);
+                if self.filter != view.filter {
+                    return;
+                }
+                let total = if self.source == Source::Recordings {
+                    view.recordings_total
+                } else {
+                    view.total
+                };
+                let next = self.filter.offset.saturating_add(self.filter.limit);
+                if key.code == KeyCode::PageDown && next < total {
+                    self.filter.offset = next;
                 } else if key.code == KeyCode::PageUp {
                     self.filter.offset = self.filter.offset.saturating_sub(self.filter.limit);
                 } else {
@@ -727,7 +746,7 @@ impl App {
                         .into_iter()
                         .find(|s| self.source_rows[s.index()].contains(point))
                     {
-                        self.switch_source(source, sender);
+                        self.switch_source(source, None, sender);
                     }
                 } else if focus == Focus::List {
                     let rect = self.rects[focus.index()];
