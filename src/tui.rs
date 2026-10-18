@@ -109,6 +109,24 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                 _ => {}
             }
         }
+        stop.store(true, Ordering::Relaxed);
+        terminal.draw(|frame| {
+            let hint = if matches!(
+                view.lock().unwrap().status.recording_state,
+                crate::engine::RecordingState::Probing
+                    | crate::engine::RecordingState::Recording
+                    | crate::engine::RecordingState::Finalizing
+            ) {
+                "radio · 正在退出 · 正在收尾录音…"
+            } else {
+                "radio · 正在退出 · 清理媒体…"
+            };
+            frame.render_widget(ratatui::widgets::Paragraph::new(hint), frame.area());
+        })?;
+        // Keep the alternate screen and hint until bounded media cleanup ends.
+        while !handle.is_finished() {
+            thread::sleep(Duration::from_millis(20));
+        }
         Ok(())
     })();
     stop.store(true, Ordering::Relaxed);

@@ -114,8 +114,7 @@ impl PlaybackController {
         self.reconnect_due = None;
         session.playback_failed = false;
         session.status.title.clear();
-        session.status.playing = false;
-        session.status.paused = false;
+        session.status.playback_state = PlaybackState::Idle;
         session.status.station = Some(station.clone());
         self.candidates.extend(candidates);
         self.start_candidate(session, recording)
@@ -170,7 +169,13 @@ impl PlaybackController {
         self.started = Instant::now();
         self.confirmed = false;
         session.status.message = "连接中…".into();
-        session.status.playing = false;
+        session.status.playback_state = if self.reconnect_attempts > 0 {
+            PlaybackState::Reconnecting {
+                attempt: self.reconnect_attempts,
+            }
+        } else {
+            PlaybackState::Connecting
+        };
         Ok(())
     }
 
@@ -187,8 +192,9 @@ impl PlaybackController {
             let delay = BACKOFF[self.reconnect_attempts];
             self.reconnect_attempts += 1;
             self.retire_player(session, recording);
-            session.status.playing = false;
-            session.status.paused = false;
+            session.status.playback_state = PlaybackState::Reconnecting {
+                attempt: self.reconnect_attempts,
+            };
             self.reconnect_due = Some(Instant::now() + Duration::from_secs(delay));
             session.status.message = format!(
                 "重连中 · {}/{} · {delay}s: {reason}",
@@ -240,8 +246,7 @@ impl PlaybackController {
         reason: &str,
     ) -> Result<()> {
         self.retire_player(session, recording);
-        session.status.playing = false;
-        session.status.paused = false;
+        session.status.playback_state = PlaybackState::Idle;
         recording.stop_recording(session, self, Some(reason))?;
         let station = session
             .status
@@ -279,6 +284,9 @@ impl PlaybackController {
             return Ok(());
         }
         session.playback_failed = true;
+        session.status.playback_state = PlaybackState::Failed {
+            reason: reason.into(),
+        };
         session.status.message = format!("播放失败: {reason}");
         Ok(())
     }
@@ -301,7 +309,7 @@ impl PlaybackController {
                     for event in events {
                         match event {
                             Event::Playing => {
-                                session.status.playing = true;
+                                session.status.playback_state = PlaybackState::Playing;
                                 session.status.message = "播放中".into();
                                 if !self.confirmed {
                                     self.confirmed = true;
@@ -333,7 +341,15 @@ impl PlaybackController {
                                 }
                             }
                             Event::Title(title) => session.status.title = title,
-                            Event::Paused(paused) => session.status.paused = paused,
+                            Event::Paused(paused) => {
+                                if self.confirmed {
+                                    session.status.playback_state = if paused {
+                                        PlaybackState::Paused
+                                    } else {
+                                        PlaybackState::Playing
+                                    };
+                                }
+                            }
                             Event::Volume(volume) => {
                                 if volume != session.status.volume {
                                     session.status.volume = volume;
@@ -452,8 +468,7 @@ impl PlaybackController {
         self.generation = self.generation.wrapping_add(1);
         self.refresh_task = None;
         self.retire_player(session, recording);
-        session.status.playing = false;
-        session.status.paused = false;
+        session.status.playback_state = PlaybackState::Idle;
         recording.stop_recording(session, self, None)
     }
 

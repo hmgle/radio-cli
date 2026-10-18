@@ -1,7 +1,9 @@
 mod playback;
 mod recording;
+mod status;
 use playback::PlaybackController;
 use recording::RecordingController;
+pub use status::{PlaybackState, RecordingState};
 
 use crate::error::{DomainError, ErrorCode};
 use crate::{
@@ -20,18 +22,35 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
     pub station: Option<Station>,
     pub title: String,
     pub message: String,
-    pub playing: bool,
-    pub paused: bool,
+    pub playback_state: PlaybackState,
     pub volume: u8,
-    pub recording: bool,
+    pub recording_state: RecordingState,
     pub recording_ms: u64,
     pub recording_path: String,
     pub source_url: String,
+}
+
+impl Status {
+    pub fn playing(&self) -> bool {
+        matches!(
+            self.playback_state,
+            PlaybackState::Playing | PlaybackState::Paused
+        )
+    }
+    pub fn paused(&self) -> bool {
+        self.playback_state == PlaybackState::Paused
+    }
+    pub fn recording(&self) -> bool {
+        matches!(
+            self.recording_state,
+            RecordingState::Probing | RecordingState::Recording
+        )
+    }
 }
 
 pub struct Engine {
@@ -90,10 +109,9 @@ impl Engine {
             } else {
                 recovery_warnings.join("\n")
             },
-            playing: false,
-            paused: false,
+            playback_state: PlaybackState::Idle,
             volume: config.settings.volume,
-            recording: false,
+            recording_state: RecordingState::Idle,
             recording_ms: 0,
             recording_path: String::new(),
             source_url: String::new(),
@@ -141,8 +159,17 @@ impl Engine {
     }
 
     pub fn play(&mut self, uuid: &str) -> Result<()> {
-        self.playback
-            .play(&mut self.session, &mut self.recording, uuid)
+        let result = self
+            .playback
+            .play(&mut self.session, &mut self.recording, uuid);
+        if let Err(error) = &result
+            && !self.playback_active()
+        {
+            self.status.playback_state = PlaybackState::Failed {
+                reason: format!("{error:#}"),
+            };
+        }
+        result
     }
 
     pub fn resume_last_station(&mut self) -> Result<()> {
@@ -151,13 +178,31 @@ impl Engine {
     }
 
     pub fn play_recording(&mut self, id: &str) -> Result<()> {
-        self.playback
-            .play_recording(&mut self.session, &mut self.recording, id)
+        let result = self
+            .playback
+            .play_recording(&mut self.session, &mut self.recording, id);
+        if let Err(error) = &result
+            && !self.playback_active()
+        {
+            self.status.playback_state = PlaybackState::Failed {
+                reason: format!("{error:#}"),
+            };
+        }
+        result
     }
 
     pub fn random(&mut self, filter: Filter) -> Result<()> {
-        self.playback
-            .random(&mut self.session, &mut self.recording, filter)
+        let result = self
+            .playback
+            .random(&mut self.session, &mut self.recording, filter);
+        if let Err(error) = &result
+            && !self.playback_active()
+        {
+            self.status.playback_state = PlaybackState::Failed {
+                reason: format!("{error:#}"),
+            };
+        }
+        result
     }
 
     pub fn tick(&mut self) -> Result<()> {
@@ -182,8 +227,19 @@ impl Engine {
     }
 
     pub fn toggle_recording(&mut self) -> Result<()> {
-        self.recording
-            .toggle_recording(&mut self.session, &mut self.playback)
+        let result = self
+            .recording
+            .toggle_recording(&mut self.session, &mut self.playback);
+        if let Err(error) = &result
+            && self.recording.recorder.is_none()
+            && self.recording.recording_probe.is_none()
+            && self.recording.finalizing.is_none()
+        {
+            self.status.recording_state = RecordingState::Failed {
+                reason: format!("{error:#}"),
+            };
+        }
+        result
     }
 
     pub fn record_current(
@@ -191,8 +247,19 @@ impl Engine {
         duration: Option<Duration>,
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
-        self.recording
-            .record_current(&mut self.session, &mut self.playback, duration, dir)
+        let result =
+            self.recording
+                .record_current(&mut self.session, &mut self.playback, duration, dir);
+        if let Err(error) = &result
+            && self.recording.recorder.is_none()
+            && self.recording.recording_probe.is_none()
+            && self.recording.finalizing.is_none()
+        {
+            self.status.recording_state = RecordingState::Failed {
+                reason: format!("{error:#}"),
+            };
+        }
+        result
     }
 
     pub fn standalone_record(
@@ -201,8 +268,23 @@ impl Engine {
         duration: Option<Duration>,
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
-        self.recording
-            .standalone_record(&mut self.session, &mut self.playback, uuid, duration, dir)
+        let result = self.recording.standalone_record(
+            &mut self.session,
+            &mut self.playback,
+            uuid,
+            duration,
+            dir,
+        );
+        if let Err(error) = &result
+            && self.recording.recorder.is_none()
+            && self.recording.recording_probe.is_none()
+            && self.recording.finalizing.is_none()
+        {
+            self.status.recording_state = RecordingState::Failed {
+                reason: format!("{error:#}"),
+            };
+        }
+        result
     }
 
     pub fn stop_recording(&mut self, reason: Option<&str>) -> Result<()> {

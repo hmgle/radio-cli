@@ -63,6 +63,29 @@ fn value(text: &str) -> String {
     }
 }
 
+pub(super) fn fit(text: &str, width: usize) -> String {
+    let text = crate::clean_text(text);
+    if text.width() <= width {
+        return format!("{text}{}", " ".repeat(width - text.width()));
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let cells = ch.width().unwrap_or(0);
+        if used + cells >= width {
+            break;
+        }
+        result.push(ch);
+        used += cells;
+    }
+    result.push('…');
+    result.push_str(&" ".repeat(width - used - 1));
+    result
+}
+
 pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     draw_content(frame, app, view);
     let theme = app.theme;
@@ -146,38 +169,49 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     }
     let normal = app.mode == Mode::Normal && !app.help && app.filter_edit.is_none();
     let active = |focus| normal && app.focus == focus;
-    let playing = if view.status.paused {
-        "暂停"
-    } else if view.status.playing {
-        "播放中"
-    } else if view.status.station.is_some() {
-        "未播放"
-    } else {
-        "待机"
+    let playing = match &view.status.playback_state {
+        crate::engine::PlaybackState::Failed { reason } => {
+            format!("播放失败: {} · ?", fit(reason, 12).trim_end())
+        }
+        state => state.label().into(),
     };
-    let recording = if view.status.recording {
-        format!(
-            "  ● REC {} · {}s{}",
-            view.status
-                .station
-                .as_ref()
-                .map(|s| value(&s.name))
-                .unwrap_or_default(),
-            view.status.recording_ms / 1000,
-            if view.status.paused {
-                " · 播放暂停，录音继续"
-            } else {
-                ""
-            }
-        )
-    } else {
-        String::new()
-    };
+    let recording = format!(
+        "{}{}{}",
+        view.status.recording_state.label(),
+        if matches!(
+            view.status.recording_state,
+            crate::engine::RecordingState::Recording
+        ) {
+            format!(
+                " ● REC {}s{}",
+                view.status.recording_ms / 1000,
+                if view.status.paused() {
+                    " · 播放暂停，录音继续"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            String::new()
+        },
+        if matches!(
+            view.status.recording_state,
+            crate::engine::RecordingState::Failed { .. }
+        ) {
+            " · ? 详情"
+        } else {
+            ""
+        }
+    );
     let player_text = if let Some(station) = &view.status.station {
         format!(
-            "{} · {} · 音量 {}%{}\n{} · {}（目录）\n{} · {} · {}",
+            "{} · {} · 音量 {}%\n{} · {} · {}（目录）\n{} · {} · {}",
             playing,
-            value(&station.name),
+            fit(
+                &value(&station.name),
+                usize::from(area.width.saturating_sub(40))
+            )
+            .trim_end(),
             view.status.volume,
             recording,
             codec(station),
@@ -299,7 +333,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             view.rows
                 .iter()
                 .map(|s| {
-                    let current = view.status.playing
+                    let current = view.status.playing()
                         && view
                             .status
                             .station
@@ -309,10 +343,13 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                         "{}{} {} [{}] {} {}{}",
                         if current { "▶" } else { " " },
                         if s.favorite { "★" } else { " " },
-                        value(&s.name),
-                        value(&s.countrycode),
-                        bitrate(s),
-                        codec(s),
+                        fit(
+                            &value(&s.name),
+                            usize::from(app.rects[Focus::List.index()].width.saturating_sub(37))
+                        ),
+                        fit(&s.countrycode, 2),
+                        fit(&bitrate(s), 10),
+                        fit(&codec(s), 7),
                         if s.active { "" } else { " [已失效]" }
                     ))
                 })
@@ -396,7 +433,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             format!(
                 "{}{}\n国家: {} ({})\n语言: {}\n地区: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
                 value(&station.name),
-                if current.is_some() && view.status.playing {
+                if current.is_some() && view.status.playing() {
                     " · 正在播放"
                 } else {
                     " · 列表选中 / 指定电台"
@@ -637,8 +674,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         let rect = popup(area, 88, area.height.saturating_sub(2));
         frame.render_widget(Clear, rect);
         frame.render_widget(
-            scroll_text(HELP, rect, &mut app.help_scroll)
-                .block(panel("帮助 · j/k 滚动 · Esc 关闭".into(), true)),
+            scroll_text(
+                app.help_content.as_deref().unwrap_or(HELP),
+                rect,
+                &mut app.help_scroll,
+            )
+            .block(panel("帮助 · j/k 滚动 · Esc 关闭".into(), true)),
             rect,
         );
     }

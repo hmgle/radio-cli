@@ -270,8 +270,6 @@ pub(super) fn execute(
         Command::Pause => engine.pause()?,
         Command::Stop => {
             engine.stop_playback()?;
-            engine.status.playing = false;
-            engine.status.paused = false;
             engine.status.message = "已停止播放".into();
         }
         Command::Volume(value) => {
@@ -518,11 +516,11 @@ pub(super) fn run(
                 view.lock().unwrap().log(&format!("错误: {error:#}"));
             }
             let current_revision = engine.store.revision()?;
-            if revision != current_revision || was_recording && !engine.status.recording {
+            if revision != current_revision || was_recording && !engine.status.recording() {
                 revision = current_revision;
                 refresh(&engine, &filter, &view)?;
             }
-            was_recording = engine.status.recording;
+            was_recording = engine.status.recording();
             let state = format!("{:?}", engine.status);
             if state != last_status {
                 last_status = state;

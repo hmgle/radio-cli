@@ -37,7 +37,7 @@ impl RecordingController {
         if playback.local_playback {
             bail!(DomainError::new(ErrorCode::LocalRecording));
         }
-        if !session.status.playing {
+        if !session.status.playing() {
             bail!(DomainError::new(ErrorCode::WaitForPlayback));
         }
         let station = session
@@ -66,7 +66,7 @@ impl RecordingController {
                 duration,
                 task,
             });
-            session.status.recording = true;
+            session.status.recording_state = RecordingState::Probing;
             session.status.recording_ms = 0;
             session.status.recording_path.clear();
             session.status.message = "正在后台检测录音编码…".into();
@@ -189,7 +189,7 @@ impl RecordingController {
     ) {
         session.status.recording_path = recorder.record.path.clone();
         self.recorder = Some(recorder);
-        session.status.recording = true;
+        session.status.recording_state = RecordingState::Recording;
         session.status.recording_ms = 0;
         session.status.message = "正在录音".into();
     }
@@ -200,6 +200,16 @@ impl RecordingController {
         _playback: &mut PlaybackController,
         record: crate::model::Recording,
     ) {
+        session.status.recording_state = if record.status == "complete" {
+            RecordingState::Done
+        } else {
+            RecordingState::Failed {
+                reason: record
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| record.status.clone()),
+            }
+        };
         session.status.recording_path = record.path;
         session.status.message =
             format!("录音 {}: {}", record.status, session.status.recording_path);
@@ -219,9 +229,10 @@ impl RecordingController {
     ) -> Result<()> {
         if self.recording_probe.take().is_some() {
             session.status.message = "录音检测已取消".into();
+            session.status.recording_state = RecordingState::Idle;
         }
-        session.status.recording = false;
         if let Some(recorder) = self.recorder.take() {
+            session.status.recording_state = RecordingState::Finalizing;
             if session.background_media {
                 let config = session.config.clone();
                 let reason = reason.map(str::to_owned);
@@ -251,7 +262,7 @@ impl RecordingController {
             .and_then(|probe| probe.task.poll())
         {
             let probe = self.recording_probe.take().unwrap();
-            session.status.recording = false;
+            session.status.recording_state = RecordingState::Idle;
             if probe.generation == playback.generation {
                 match result.and_then(|info| {
                     Recorder::start_with_info(
@@ -265,7 +276,12 @@ impl RecordingController {
                     )
                 }) {
                     Ok(recorder) => self.attach_recorder(session, playback, recorder),
-                    Err(error) => session.status.message = format!("录音启动失败: {error:#}"),
+                    Err(error) => {
+                        session.status.recording_state = RecordingState::Failed {
+                            reason: format!("{error:#}"),
+                        };
+                        session.status.message = format!("录音启动失败: {error:#}");
+                    }
                 }
             }
         }
@@ -274,6 +290,9 @@ impl RecordingController {
             match result {
                 Ok(record) => self.recording_finished(session, playback, record),
                 Err(error) => {
+                    session.status.recording_state = RecordingState::Failed {
+                        reason: format!("{error:#}"),
+                    };
                     session.status.message =
                         format!("录音收尾失败，可用 recordings recover 重试: {error:#}")
                 }

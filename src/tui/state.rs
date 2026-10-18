@@ -273,6 +273,7 @@ pub(super) struct App {
     pub filter_edit: Option<(usize, [String; 4])>,
     pub facet_index: Option<usize>,
     pub help: bool,
+    pub help_content: Option<String>,
     pub help_scroll: u16,
     pub details_scroll: u16,
     pub inspect_info: bool,
@@ -311,6 +312,7 @@ impl Default for App {
             filter_edit: None,
             facet_index: None,
             help: false,
+            help_content: None,
             help_scroll: 0,
             details_scroll: 0,
             inspect_info: false,
@@ -529,6 +531,7 @@ impl App {
                 match parsed {
                     Parsed::Quit => self.quit = true,
                     Parsed::Help => {
+                        self.help_content = None;
                         self.help = true;
                         self.help_scroll = 0;
                     }
@@ -729,6 +732,18 @@ impl App {
                 self.focus = Focus::List;
             }
             KeyCode::Char('?') => {
+                let mut errors = vec![];
+                if let crate::engine::PlaybackState::Failed { reason } = &view.status.playback_state
+                {
+                    errors.push(format!("播放失败\n{reason}"));
+                }
+                if let crate::engine::RecordingState::Failed { reason } =
+                    &view.status.recording_state
+                {
+                    errors.push(format!("录音失败\n{reason}"));
+                }
+                self.help_content = (!errors.is_empty())
+                    .then(|| format!("{}\n\nEsc / ? 关闭；j/k 滚动。", errors.join("\n\n")));
                 self.help = true;
                 self.help_scroll = 0;
             }
