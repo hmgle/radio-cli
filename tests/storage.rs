@@ -204,6 +204,41 @@ fn malformed_record_does_not_replace_directory() {
 }
 
 #[test]
+fn bootstrap_rolls_back_mid_batch_failure_and_cancellation() {
+    let (_dir, mut store) = db();
+    let old = station("Original");
+    store.upsert(&old).unwrap();
+    let mut replacement = old.clone();
+    replacement.name = "Replacement".into();
+    let new = station("New");
+    let mut invalid = station("Invalid");
+    invalid.stationuuid = "bad-uuid".into();
+    assert!(
+        store
+            .bootstrap(&[replacement.clone(), new.clone(), invalid], || false)
+            .is_err()
+    );
+    assert_eq!(store.count().unwrap(), 1);
+    assert_eq!(store.station(&old.stationuuid).unwrap().name, old.name);
+    for cancel_at in 1..=3 {
+        let mut checks = 0;
+        assert!(
+            store
+                .bootstrap(&[replacement.clone(), new.clone()], || {
+                    checks += 1;
+                    checks == cancel_at
+                })
+                .is_err()
+        );
+        assert_eq!(store.count().unwrap(), 1);
+        assert_eq!(store.station(&old.stationuuid).unwrap().name, old.name);
+    }
+    assert_eq!(store.bootstrap(&[replacement, new], || false).unwrap(), 2);
+    assert_eq!(store.count().unwrap(), 2);
+    assert!(store.bootstrap(&[], || false).is_err());
+}
+
+#[test]
 fn duration_and_terminal_sanitization() {
     use radio_cli::recorder::parse_duration;
     assert_eq!(parse_duration("30m").unwrap().as_secs(), 1800);

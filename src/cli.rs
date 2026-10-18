@@ -385,7 +385,7 @@ pub fn run(cli: Cli) -> Result<()> {
             let mut engine = Engine::new(config, stop.clone())?;
             if engine.store.count()? == 0 {
                 eprintln!("获取热门电台…");
-                engine.directory.bootstrap(&engine.store)?;
+                engine.directory.bootstrap(&mut engine.store)?;
             }
             engine.random(search.filter())?;
             playback_loop(&mut engine, &stop)?;

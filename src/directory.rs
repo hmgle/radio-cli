@@ -123,7 +123,7 @@ impl Directory {
         Ok(rows)
     }
 
-    pub fn bootstrap(&mut self, store: &Store) -> Result<usize> {
+    pub fn bootstrap(&mut self, store: &mut Store) -> Result<usize> {
         let rows = self.get(
             "/json/stations/search",
             &[
@@ -133,20 +133,8 @@ impl Directory {
                 ("reverse", "true".into()),
             ],
         )?;
-        let mut count = 0;
-        if self.stop.load(Ordering::Relaxed) {
-            bail!("操作已取消");
-        }
-        for row in &rows {
-            if valid_identity(row) {
-                store.upsert(row)?;
-                count += 1;
-            }
-        }
-        if count == 0 {
-            bail!("目录没有有效电台记录");
-        }
-        Ok(count)
+        let rows: Vec<_> = rows.into_iter().filter(valid_identity).collect();
+        store.bootstrap(&rows, || self.stop.load(Ordering::Relaxed))
     }
 
     pub fn sync(&mut self, store: &mut Store, progress: impl FnMut(usize)) -> Result<usize> {

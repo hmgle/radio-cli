@@ -64,6 +64,28 @@ impl Store {
         Self::write_station(&self.conn, "stations", station)
     }
 
+    pub fn bootstrap(
+        &mut self,
+        rows: &[Station],
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        for row in rows {
+            if cancelled() {
+                bail!("操作已取消");
+            }
+            Self::write_station(&tx, "stations", row)?;
+        }
+        if cancelled() {
+            bail!("操作已取消");
+        }
+        if rows.is_empty() {
+            bail!("目录没有有效电台记录");
+        }
+        tx.commit()?;
+        Ok(rows.len())
+    }
+
     fn write_station(conn: &Connection, table: &str, s: &Station) -> Result<()> {
         if s.stationuuid.is_empty() || s.name.trim().is_empty() {
             bail!("电台缺少 UUID 或名称");

@@ -168,3 +168,29 @@ fn refresh_rejects_a_different_station_identity() {
             .is_none()
     );
 }
+
+#[test]
+fn bootstrap_counts_valid_rows_and_keeps_custom_stations() {
+    let valid = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "Valid".into(),
+        ..Station::default()
+    };
+    let mut invalid = valid.clone();
+    invalid.stationuuid = "invalid".into();
+    let body = serde_json::to_vec(&vec![invalid, valid.clone(), valid.clone()]).unwrap();
+    let server = Server::new(move |_, s| response(s, 200, "application/json", &body));
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.api_url = Some(server.url.clone());
+    let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let mut custom = valid.clone();
+    custom.name = "Custom".into();
+    custom.custom = true;
+    custom.active = true;
+    store.upsert(&custom).unwrap();
+    let mut directory = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
+    assert_eq!(directory.bootstrap(&mut store).unwrap(), 2);
+    assert_eq!(store.count().unwrap(), 1);
+    assert_eq!(store.station(&valid.stationuuid).unwrap().name, "Custom");
+}
