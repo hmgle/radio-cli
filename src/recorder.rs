@@ -14,8 +14,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc,
-        atomic::AtomicBool,
-        mpsc::{Receiver, sync_channel},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -30,7 +29,7 @@ pub struct Recorder {
     target_duration: Option<Duration>,
     ended_without_stop: bool,
     timed_out: bool,
-    progress: Receiver<u64>,
+    progress: Arc<AtomicU64>,
     duration_ms: u64,
     readers: Vec<thread::JoinHandle<()>>,
     errors: Arc<std::sync::Mutex<String>>,
@@ -172,7 +171,8 @@ impl Recorder {
                 return Err(e).context("无法启动 FFmpeg");
             }
         };
-        let (tx, progress) = sync_channel(32);
+        let progress = Arc::new(AtomicU64::new(0));
+        let latest = progress.clone();
         let errors = Arc::new(std::sync::Mutex::new(String::new()));
         let target = errors.clone();
         let stderr = child.stderr.take().unwrap();
@@ -187,7 +187,7 @@ impl Recorder {
                 }
                 if let Some(value) = line.trim().strip_prefix("out_time_us=") {
                     if let Ok(value) = value.parse::<u64>() {
-                        let _ = tx.try_send(value / 1000);
+                        latest.fetch_max(value / 1000, Ordering::Relaxed);
                     }
                 } else if !line.contains('=') {
                     let mut text = target.lock().unwrap();
@@ -236,9 +236,7 @@ impl Recorder {
     }
 
     pub fn poll(&mut self) -> Result<bool> {
-        while let Ok(ms) = self.progress.try_recv() {
-            self.duration_ms = ms;
-        }
+        self.duration_ms = self.progress.load(Ordering::Relaxed);
         self.ended_without_stop = self.child.try_wait()?.is_some();
         self.timed_out =
             !self.ended_without_stop && self.deadline.is_some_and(|d| Instant::now() >= d);
@@ -280,15 +278,26 @@ impl Recorder {
         for handle in self.readers.drain(..) {
             let _ = handle.join();
         }
-        while let Ok(ms) = self.progress.try_recv() {
-            self.duration_ms = ms;
-        }
+        self.duration_ms = self.progress.load(Ordering::Relaxed);
         self.record.stopped_at = Some(chrono::Utc::now().to_rfc3339());
         self.record.size_bytes = fs::metadata(&self.partial)?.len();
+        let never_stop = Arc::new(AtomicBool::new(false));
+        let verification = probe(config, &self.partial.to_string_lossy(), &never_stop);
+        if let Ok(info) = &verification {
+            self.record.media_duration_ms = info["format"]["duration"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|d| d.is_finite() && *d >= 0.)
+                .map(|d| (d * 1000.) as u64);
+        }
         let premature = self.ended_without_stop
-            && self
-                .target_duration
-                .is_none_or(|d| self.duration_ms.saturating_add(100) < d.as_millis() as u64);
+            && self.target_duration.is_none_or(|d| {
+                self.record
+                    .media_duration_ms
+                    .unwrap_or(self.duration_ms)
+                    .saturating_add(100)
+                    < d.as_millis() as u64
+            });
         let reason = reason.or(if self.timed_out {
             Some("录音未在时限内完成")
         } else if premature && status.success() {
@@ -307,15 +316,6 @@ impl Recorder {
             "failed"
         }
         .into();
-        let never_stop = Arc::new(AtomicBool::new(false));
-        let verification = probe(config, &self.partial.to_string_lossy(), &never_stop);
-        if let Ok(info) = &verification {
-            self.record.media_duration_ms = info["format"]["duration"]
-                .as_str()
-                .and_then(|s| s.parse::<f64>().ok())
-                .filter(|d| d.is_finite() && *d >= 0.)
-                .map(|d| (d * 1000.) as u64);
-        }
         if self.record.status == "complete"
             && verification
                 .as_ref()

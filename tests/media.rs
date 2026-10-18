@@ -418,3 +418,38 @@ fn stalled_explicit_station_times_out_without_selecting_another() {
         selected.stationuuid
     );
 }
+
+#[test]
+fn progress_flood_does_not_lose_final_duration() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    let backend = dir.path().join("progress-backend");
+    let probe = dir.path().join("probe-backend");
+    fs::write(&backend, "#!/bin/sh\nprintf audio\ni=1\nwhile [ $i -le 40 ]; do printf 'out_time_us=%s\\n' $((i * 50000)) >&2; i=$((i + 1)); done\n").unwrap();
+    fs::write(&probe, "#!/bin/sh\nprintf '%s' '{\"streams\":[{\"codec_name\":\"mp3\"}],\"format\":{\"duration\":\"2.0\"}}'\n").unwrap();
+    for path in [&backend, &probe] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    config.settings.ffmpeg = backend.to_string_lossy().into();
+    config.settings.ffprobe = probe.to_string_lossy().into();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = sample("https://example.com/audio");
+    let mut recorder = Recorder::start(
+        &config,
+        &store,
+        &station,
+        station.primary_url(),
+        &config.recording_dir,
+        Some(Duration::from_secs(2)),
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    // Deliberately leave all progress unread until the producer exits.
+    thread::sleep(Duration::from_millis(200));
+    assert!(recorder.poll().unwrap());
+    assert_eq!(recorder.elapsed_ms(), 2000);
+    let record = recorder.finish(&config, &store, None).unwrap();
+    assert_eq!(record.status, "complete", "{record:?}");
+    assert_eq!(record.media_duration_ms, Some(2000));
+}
