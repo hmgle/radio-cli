@@ -248,6 +248,32 @@ fn duration_and_terminal_sanitization() {
     assert_eq!(radio_cli::clean_text("电台\x1b\n\t名称"), "电台名称");
 }
 
+#[test]
+fn domain_errors_have_stable_codes_and_parameters() {
+    use radio_cli::{
+        config::validate_url,
+        error::{DomainError, ErrorCode},
+        recorder,
+    };
+    for value in ["file:///tmp/audio", "invalid"] {
+        let error = validate_url(value).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<DomainError>().unwrap().code,
+            ErrorCode::InvalidUrl
+        );
+    }
+    let (_dir, store) = db();
+    let error = store.station("missing").unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<DomainError>().unwrap().code,
+        ErrorCode::StationNotFound
+    );
+    let error = recorder::format_for_codec("alac").unwrap_err();
+    let domain = error.downcast_ref::<DomainError>().unwrap();
+    assert_eq!(domain.code, ErrorCode::UnsupportedCodec);
+    assert_eq!(domain.params["codec"], "alac");
+}
+
 /// Run explicitly with `cargo test --release --test storage catalog_benchmark -- --ignored --nocapture`.
 #[test]
 #[ignore]

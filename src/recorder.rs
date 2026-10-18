@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use crate::{
     USER_AGENT,
     config::{Config, validate_url},
@@ -84,7 +85,7 @@ pub fn format_for_codec(codec: &str) -> Result<(&'static str, &'static str)> {
         "aac" => Ok(("aac", "adts")),
         "vorbis" => Ok(("ogg", "ogg")),
         "opus" => Ok(("opus", "opus")),
-        _ => bail!("暂不支持录制编码 {codec}；不会自动转码"),
+        _ => bail!(DomainError::new(ErrorCode::UnsupportedCodec).with("codec", codec)),
     }
 }
 
@@ -128,20 +129,23 @@ fn publish(partial: &Path, final_path: &Path) -> Result<()> {
 
 fn complete_finalization(store: &Store, record: &mut Recording) -> Result<()> {
     let partial = PathBuf::from(&record.path);
-    let final_path = PathBuf::from(record.final_path.as_ref().context("缺少最终文件路径")?);
+    let final_path = PathBuf::from(
+        record
+            .final_path
+            .as_ref()
+            .context(DomainError::new(ErrorCode::FinalPathMissing))?,
+    );
     if partial.exists() {
         publish(&partial, &final_path).with_context(|| {
-            format!(
-                "发布录音 {}: {} → {}",
-                record.id,
-                partial.display(),
-                final_path.display()
-            )
+            DomainError::new(ErrorCode::RecordingPublish)
+                .with("id", &record.id)
+                .with("path", partial.display())
+                .with("final_path", final_path.display())
         })?;
     }
     let size = fs::metadata(&final_path)?.len();
     if size != record.size_bytes || size == 0 {
-        bail!("最终文件大小不匹配；保留恢复状态");
+        bail!(DomainError::new(ErrorCode::RecordingSizeMismatch));
     }
     let mut complete = record.clone();
     complete.path = final_path.to_string_lossy().into();
@@ -233,7 +237,7 @@ impl Recorder {
         validate_url(url)?;
         let codec = info["streams"][0]["codec_name"]
             .as_str()
-            .context("源站没有音频轨道")?
+            .context(DomainError::new(ErrorCode::NoAudio))?
             .to_owned();
         let (extension, muxer) = format_for_codec(&codec)?;
         fs::create_dir_all(dir)?;
@@ -292,7 +296,9 @@ impl Recorder {
             Ok(child) => child,
             Err(e) => {
                 let _ = fs::remove_file(&partial);
-                return Err(e).context("无法启动 FFmpeg");
+                return Err(e).context(
+                    DomainError::new(ErrorCode::MissingDependency).with("program", "ffmpeg"),
+                );
             }
         };
         let progress = Arc::new(AtomicU64::new(0));
@@ -512,16 +518,18 @@ pub fn parse_duration(value: &str) -> Result<Duration> {
         .unwrap_or(value.len());
     let n = value[..split]
         .parse::<u64>()
-        .context("时长格式如 30s、10m、2h")?;
+        .context(DomainError::new(ErrorCode::InvalidDuration))?;
     let factor = match &value[split..] {
         "" | "s" => 1,
         "m" => 60,
         "h" => 3600,
-        _ => bail!("时长单位只支持 s/m/h"),
+        _ => bail!(DomainError::new(ErrorCode::DurationUnit)),
     };
-    let secs = n.checked_mul(factor).context("时长溢出")?;
+    let secs = n
+        .checked_mul(factor)
+        .context(DomainError::new(ErrorCode::DurationOverflow))?;
     if secs == 0 || secs > 365 * 24 * 3600 {
-        bail!("时长必须大于零且不超过 365 天");
+        bail!(DomainError::new(ErrorCode::DurationRange));
     }
     Ok(Duration::from_secs(secs))
 }

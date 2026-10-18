@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use crate::{
     config::Config,
     directory::Directory,
@@ -27,6 +28,8 @@ use std::{
     about = "轻量终端收音机：搜索、收藏、播放与本地录音"
 )]
 pub struct Cli {
+    #[arg(long, global = true)]
+    pub lang: Option<String>,
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
     #[arg(long, global = true)]
@@ -94,13 +97,14 @@ fn emit_page<T: serde::Serialize>(
         )?;
     } else {
         eprintln!(
-            "{} / {total} 项 · offset {}{}",
+            "{} / {total} {} · offset {} · {}",
             items.len(),
+            crate::t!("cli_items"),
             page.offset,
             if has_more {
-                " · 后续可用 --offset / --all"
+                crate::t!("cli_more")
             } else {
-                " · 最后一页"
+                crate::t!("cli_last")
             }
         );
     }
@@ -200,13 +204,18 @@ fn print_stations(rows: &[Station], json: bool) -> Result<()> {
             crate::clean_text(&s.name),
             crate::clean_text(&s.countrycode),
             s.bitrate,
-            if s.active { "" } else { " [目录已失效]" }
+            if s.active {
+                ""
+            } else {
+                crate::t!("cli_inactive")
+            }
         );
     }
     Ok(())
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    crate::messages::preview(cli.lang.as_deref());
     let action = match cli.command {
         Some(action) => action,
         None if io::stdin().is_terminal() && io::stdout().is_terminal() => Action::Tui,
@@ -221,6 +230,7 @@ pub fn run(cli: Cli) -> Result<()> {
         cli.data_dir.as_deref(),
         cli.api_url.as_deref(),
     )?;
+    crate::messages::init(cli.lang.as_deref(), config.settings.language.as_deref());
     config.prepare()?;
     let stop = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, stop.clone())?;
@@ -280,9 +290,9 @@ pub fn run(cli: Cli) -> Result<()> {
                     println!(
                         "{}：{}",
                         if added {
-                            "已收藏"
+                            crate::t!("cli_favorited")
                         } else {
-                            "已取消收藏"
+                            crate::t!("cli_unfavorited")
                         },
                         crate::clean_text(&station.name)
                     );
@@ -299,7 +309,7 @@ pub fn run(cli: Cli) -> Result<()> {
         } => {
             crate::config::validate_url(&url)?;
             if name.trim().is_empty() {
-                bail!("电台名称不能为空");
+                bail!(DomainError::new(ErrorCode::EmptyStationName));
             }
             for backup in &backup_url {
                 crate::config::validate_url(backup)?;

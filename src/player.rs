@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use crate::{
     USER_AGENT,
     config::{Config, validate_url},
@@ -41,7 +42,7 @@ impl Player {
             .runtime_dir
             .join(format!("mpv-{}.sock", uuid::Uuid::new_v4().simple()));
         if socket.as_os_str().len() > 100 {
-            bail!("运行目录过长，无法创建 Unix Socket；请缩短 --data-dir");
+            bail!(DomainError::new(ErrorCode::RuntimePathTooLong));
         }
         let mut command = Command::new(&config.settings.mpv);
         command
@@ -71,7 +72,7 @@ impl Player {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         let mut child = crate::process::spawn_owned(command)
-            .context("无法启动 mpv；请安装 mpv 并运行 radio doctor")?;
+            .context(DomainError::new(ErrorCode::MissingDependency).with("program", "mpv"))?;
         let deadline = Instant::now() + Duration::from_secs(3);
         let stream = loop {
             if let Ok(stream) = UnixStream::connect(&socket) {
@@ -84,7 +85,7 @@ impl Player {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = fs::remove_file(&socket);
-                bail!("mpv IPC 启动失败或已取消");
+                bail!(DomainError::new(ErrorCode::PlayerStartup));
             }
             thread::sleep(Duration::from_millis(20));
         };
@@ -122,7 +123,7 @@ impl Player {
         let mut buf = [0u8; 8192];
         loop {
             match self.stream.read(&mut buf) {
-                Ok(0) => bail!("mpv IPC 已关闭"),
+                Ok(0) => bail!(DomainError::new(ErrorCode::PlayerClosed)),
                 Ok(n) => self.buffer.extend_from_slice(&buf[..n]),
                 Err(e)
                     if matches!(
@@ -135,7 +136,7 @@ impl Player {
                 Err(e) => return Err(e.into()),
             }
             if self.buffer.len() > 1024 * 1024 {
-                bail!("mpv IPC 消息过大");
+                bail!(DomainError::new(ErrorCode::PlayerMessageTooLarge));
             }
             if self.buffer.len() >= 8192 {
                 break;
@@ -170,7 +171,7 @@ impl Player {
             }
         }
         if self.child.try_wait()?.is_some() {
-            bail!("mpv 意外退出");
+            bail!(DomainError::new(ErrorCode::PlayerExited));
         }
         Ok(out)
     }

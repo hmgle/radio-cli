@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use std::{
@@ -80,7 +81,7 @@ impl MediaLock {
             .write(true)
             .open(dir.join("media.lock"))?;
         file.try_lock_exclusive()
-            .context("另一个 radio 会话正在播放或录音")?;
+            .context(DomainError::new(ErrorCode::MediaBusy))?;
         Ok(Self { _file: file })
     }
 }
@@ -109,7 +110,7 @@ pub fn wait_until(child: &mut Child, timeout: Duration, stop: &AtomicBool) -> Re
         if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            bail!("子进程已取消或超时");
+            bail!(DomainError::new(ErrorCode::ProcessTimeout));
         }
         thread::sleep(Duration::from_millis(30));
     }
@@ -122,17 +123,19 @@ pub fn output(command: &mut Command, timeout: Duration, stop: &Arc<AtomicBool>) 
         .stderr(Stdio::piped());
     // Move the configured command to the persistent spawning thread.
     let configured = std::mem::replace(command, Command::new("unused"));
-    let mut child = spawn_owned(configured).context("无法启动依赖程序；请运行 radio doctor")?;
+    let program = configured.get_program().to_string_lossy().into_owned();
+    let mut child = spawn_owned(configured)
+        .context(DomainError::new(ErrorCode::MissingDependency).with("program", program))?;
     let stdout = drain(child.stdout.take().unwrap(), 256 * 1024);
     let stderr = drain(child.stderr.take().unwrap(), 16 * 1024);
     let status = wait_until(&mut child, timeout, stop);
     let data = stdout.join().unwrap_or_default();
     let error = stderr.join().unwrap_or_default();
     if !status?.success() {
-        bail!(
-            "子进程失败: {}",
+        bail!(DomainError::new(ErrorCode::ProcessFailed).with(
+            "reason",
             crate::clean_text(&String::from_utf8_lossy(&error))
-        );
+        ));
     }
     Ok(data)
 }
@@ -160,9 +163,9 @@ impl<T: Send + 'static> Background<T> {
         match self.result.try_recv() {
             Ok(value) => Some(value),
             Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Some(Err(anyhow::anyhow!("后台任务异常退出")))
-            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(anyhow::anyhow!(
+                DomainError::new(ErrorCode::BackgroundFailed)
+            ))),
         }
     }
 }

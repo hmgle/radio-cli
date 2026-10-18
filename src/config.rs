@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub language: Option<String>,
     pub api_url: Option<String>,
     pub mpv: String,
     pub ffmpeg: String,
@@ -23,6 +25,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: None,
             api_url: None,
             mpv: "mpv".into(),
             ffmpeg: "ffmpeg".into(),
@@ -51,17 +54,23 @@ impl Config {
         data_dir: Option<&Path>,
         api: Option<&str>,
     ) -> Result<Self> {
-        let dirs = ProjectDirs::from("", "", "radio-cli").context("无法确定用户数据目录")?;
+        let dirs = ProjectDirs::from("", "", "radio-cli")
+            .context(DomainError::new(ErrorCode::DataDirectory))?;
         let path = config_path
             .map(PathBuf::from)
             .unwrap_or_else(|| dirs.config_dir().join("config.toml"));
         let mut settings: Settings = match fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text)
-                .with_context(|| format!("配置文件无效: {}", path.display()))?,
+            Ok(text) => toml::from_str(&text).with_context(|| {
+                DomainError::new(ErrorCode::InvalidConfig).with("path", path.display())
+            })?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && config_path.is_none() => {
                 Settings::default()
             }
-            Err(e) => return Err(e).with_context(|| format!("无法读取配置: {}", path.display())),
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    DomainError::new(ErrorCode::ReadConfig).with("path", path.display())
+                });
+            }
         };
         if let Some(api) = api {
             settings.api_url = Some(api.to_owned());
@@ -74,7 +83,7 @@ impl Config {
             || settings.request_timeout_secs > 300
             || settings.playback_timeout_secs > 300
         {
-            bail!("音量必须为 0–100，超时必须为 1–300 秒");
+            bail!(DomainError::new(ErrorCode::InvalidSettings));
         }
         if let Some(api) = &settings.api_url {
             validate_url(api)?;
@@ -108,9 +117,9 @@ impl Config {
 }
 
 pub fn validate_url(value: &str) -> Result<()> {
-    let url = reqwest::Url::parse(value).context("URL 无效")?;
+    let url = reqwest::Url::parse(value).context(DomainError::new(ErrorCode::InvalidUrl))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        bail!("只支持带主机名的 HTTP(S) URL");
+        bail!(DomainError::new(ErrorCode::InvalidUrl));
     }
     Ok(())
 }

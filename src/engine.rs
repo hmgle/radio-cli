@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use crate::{
     config::Config,
     directory::Directory,
@@ -144,7 +145,10 @@ impl Engine {
     }
 
     fn start_candidate(&mut self) -> Result<()> {
-        self.url = self.candidates.pop_front().context("无可用播放地址")?;
+        self.url = self
+            .candidates
+            .pop_front()
+            .context(DomainError::new(ErrorCode::NoStream))?;
         self.status.source_url = self.url.clone();
         self.tried.push(self.url.clone());
         self.config.settings.volume = self.status.volume;
@@ -180,11 +184,14 @@ impl Engine {
     }
 
     fn pick_random(&mut self) -> Result<()> {
-        let filter = self.random_filter.as_ref().context("随机模式未启用")?;
+        let filter = self
+            .random_filter
+            .as_ref()
+            .context(DomainError::new(ErrorCode::RandomDisabled))?;
         let station = self
             .store
             .random(filter, &self.random_tried)?
-            .context("没有符合条件的其他电台")?;
+            .context(DomainError::new(ErrorCode::NoMatchingStation))?;
         self.random_tried.push(station.stationuuid.clone());
         self.play_station(station)
     }
@@ -194,7 +201,11 @@ impl Engine {
         self.status.playing = false;
         self.status.paused = false;
         self.stop_recording(Some(reason))?;
-        let station = self.status.station.clone().context("没有当前电台")?;
+        let station = self
+            .status
+            .station
+            .clone()
+            .context(DomainError::new(ErrorCode::NotPlaying))?;
         if !self.candidates.is_empty() {
             return self.start_candidate();
         }
@@ -288,7 +299,10 @@ impl Engine {
     }
 
     pub fn pause(&mut self) -> Result<()> {
-        self.player.as_mut().context("尚未播放")?.toggle_pause()
+        self.player
+            .as_mut()
+            .context(DomainError::new(ErrorCode::NotPlaying))?
+            .toggle_pause()
     }
 
     pub fn volume(&mut self, delta: i32) -> Result<()> {
@@ -313,15 +327,19 @@ impl Engine {
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
         if !self.status.playing {
-            bail!("请等待电台开始播放后再录音");
+            bail!(DomainError::new(ErrorCode::WaitForPlayback));
         }
-        let station = self.status.station.clone().context("尚未播放")?;
+        let station = self
+            .status
+            .station
+            .clone()
+            .context(DomainError::new(ErrorCode::NotPlaying))?;
         if self.background_media {
             if self.recorder.is_some()
                 || self.recording_probe.is_some()
                 || self.finalizing.is_some()
             {
-                bail!("已有录音或收尾任务");
+                bail!(DomainError::new(ErrorCode::RecordingBusy));
             }
             let config = self.config.clone();
             let url = self.url.clone();
@@ -354,7 +372,7 @@ impl Engine {
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
         if self.recorder.is_some() {
-            bail!("已有录音任务");
+            bail!(DomainError::new(ErrorCode::RecordingBusy));
         }
         let mut station = self.store.station(uuid)?;
         let mut tried = Vec::new();
@@ -377,7 +395,7 @@ impl Engine {
                 match recorder::probe(&self.config, &url, &self.stop).and_then(|info| {
                     let codec = info["streams"][0]["codec_name"]
                         .as_str()
-                        .context("源站没有音频轨道")?;
+                        .context(DomainError::new(ErrorCode::NoAudio))?;
                     recorder::format_for_codec(codec)?;
                     Ok(info)
                 }) {
@@ -413,8 +431,8 @@ impl Engine {
                 }
             }
         }
-        Err(last.unwrap_or_else(|| anyhow::anyhow!("无有效录音地址")))
-            .context("所有录音线路均不可用")
+        Err(last.unwrap_or_else(|| anyhow::anyhow!(DomainError::new(ErrorCode::NoRecordingStream))))
+            .context(DomainError::new(ErrorCode::RecordingSourcesFailed))
     }
 
     fn start_recording(
@@ -425,7 +443,7 @@ impl Engine {
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
         if self.recorder.is_some() {
-            bail!("已有录音任务");
+            bail!(DomainError::new(ErrorCode::RecordingBusy));
         }
         let dir = dir.unwrap_or(&self.config.recording_dir);
         let recorder = Recorder::start(

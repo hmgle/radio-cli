@@ -79,6 +79,10 @@ TUI 按键：
 
 Linux 默认路径：
 
+CLI 错误和列表文案支持 `--lang en` / `--lang zh-CN`。优先级为 `--lang`、
+`RADIO_LANG`、配置 `language`、`LC_ALL`/`LANG`，未知语言提示一次并回退英文。
+TUI 静态文案和 clap 帮助的迁移将单独处理。
+
 - 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - 录音：数据目录下的 `recordings/`

@@ -2,6 +2,8 @@ pub mod cli;
 pub mod config;
 pub mod directory;
 pub mod engine;
+pub mod error;
+pub mod messages;
 pub mod model;
 pub mod player;
 pub mod process;

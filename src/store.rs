@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use crate::model::{Filter, Recording, Station};
 use anyhow::{Context, Result, bail};
 use rusqlite::{
@@ -19,7 +20,7 @@ impl Store {
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version > 2 {
-            bail!("数据库版本较新，请升级 radio");
+            bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
         if version < 2 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -52,7 +53,7 @@ impl Store {
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
                 2 => {},
-                _ => bail!("数据库版本较新，请升级 radio"),
+                _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             tx.pragma_update(None, "user_version", 2)?;
             tx.commit()?;
@@ -72,15 +73,15 @@ impl Store {
         let tx = self.conn.transaction()?;
         for row in rows {
             if cancelled() {
-                bail!("操作已取消");
+                bail!(DomainError::new(ErrorCode::Cancelled));
             }
             Self::write_station(&tx, "stations", row)?;
         }
         if cancelled() {
-            bail!("操作已取消");
+            bail!(DomainError::new(ErrorCode::Cancelled));
         }
         if rows.is_empty() {
-            bail!("目录没有有效电台记录");
+            bail!(DomainError::new(ErrorCode::EmptyCatalog));
         }
         tx.commit()?;
         Ok(rows.len())
@@ -88,9 +89,9 @@ impl Store {
 
     fn write_station(conn: &Connection, table: &str, s: &Station) -> Result<()> {
         if s.stationuuid.is_empty() || s.name.trim().is_empty() {
-            bail!("电台缺少 UUID 或名称");
+            bail!(DomainError::new(ErrorCode::InvalidStation));
         }
-        uuid::Uuid::parse_str(&s.stationuuid).context("电台 UUID 无效")?;
+        uuid::Uuid::parse_str(&s.stationuuid).context(DomainError::new(ErrorCode::InvalidUuid))?;
         let sql = format!("INSERT INTO {table} VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
@@ -171,7 +172,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let count: usize = tx.query_row("SELECT count(*) FROM incoming", [], |r| r.get(0))?;
         if count == 0 {
-            bail!("服务器返回空目录，保留原有数据");
+            bail!(DomainError::new(ErrorCode::EmptyCatalog));
         }
         tx.execute("UPDATE stations SET active=0 WHERE custom=0", [])?;
         tx.execute_batch(
@@ -227,7 +228,7 @@ impl Store {
                 },
             )
             .optional()?
-            .context("本地未找到电台；请先 sync 或 station add")?;
+            .context(DomainError::new(ErrorCode::StationNotFound))?;
         let mut s: Station = serde_json::from_str(&row.0)?;
         s.active = row.1;
         s.favorite = row.2;
@@ -332,7 +333,7 @@ impl Store {
             r.get::<_, u8>(0)
         })
         .optional()?
-        .context("本地未找到电台；请先 sync 或 station add")?;
+        .context(DomainError::new(ErrorCode::StationNotFound))?;
         let removed = tx.execute("DELETE FROM favorites WHERE uuid=?1", [uuid])?;
         let added = removed == 0;
         if added {

@@ -1,3 +1,4 @@
+use crate::error::{DomainError, ErrorCode};
 use crate::{USER_AGENT, config::Config, model::Station, store::Store};
 use anyhow::{Context, Result, bail};
 use hickory_resolver::Resolver;
@@ -70,7 +71,7 @@ impl Directory {
         }
         self.servers.shuffle(&mut rand::rng());
         if self.servers.is_empty() {
-            bail!("未发现可用目录服务器；可设置 api_url");
+            bail!(DomainError::new(ErrorCode::NoDirectoryServers));
         }
         Ok(())
     }
@@ -80,7 +81,7 @@ impl Directory {
         let mut last = None;
         for server in self.servers.iter().take(3) {
             if self.stop.load(Ordering::Relaxed) {
-                bail!("操作已取消");
+                bail!(DomainError::new(ErrorCode::Cancelled));
             }
             let result = self.fetch(server, path, params);
             match result {
@@ -94,12 +95,12 @@ impl Directory {
                 Err(e) => last = Some(e),
             }
         }
-        Err(last.context("目录请求失败")?)
+        Err(last.context(DomainError::new(ErrorCode::DirectoryRequest))?)
     }
 
     fn fetch(&self, server: &str, path: &str, params: &[(&str, String)]) -> Result<Vec<Station>> {
         if self.stop.load(Ordering::Relaxed) {
-            bail!("操作已取消");
+            bail!(DomainError::new(ErrorCode::Cancelled));
         }
         let response = self
             .client
@@ -113,7 +114,7 @@ impl Directory {
             .take(16 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() > 16 * 1024 * 1024 {
-            bail!("目录响应超过 16 MiB");
+            bail!(DomainError::new(ErrorCode::DirectoryResponseTooLarge));
         }
         let mut rows: Vec<Station> = serde_json::from_slice(&bytes)?;
         for row in &mut rows {
@@ -171,11 +172,11 @@ impl Directory {
                         ],
                     )?;
                     if rows.len() > 1000 {
-                        bail!("服务器未遵守分页上限");
+                        bail!(DomainError::new(ErrorCode::InvalidPagination));
                     }
                     let received = rows.len();
                     if self.stop.load(Ordering::Relaxed) {
-                        bail!("操作已取消");
+                        bail!(DomainError::new(ErrorCode::Cancelled));
                     }
                     let rows: Vec<_> = rows.into_iter().filter(valid_identity).collect();
                     valid += rows.len();
@@ -187,16 +188,16 @@ impl Directory {
                         break;
                     }
                     if offset >= 200_000 {
-                        bail!("目录超过安全上限，请检查服务器分页");
+                        bail!(DomainError::new(ErrorCode::CatalogTooLarge));
                     }
                 }
                 if store.incoming_count()? == 0 {
-                    bail!("服务器返回空目录，保留原有数据");
+                    bail!(DomainError::new(ErrorCode::EmptyCatalog));
                 }
                 Ok(())
             })();
             if self.stop.load(Ordering::Relaxed) {
-                bail!("操作已取消");
+                bail!(DomainError::new(ErrorCode::Cancelled));
             }
             let count = store.incoming_count()?;
             let suspicious = result.is_ok()
@@ -214,12 +215,10 @@ impl Directory {
             match result {
                 Ok(()) => {
                     if suspicious && !accept_shrink {
-                        failures.push(format!(
-                            "{server}: 目录由 {previous} 缩减为 {count}，超过 25%"
-                        ));
+                        failures.push(format!("{server}: {previous} → {count} (>25%)"));
                         bail!(
-                            "目录同步被缩减保护拒绝，保留旧目录。尝试服务器：{}；核实后用 sync --accept-shrink 明确接受",
-                            failures.join("；")
+                            DomainError::new(ErrorCode::CatalogShrink)
+                                .with("servers", failures.join("; "))
                         );
                     }
                     return store.finish_sync();
@@ -227,7 +226,7 @@ impl Directory {
                 Err(error) => failures.push(format!("{server}: {error:#}")),
             }
         }
-        bail!("目录同步失败；尝试服务器：{}", failures.join("；"))
+        bail!(DomainError::new(ErrorCode::DirectorySync).with("servers", failures.join("; ")))
     }
 
     pub fn refresh(&mut self, uuid: &str) -> Result<Option<Station>> {
