@@ -22,7 +22,8 @@ playback_timeout_secs = 12
 
 # Independent recording codec-probe budget (1-300 seconds).
 probe_timeout_secs = 5
-# Reserve this many MiB plus the known bitrate x duration estimate.
+# Positive MiB reserve plus estimated audio bitrate x duration.
+# Unknown bitrate or unlimited duration: reserve only; total size is unknown.
 recording_min_free_mb = 16
 # default | mono | light; nonempty NO_COLOR forces mono.
 theme = "default"

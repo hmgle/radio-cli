@@ -300,6 +300,8 @@ pub(super) struct App {
     original_query: String,
     pub filter_edit: Option<(usize, [String; 4])>,
     pub facet_index: Option<usize>,
+    pub facet_prefix: String,
+    backups_request: Option<(String, u64)>,
     pub help: bool,
     pub help_content: Option<String>,
     pub help_scroll: u16,
@@ -342,6 +344,8 @@ impl Default for App {
             original_query: String::new(),
             filter_edit: None,
             facet_index: None,
+            facet_prefix: String::new(),
+            backups_request: None,
             help: false,
             help_content: None,
             help_scroll: 0,
@@ -420,6 +424,33 @@ impl App {
             self.selected(view).map(|s| s.stationuuid.clone())
         }
     }
+    pub fn request_selected_backups(&mut self, view: &View, sender: &CommandSender) {
+        let station = if self.inspect_info && view.inspected_request == self.info_request {
+            view.inspected.as_ref()
+        } else {
+            self.selected(view)
+        };
+        if let Some(station) = station {
+            let request = (station.stationuuid.clone(), view.rows_revision);
+            if !view.backups.contains_key(&station.stationuuid)
+                && self.backups_request.as_ref() != Some(&request)
+                && self.send(sender, Command::Backups(station.stationuuid.clone()))
+            {
+                self.backups_request = Some(request);
+            }
+        }
+    }
+    pub fn facet_candidates<'a>(
+        &self,
+        view: &'a View,
+        selected: usize,
+    ) -> Vec<&'a crate::model::Facet> {
+        let prefix = self.facet_prefix.trim().to_lowercase();
+        view.facets[selected]
+            .iter()
+            .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
+            .collect()
+    }
     fn request_info(&mut self, uuid: String, sender: &CommandSender) {
         self.info_request = self.info_request.wrapping_add(1);
         self.inspect_info = self.send(sender, Command::Info(uuid, self.info_request));
@@ -492,6 +523,19 @@ impl App {
         self.flush_search(sender);
     }
     fn focus_direction(&mut self, dx: i32, dy: i32) {
+        if self.rects[Focus::List.index()] == self.rects[Focus::Details.index()] && dy == 0 {
+            match (self.focus, dx) {
+                (Focus::List, 1) => {
+                    self.focus = Focus::Details;
+                    return;
+                }
+                (Focus::Details, -1) => {
+                    self.focus = Focus::List;
+                    return;
+                }
+                _ => {}
+            }
+        }
         let origin = self.rects[self.focus.index()];
         let x = i32::from(origin.x) * 2 + i32::from(origin.width);
         let y = i32::from(origin.y) * 2 + i32::from(origin.height);
@@ -600,7 +644,7 @@ impl App {
                         self.focus = Focus::List;
                         self.flush_search(sender);
                     }
-                    Parsed::Worker(command) => {
+                    Parsed::Worker(mut command) => {
                         if matches!(
                             command,
                             Command::Station(crate::cli::StationAction::Remove { .. })
@@ -614,6 +658,14 @@ impl App {
                         if let Command::Info(uuid, _) = command {
                             self.request_info(uuid, sender);
                             return;
+                        }
+                        if matches!(command, Command::Random(_))
+                            && self.source == Source::Recordings
+                        {
+                            if let Command::Random(filter) = &mut command {
+                                filter.recordings = false;
+                            }
+                            self.switch_source(Source::Stations, None, sender);
                         }
                         if matches!(command, Command::Doctor) {
                             self.focus = Focus::Activity;
@@ -720,7 +772,11 @@ impl App {
             }
             match key.code {
                 KeyCode::Down | KeyCode::Up if *selected < 3 => {
-                    let candidates = &view.facets[*selected];
+                    let prefix = self.facet_prefix.trim().to_lowercase();
+                    let candidates = view.facets[*selected]
+                        .iter()
+                        .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
+                        .collect::<Vec<_>>();
                     if !candidates.is_empty() {
                         let index = match self.facet_index {
                             Some(index) if key.code == KeyCode::Down => {
@@ -740,11 +796,13 @@ impl App {
                     *selected = (*selected + 1) % 4;
                     self.facet_index = None;
                     self.filter_input.set(&values[*selected]);
+                    self.facet_prefix = values[*selected].clone();
                 }
                 KeyCode::BackTab => {
                     *selected = (*selected + 3) % 4;
                     self.facet_index = None;
                     self.filter_input.set(&values[*selected]);
+                    self.facet_prefix = values[*selected].clone();
                 }
                 KeyCode::Enter => match values[3].parse::<u32>() {
                     Ok(bitrate) => {
@@ -762,6 +820,7 @@ impl App {
                 _ => {
                     self.filter_input.key(key, false);
                     values[*selected] = self.filter_input.text.clone();
+                    self.facet_prefix = self.filter_input.text.clone();
                     self.facet_index = None;
                 }
             }
@@ -899,6 +958,7 @@ impl App {
                 self.filter_input
                     .set(self.filter.country.as_deref().unwrap_or(""));
                 self.facet_index = None;
+                self.facet_prefix = self.filter_input.text.clone();
                 self.send(sender, Command::Facets);
                 self.filter_edit = Some((
                     0,
@@ -914,6 +974,9 @@ impl App {
                 self.flush_search(sender);
             }
             KeyCode::Char('n') => {
+                if self.source == Source::Recordings {
+                    self.switch_source(Source::Stations, None, sender);
+                }
                 self.send(sender, Command::Random(self.filter.clone()));
             }
             KeyCode::Char('r') => {

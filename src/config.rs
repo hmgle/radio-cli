@@ -102,7 +102,12 @@ impl Config {
         if let Some(api) = api {
             settings.api_url = Some(api.to_owned());
         }
-        if settings.volume > 100
+        if settings.recording_min_free_mb == 0
+            || settings
+                .recording_min_free_mb
+                .checked_mul(1024 * 1024)
+                .is_none()
+            || settings.volume > 100
             || settings.connect_timeout_secs == 0
             || settings.request_timeout_secs == 0
             || settings.playback_timeout_secs == 0
@@ -151,4 +156,31 @@ pub fn validate_url(value: &str) -> Result<()> {
         bail!(DomainError::new(ErrorCode::InvalidUrl));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recording_reserve_rejects_zero_and_byte_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for value in [0_u64, 1_u64 << 44] {
+            fs::write(&path, format!("recording_min_free_mb = {value}")).unwrap();
+            let error = Config::load(Some(&path), Some(dir.path()), None).unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<DomainError>().unwrap().code,
+                ErrorCode::InvalidSettings
+            );
+        }
+        fs::write(&path, "recording_min_free_mb = 1").unwrap();
+        assert_eq!(
+            Config::load(Some(&path), Some(dir.path()), None)
+                .unwrap()
+                .settings
+                .recording_min_free_mb,
+            1
+        );
+    }
 }

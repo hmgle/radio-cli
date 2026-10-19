@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1 — 2026-10-19
+
+Post-release review fixes tracked in #83.
+
+- Renew reconnect budgets after confirmed playback; cap flapping streams at six
+  retries per minute and clear completed recording status when switching stations.
+- Request audio/format bitrate from ffprobe for recording preflight. Prefer audio
+  bitrate and explicitly report reserve-only checks for unknown duration/bitrate.
+  `recording_min_free_mb` must be positive and convertible to bytes.
+- Coalesce TUI list refreshes, avoid unchanged preference writes, and load backup
+  URLs only for selected or explicitly inspected stations.
+- Filter facet choices by the typed prefix and display up to eight candidates.
+- Show observed mute state, restore narrow list/details focus navigation, retain
+  titles in short wide windows, and keep recording-source actions consistent.
+- Return JSON usage envelopes for malformed v2 flags, declare domain exit codes
+  explicitly, and report `placeholder_kept` when station removal retains a row.
+  Legacy always-JSON commands and the existing `removed` field remain compatible.
+- Localize CLI operation progress and validate message keys across all modules.
+- Package only user-facing guides from fresh staging, check nonempty files, and
+  run the packager in CI. Internal review notes are excluded from new archives.
+- Repeat paired catalog benchmarks and record the comparative evidence and limits
+  in `docs/validation.md`; retain the 100 ms absolute search budget.
+
 ## 0.3.0 — 2026-10-19
 
 Complete roadmap stages S1–S3 (#36–#57); S4 (#58–#64) remains backlog.

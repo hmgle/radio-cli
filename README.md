@@ -104,7 +104,8 @@ UUID --add URL --remove URL` to manage fallback URLs. Normalized duplicate URLs
 are rejected with the existing UUID. TUI removal asks for a second confirmation.
 
 Established live streams reconnect after unexpected EOF/errors at most three
-times, after 1, 3, and 7 seconds. A reconnect keeps the same station and URL
+times per outage, after 1, 3, and 7 seconds. Successful playback renews this
+budget; a rolling limit of six retries per minute bounds flapping streams. A reconnect keeps the same station and URL
 and does not duplicate history or click reports. Stop, switching stations,
 and exit cancel pending retries. Exhausted retries use the normal fallback
 chain; initial connection failures retain their existing fallback behavior.
@@ -178,3 +179,8 @@ At 80×24, details open with `3` and the idle task area collapses.
 Use `mouse = false` or `:set mouse false` for native text selection.
 Command history retains 100 entries across sessions. `:help record` shows command
 usage and `:set language en|zh-CN` changes migrated messages for this session.
+
+Recording space preflight prefers probed audio bitrate, then container bitrate,
+then catalog bitrate. With no duration or no known bitrate, it checks only the
+configured reserve and reports that total size cannot be estimated. This check
+is not a guarantee against a full disk during recording.

@@ -51,6 +51,7 @@ fn view() -> View {
         message: "播放中".into(),
         playback_state: crate::engine::PlaybackState::Playing,
         volume: 80,
+        muted: false,
         recording_state: crate::engine::RecordingState::Idle,
         recording_ms: 0,
         recording_path: String::new(),
@@ -912,6 +913,7 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
         &shared,
     )
     .unwrap();
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
     assert!(shared.lock().unwrap().rows[0].favorite);
 }
 
@@ -1490,18 +1492,18 @@ fn station_refresh_does_not_read_recordings_until_that_source_is_selected() {
         &data,
     )
     .unwrap();
+    worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
     assert_eq!(data.lock().unwrap().rows.len(), 1);
     assert_eq!(data.lock().unwrap().recordings_revision, 0);
-    assert!(
-        worker::execute(
-            Command::Recordings(filter.clone()),
-            &mut engine,
-            &mut filter,
-            &mut job,
-            &data
-        )
-        .is_err()
-    );
+    worker::execute(
+        Command::Recordings(filter.clone()),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &data,
+    )
+    .unwrap();
+    assert!(worker::refresh_if_needed(&engine, &filter, &data, false).is_err());
 }
 
 #[test]
@@ -1635,4 +1637,173 @@ fn failure_details_sanitize_external_control_text_and_scroll_the_full_tail() {
     assert!(!rendered.contains('\x1b'));
     assert!(!rendered.contains('\x07'));
     assert!(rendered.contains("last FFmpeg failure"));
+}
+
+#[test]
+fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let rows = [station("A"), station("B")];
+    for row in &rows {
+        engine.store.upsert(row).unwrap();
+        engine
+            .store
+            .add_backup(&row.stationuuid, "https://example.com/backup")
+            .unwrap();
+    }
+    let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    worker::execute(
+        Command::Search(filter.clone()),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &data,
+    )
+    .unwrap();
+    worker::execute(Command::Refresh, &mut engine, &mut filter, &mut job, &data).unwrap();
+    assert_eq!(data.lock().unwrap().rows_revision, 0);
+    worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
+    assert_eq!(data.lock().unwrap().rows_revision, 1);
+    assert!(data.lock().unwrap().backups.is_empty());
+    worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
+    assert_eq!(data.lock().unwrap().rows_revision, 1);
+    let revision = engine.store.revision().unwrap();
+    engine.store.set_meta("pref_source", "stations").unwrap();
+    assert_eq!(engine.store.revision().unwrap(), revision);
+    let snapshot = data.lock().unwrap().snapshot();
+    let (tx, rx) = command::channel(10);
+    let mut app = App::default();
+    app.reconcile(&snapshot);
+    app.request_selected_backups(&snapshot, &tx);
+    app.request_selected_backups(&snapshot, &tx);
+    let command = rx.try_recv().unwrap();
+    assert!(matches!(&command, Command::Backups(id) if id == &snapshot.rows[0].stationuuid));
+    assert!(rx.try_recv().is_err());
+    worker::execute(command, &mut engine, &mut filter, &mut job, &data).unwrap();
+    let snapshot = data.lock().unwrap().snapshot();
+    assert_eq!(snapshot.backups.len(), 1);
+    assert_eq!(
+        snapshot.backups[&snapshot.rows[0].stationuuid],
+        ["https://example.com/backup"]
+    );
+}
+
+#[test]
+fn facet_candidates_follow_the_typed_prefix_without_losing_it() {
+    let mut data = view();
+    Arc::make_mut(&mut data.facets)[0] = ["AU", "CA", "CN", "FR"]
+        .into_iter()
+        .map(|value| crate::model::Facet {
+            value: value.into(),
+            count: 1,
+        })
+        .collect();
+    Arc::make_mut(&mut data.facets)[1] = (0..12)
+        .map(|i| crate::model::Facet {
+            value: format!("english{i:02}"),
+            count: i + 1,
+        })
+        .collect();
+    let (sender, _) = command::channel(10);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    app.key(key(KeyCode::Char('c')), &data, &sender);
+    assert_eq!(app.facet_candidates(&data, 0).len(), 2);
+    app.key(key(KeyCode::Down), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "CA");
+    app.key(key(KeyCode::Down), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "CN");
+    assert_eq!(app.facet_prefix, "c");
+    app.key(key(KeyCode::Tab), &data, &sender);
+    for c in "eng".chars() {
+        app.key(key(KeyCode::Char(c)), &data, &sender);
+    }
+    assert_eq!(app.facet_candidates(&data, 1).len(), 12);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("english07 (8)"));
+    assert!(!text(&terminal).contains("english08 (9)"));
+    for _ in 0..12 {
+        app.key(key(KeyCode::Down), &data, &sender);
+    }
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("english04 (5)"));
+    assert!(text(&terminal).contains("english11 (12)"));
+    app.key(key(KeyCode::Char('z')), &data, &sender);
+    assert!(app.facet_candidates(&data, 1).is_empty());
+}
+
+#[test]
+fn short_wide_player_keeps_the_title_visible() {
+    let mut data = view();
+    data.status.title = "VISIBLE_TITLE".into();
+    for height in 16..20 {
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains("VISIBLE_TITLE"), "height={height}");
+    }
+}
+
+#[test]
+fn muted_state_is_visible_without_color() {
+    let mut data = view();
+    data.status.muted = true;
+    let mut app = App::default();
+    app.theme = crate::config::Theme::Mono;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("静音"));
+}
+
+#[test]
+fn narrow_details_focus_and_recording_random_match_the_visible_source() {
+    let data = view();
+    let mut app = App::default();
+    let (tx, rx) = command::channel(10);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.key(
+        KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.focus, Focus::Details);
+    app.key(
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.focus, Focus::List);
+    app.source = Source::Recordings;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("不使用电台筛选"));
+    assert_eq!(app.filter_summary.width, 0);
+    app.key(key(KeyCode::Char('n')), &data, &tx);
+    assert_eq!(app.source, Source::Stations);
+    assert!(matches!(rx.recv().unwrap(), Command::Search(_)));
+    assert!(matches!(rx.recv().unwrap(), Command::Random(filter) if !filter.recordings));
+}
+
+#[test]
+fn explicit_station_details_reload_backups_after_a_row_refresh() {
+    let mut data = view();
+    let mut app = App::default();
+    app.inspect_info = true;
+    app.info_request = 7;
+    data.inspected_request = 7;
+    data.inspected = data.status.station.clone();
+    data.rows_revision = 2;
+    let (tx, rx) = command::channel(10);
+    app.request_selected_backups(&data, &tx);
+    assert!(
+        matches!(rx.recv().unwrap(), Command::Backups(id) if id == data.inspected.as_ref().unwrap().stationuuid)
+    );
 }

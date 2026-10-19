@@ -2,70 +2,71 @@ use std::{collections::BTreeMap, fmt};
 
 // Variants and their stable public codes are defined below.
 macro_rules! codes {
-    ($($variant:ident => $code:literal),+ $(,)?) => {
+    ($($variant:ident => ($code:literal, $exit:literal)),+ $(,)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum ErrorCode { $($variant),+ }
         impl ErrorCode {
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub fn exit_code(self) -> i32 { match self { $(Self::$variant => $exit),+ } }
             pub fn as_str(self) -> &'static str { match self { $(Self::$variant => $code),+ } }
         }
     }
 }
 
 codes! {
-    UsageError => "usage_error",
-    InvalidUrl => "invalid_url",
-    MediaBusy => "media_busy",
-    StationNotFound => "station_not_found",
-    InvalidStation => "invalid_station",
-    InvalidUuid => "invalid_uuid",
-    DatabaseTooNew => "database_too_new",
-    Cancelled => "cancelled",
-    EmptyCatalog => "empty_catalog",
-    NoDirectoryServers => "no_directory_servers",
-    DirectoryRequest => "directory_request",
-    DirectoryResponseTooLarge => "directory_response_too_large",
-    InvalidPagination => "invalid_pagination",
-    CatalogTooLarge => "catalog_too_large",
-    CatalogShrink => "catalog_shrink",
-    DirectorySync => "directory_sync",
-    DataDirectory => "data_directory",
-    InvalidConfig => "invalid_config",
-    ReadConfig => "read_config",
-    InvalidSettings => "invalid_settings",
-    UnsupportedCodec => "unsupported_codec",
-    FinalPathMissing => "final_path_missing",
-    RecordingPublish => "recording_publish",
-    RecordingSizeMismatch => "recording_size_mismatch",
-    NoAudio => "no_audio",
-    MissingDependency => "missing_dependency",
-    InvalidDuration => "invalid_duration",
-    DurationUnit => "duration_unit",
-    DurationOverflow => "duration_overflow",
-    DurationRange => "duration_range",
-    NoStream => "no_stream",
-    RandomDisabled => "random_disabled",
-    NoMatchingStation => "no_matching_station",
-    NotPlaying => "not_playing",
-    WaitForPlayback => "wait_for_playback",
-    RecordingBusy => "recording_busy",
-    NoRecordingStream => "no_recording_stream",
-    RecordingSourcesFailed => "recording_sources_failed",
-    RuntimePathTooLong => "runtime_path_too_long",
-    PlayerStartup => "player_startup",
-    PlayerClosed => "player_closed",
-    PlayerMessageTooLarge => "player_message_too_large",
-    PlayerExited => "player_exited",
-    ProcessTimeout => "process_timeout",
-    ProcessFailed => "process_failed",
-    BackgroundFailed => "background_failed",
-    EmptyStationName => "empty_station_name",
-    DuplicateStation => "duplicate_station",
-    NotCustom => "not_custom",
-    RecordingNotFound => "recording_not_found",
-    RecordingInUse => "recording_in_use",
-    InsufficientSpace => "insufficient_space",
-    LocalRecording => "local_recording",
+    UsageError => ("usage_error", 2),
+    InvalidUrl => ("invalid_url", 1),
+    MediaBusy => ("media_busy", 4),
+    StationNotFound => ("station_not_found", 1),
+    InvalidStation => ("invalid_station", 1),
+    InvalidUuid => ("invalid_uuid", 2),
+    DatabaseTooNew => ("database_too_new", 1),
+    Cancelled => ("cancelled", 1),
+    EmptyCatalog => ("empty_catalog", 1),
+    NoDirectoryServers => ("no_directory_servers", 1),
+    DirectoryRequest => ("directory_request", 1),
+    DirectoryResponseTooLarge => ("directory_response_too_large", 1),
+    InvalidPagination => ("invalid_pagination", 1),
+    CatalogTooLarge => ("catalog_too_large", 1),
+    CatalogShrink => ("catalog_shrink", 1),
+    DirectorySync => ("directory_sync", 1),
+    DataDirectory => ("data_directory", 1),
+    InvalidConfig => ("invalid_config", 1),
+    ReadConfig => ("read_config", 1),
+    InvalidSettings => ("invalid_settings", 1),
+    UnsupportedCodec => ("unsupported_codec", 1),
+    FinalPathMissing => ("final_path_missing", 1),
+    RecordingPublish => ("recording_publish", 1),
+    RecordingSizeMismatch => ("recording_size_mismatch", 1),
+    NoAudio => ("no_audio", 1),
+    MissingDependency => ("missing_dependency", 3),
+    InvalidDuration => ("invalid_duration", 2),
+    DurationUnit => ("duration_unit", 2),
+    DurationOverflow => ("duration_overflow", 2),
+    DurationRange => ("duration_range", 2),
+    NoStream => ("no_stream", 1),
+    RandomDisabled => ("random_disabled", 1),
+    NoMatchingStation => ("no_matching_station", 1),
+    NotPlaying => ("not_playing", 1),
+    WaitForPlayback => ("wait_for_playback", 1),
+    RecordingBusy => ("recording_busy", 1),
+    NoRecordingStream => ("no_recording_stream", 1),
+    RecordingSourcesFailed => ("recording_sources_failed", 1),
+    RuntimePathTooLong => ("runtime_path_too_long", 1),
+    PlayerStartup => ("player_startup", 1),
+    PlayerClosed => ("player_closed", 1),
+    PlayerMessageTooLarge => ("player_message_too_large", 1),
+    PlayerExited => ("player_exited", 1),
+    ProcessTimeout => ("process_timeout", 1),
+    ProcessFailed => ("process_failed", 1),
+    BackgroundFailed => ("background_failed", 1),
+    EmptyStationName => ("empty_station_name", 2),
+    DuplicateStation => ("duplicate_station", 1),
+    NotCustom => ("not_custom", 1),
+    RecordingNotFound => ("recording_not_found", 1),
+    RecordingInUse => ("recording_in_use", 1),
+    InsufficientSpace => ("insufficient_space", 1),
+    LocalRecording => ("local_recording", 1),
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +100,8 @@ impl fmt::Display for DomainError {
             let key = &rest[start + 1..start + end];
             if let Some(value) = self.params.get(key) {
                 f.write_str(value)?;
+            } else {
+                write!(f, "{{{key}}}")?;
             }
             rest = &rest[start + end + 1..];
         }
@@ -108,12 +111,9 @@ impl fmt::Display for DomainError {
 impl std::error::Error for DomainError {}
 
 pub fn exit_code(error: &anyhow::Error) -> i32 {
-    match error.downcast_ref::<DomainError>().map(|e| e.code) {
-        Some(ErrorCode::UsageError) => 2,
-        Some(ErrorCode::MissingDependency) => 3,
-        Some(ErrorCode::MediaBusy) => 4,
-        _ => 1,
-    }
+    error
+        .downcast_ref::<DomainError>()
+        .map_or(1, |e| e.code.exit_code())
 }
 
 pub fn json_error(error: &anyhow::Error) -> serde_json::Value {
@@ -123,4 +123,24 @@ pub fn json_error(error: &anyhow::Error) -> serde_json::Value {
         "message":crate::clean_text(&format!("{error:#}")),
         "params":domain.map(|e| e.params.clone()).unwrap_or_default()
     }})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn domain_exit_classes_are_explicit() {
+        for (code, expected) in [
+            (ErrorCode::UsageError, 2),
+            (ErrorCode::InvalidDuration, 2),
+            (ErrorCode::DurationRange, 2),
+            (ErrorCode::MissingDependency, 3),
+            (ErrorCode::MediaBusy, 4),
+            (ErrorCode::InvalidSettings, 1),
+            (ErrorCode::StationNotFound, 1),
+        ] {
+            assert_eq!(exit_code(&DomainError::new(code).into()), expected);
+        }
+        assert_eq!(exit_code(&anyhow::anyhow!("I/O")), 1);
+    }
 }

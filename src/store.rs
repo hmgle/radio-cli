@@ -137,7 +137,7 @@ impl Store {
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            "INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE meta.value IS NOT excluded.value",
             params![key, value],
         )?;
         Ok(())
@@ -452,7 +452,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn remove_custom(&mut self, uuid: &str, keep_references: bool) -> Result<()> {
+    pub fn remove_custom(&mut self, uuid: &str, keep_references: bool) -> Result<bool> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -477,7 +477,7 @@ impl Store {
             tx.execute("DELETE FROM stations WHERE uuid=?1", [uuid])?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(referenced || keep_references)
     }
 
     pub fn update_backups(

@@ -331,6 +331,22 @@ fn mpv_ipc_reads_icy_titles_and_reaps_child() {
         title && playing,
         "must receive playback and ICY metadata events"
     );
+    for muted in [true, false] {
+        player.toggle_mute().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if player
+                .poll()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, Event::Muted(value) if *value == muted))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "mute observation missing");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
     player.toggle_pause().unwrap();
     player.volume(-10).unwrap();
     drop(player);
@@ -375,7 +391,7 @@ fn edited_custom_station_plays_the_new_url() {
 }
 
 #[test]
-fn live_stream_reconnects_after_a_ten_second_outage_without_duplicate_history() {
+fn live_stream_reconnects_across_outages_without_duplicate_history() {
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -406,15 +422,24 @@ fn live_stream_reconnects_after_a_ten_second_outage_without_duplicate_history() 
     let station = sample(&server.url);
     engine.store.upsert(&station).unwrap();
     engine.play(&station.stationuuid).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(23);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut first_played = false;
     let mut reconnecting = false;
+    let mut recoveries = 0;
     loop {
         engine.tick().unwrap();
         first_played |= engine.status.playing();
         reconnecting |= engine.status.message.contains("重连中");
         if first_played && reconnecting && engine.status.playing() {
-            break;
+            recoveries += 1;
+            reconnecting = false;
+            if recoveries == 2 {
+                break;
+            }
+        }
+        if recoveries == 1 {
+            assert!(!matches!(engine.status.playback_state,
+                radio_cli::engine::PlaybackState::Reconnecting { attempt } if attempt != 1));
         }
         assert!(!engine.playback_failed, "{}", engine.status.message);
         assert!(Instant::now() < deadline, "{}", engine.status.message);
@@ -800,6 +825,73 @@ fn recording_library_deletion_is_retryable_and_protects_pending_files() {
     fs::remove_dir(format!("{}.json", path.display())).unwrap();
     radio_cli::service::delete_recording(&store, &record.id, false).unwrap();
     assert!(store.recording(&record.id).is_err());
+}
+
+#[test]
+fn real_probe_bitrate_guards_custom_stations_before_creating_files() {
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = sample(&server.url);
+    assert_eq!(station.bitrate, 0);
+    let stop = Arc::new(AtomicBool::new(false));
+    let info = recorder::probe(&config, &server.url, &stop).unwrap();
+    assert!(
+        info["streams"][0]["bit_rate"]
+            .as_str()
+            .or(info["format"]["bit_rate"].as_str())
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > 0
+    );
+    let error = Recorder::start_with_info(
+        &config,
+        &store,
+        &station,
+        station.primary_url(),
+        &config.recording_dir,
+        Some(Duration::from_secs(u64::MAX)),
+        info,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::InsufficientSpace
+    );
+    assert_eq!(store.recordings_count().unwrap(), 0);
+    assert_eq!(fs::read_dir(&config.recording_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn local_recording_playback_rejects_active_or_pending_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let mut record = library_record(&dir.path().join("absent.mp3"));
+    for (status, pending) in [
+        ("recording", false),
+        ("finalizing", false),
+        ("interrupted", true),
+    ] {
+        record.status = status.into();
+        record.recovery_pending = pending;
+        engine.store.save_recording(&record).unwrap();
+        let error = engine.play_recording(&record.id).unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<radio_cli::error::DomainError>()
+                .unwrap()
+                .code,
+            radio_cli::error::ErrorCode::RecordingInUse
+        );
+    }
 }
 
 #[test]

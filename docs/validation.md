@@ -76,3 +76,61 @@ The extracted 0.3.0 archive also passes CLI/JSON/exits/doctor and real local mpv
 playback-to-EOF/deletion smoke tests. Completion files and man output match the
 binary; bash/zsh syntax checks and SHA-256 verification pass. Repackaging the same
 commit produces the same archive hash. The internal roadmap is not archived.
+
+
+## 0.3.1 / review follow-up — 2026-10-19
+
+- 118 tests pass with real mpv/FFmpeg, including two successive stream outages,
+  real ffprobe bitrate preflight for a custom station with bitrate=0, active
+  recording playback guards, coalesced refreshes and lazy backup reads.
+- Strict all-target/all-feature Clippy, formatting, Rust 1.88 and a fresh RustSec
+  audit pass. Candidate filtering, narrow detail navigation, short wide headers,
+  observed mute state and localized CLI progress have regression coverage.
+- Release packaging uses a clean tracked checkout, fresh staging and an explicit
+  guide whitelist (`tui.md`, `json-contract.md`, `validation.md`), and rejects
+  empty generated files. The musl CI job runs this packaging path.
+
+### Comparative performance acceptance
+
+The original #55 condition “no P95 regression” was **not demonstrated** by the
+single 20.57 ms baseline versus 26.26/21.65 ms release observations. Being below
+100 ms alone does not establish comparative non-regression.
+
+Repeated the unchanged 50,000-station release benchmark on the same host/toolchain
+(Rust 1.97.1, Linux 6.12.85+deb13-amd64). Compared the immediate pre-#55 commit
+`1dea93b` with follow-up runtime code `4bcf9e9`; subsequent changes affect only recording text, version and documentation. Each process creates the same synthetic catalog shape,
+then measures 100 queries across five query classes. Discarded one warm-up run
+per binary and alternated AB/BA order over ten pairs, without concurrent builds.
+UUIDs and host scheduling are not fixed; this is a host observation, not an
+exclusive-hardware experiment. Each cell is that run's search P95 in ms.
+
+| Pair | Before #55 | Review fixes |
+| --- | ---: | ---: |
+| 1 | 23.64 | 26.37 |
+| 2 | 26.56 | 26.81 |
+| 3 | 28.63 | 27.12 |
+| 4 | 27.42 | 27.50 |
+| 5 | 28.10 | 27.50 |
+| 6 | 21.88 | 25.47 |
+| 7 | 23.16 | 22.30 |
+| 8 | 22.14 | 23.77 |
+| 9 | 22.10 | 22.21 |
+| 10 | 24.93 | 21.31 |
+
+The median of the ten P95 values is **24.285 → 25.920 ms (+6.7%)**; the means
+are **24.856 → 25.036 ms (+0.7%)**. Ranges overlap (21.88–28.63 versus
+21.31–27.50 ms). These observations do not prove either strict equivalence or a
+statistically established regression, and no speedup is claimed.
+
+Acceptance clarification: **accept the observed small median increase**, rather
+than marking the original comparative gate as proven. The worst follow-up run
+is 27.50 ms against the separate 100 ms budget, while the targeted TUI costs
+(double refreshes, per-row backup reads, full snapshot cloning and unused-source
+reads) are removed and covered by structural/behavioral tests. Preserve these
+numbers for future comparison instead of attributing all differences to noise.
+
+Reproduce each sample with the corresponding release test executable:
+
+```sh
+cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
+```

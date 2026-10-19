@@ -22,6 +22,7 @@ use std::{
 };
 
 pub struct Recorder {
+    pub space_estimated: bool,
     child: Child,
     pub record: Recording,
     partial: PathBuf,
@@ -67,7 +68,7 @@ fn probe_with_timeout(
             "-select_streams",
             "a:0",
             "-show_entries",
-            "stream=codec_name:format=duration",
+            "stream=codec_name,bit_rate:format=duration,bit_rate",
             "-of",
             "json",
             "-i",
@@ -210,6 +211,34 @@ pub fn recover(store: &Store) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
+// An unbounded recording or unknown bitrate has no finite total estimate.
+// Preserve the reserve check and make that limitation visible to the caller.
+fn required_space(
+    reserve_mb: u64,
+    station_kbps: u32,
+    info: &Value,
+    duration: Option<Duration>,
+) -> (u64, bool) {
+    let positive = |v: &Value| {
+        v.as_str()
+            .and_then(|v| v.parse::<u64>().ok())
+            .or_else(|| v.as_u64())
+            .filter(|v| *v > 0)
+    };
+    let bitrate = positive(&info["streams"][0]["bit_rate"])
+        .or_else(|| positive(&info["format"]["bit_rate"]))
+        .or_else(|| (station_kbps > 0).then_some(u64::from(station_kbps) * 1000));
+    let reserve = reserve_mb.saturating_mul(1024 * 1024);
+    match (duration, bitrate) {
+        (Some(duration), Some(bitrate)) => {
+            let bytes = u128::from(bitrate).saturating_mul(duration.as_nanos());
+            let bytes = bytes.div_ceil(8_000_000_000).min(u128::from(u64::MAX)) as u64;
+            (reserve.saturating_add(bytes), true)
+        }
+        (None, _) | (_, None) => (reserve, false),
+    }
+}
+
 impl Recorder {
     pub fn start(
         config: &Config,
@@ -242,17 +271,12 @@ impl Recorder {
         let (extension, muxer) = format_for_codec(&codec)?;
         fs::create_dir_all(dir)?;
         let dir = fs::canonicalize(dir)?;
-        let bitrate = info["format"]["bit_rate"]
-            .as_str()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(u64::from(station.bitrate) * 1000);
-        let required = config
-            .settings
-            .recording_min_free_mb
-            .saturating_mul(1024 * 1024)
-            .saturating_add(duration.map_or(0, |duration| {
-                bitrate.saturating_mul(duration.as_secs()).saturating_div(8)
-            }));
+        let (required, space_estimated) = required_space(
+            config.settings.recording_min_free_mb,
+            station.bitrate,
+            &info,
+            duration,
+        );
         let available = fs2::available_space(&dir)?;
         if available < required {
             bail!(
@@ -364,6 +388,7 @@ impl Recorder {
             recovery_pending: false,
         };
         let recorder = Self {
+            space_estimated,
             child,
             record,
             partial,
@@ -577,6 +602,36 @@ mod tests {
             error: None,
             recovery_pending: false,
         }
+    }
+
+    #[test]
+    fn space_estimate_prefers_audio_bitrate_and_reports_unknown_totals() {
+        let reserve = 16 * 1024 * 1024;
+        let mut info =
+            serde_json::json!({"streams":[{"bit_rate":"128000"}], "format":{"bit_rate":"256000"}});
+        assert_eq!(
+            required_space(16, 320, &info, Some(Duration::from_millis(1500))),
+            (reserve + 24000, true)
+        );
+        assert_eq!(required_space(16, 320, &info, None), (reserve, false));
+        info["streams"][0]["bit_rate"] = "0".into();
+        assert_eq!(
+            required_space(16, 320, &info, Some(Duration::from_secs(1))),
+            (reserve + 32000, true)
+        );
+        assert_eq!(
+            required_space(16, 0, &Value::Null, Some(Duration::from_secs(1))),
+            (reserve, false)
+        );
+        assert_eq!(
+            required_space(16, 128, &Value::Null, Some(Duration::from_secs(1))),
+            (reserve + 16000, true)
+        );
+        let extreme = serde_json::json!({"streams":[{"bit_rate":u64::MAX.to_string()}]});
+        assert_eq!(
+            required_space(16, 0, &extreme, Some(Duration::from_secs(u64::MAX))),
+            (u64::MAX, true)
+        );
     }
 
     #[test]

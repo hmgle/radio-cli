@@ -203,16 +203,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             ""
         }
     );
+    let volume = format!(
+        "{}%{}",
+        view.status.volume,
+        if view.status.muted { " · 静音" } else { "" }
+    );
     let player_text = if let Some(station) = &view.status.station {
         format!(
-            "{} · {} · 音量 {}%\n{} · {} · {}（目录）\n{} · {} · {}",
+            "{} · {} · 音量 {}\n{} · {} · {}（目录）\n{} · {} · {}",
             playing,
             fit(
                 &value(&station.name),
                 usize::from(area.width.saturating_sub(40))
             )
             .trim_end(),
-            view.status.volume,
+            volume,
             recording,
             codec(station),
             bitrate(station),
@@ -226,11 +231,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         )
     } else {
         format!(
-            "尚未播放 · 音量 {}%{}\n在列表选择电台，Enter 播放；:sync 同步目录",
-            view.status.volume, recording
+            "尚未播放 · 音量 {}{}\n在列表选择电台，Enter 播放；:sync 同步目录",
+            volume, recording
         )
     };
-    let player_text = if area.width < 100 {
+    let player_text = if area.width < 100 || area.height < 20 {
         let lines = player_text.lines().collect::<Vec<_>>();
         format!("{}\n{}", lines[0], lines[1..].join(" · "))
     } else {
@@ -577,21 +582,27 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             &app.message
         };
         frame.render_widget(
-            Paragraph::new(hint)
+            Paragraph::new(crate::clean_text(hint))
                 .style(Style::default().fg(Color::Yellow))
                 .wrap(Wrap { trim: true }),
             Rect::new(bottom.x, bottom.y + 1, bottom.width, 2),
         );
     } else {
-        app.filter_summary = Rect::new(bottom.x, bottom.y, bottom.width, 1);
-        let filter = format!(
-            "/{}  {} {} {} ≥{}k",
-            crate::clean_text(&app.filter.query),
-            app.filter.country.as_deref().unwrap_or("全部国家"),
-            app.filter.language.as_deref().unwrap_or("全部语言"),
-            app.filter.tag.as_deref().unwrap_or("全部标签"),
-            app.filter.min_bitrate
-        );
+        if app.source != Source::Recordings {
+            app.filter_summary = Rect::new(bottom.x, bottom.y, bottom.width, 1);
+        }
+        let filter = if app.source == Source::Recordings {
+            "本地录音 · 不使用电台筛选".into()
+        } else {
+            crate::clean_text(&format!(
+                "/{}  {} {} {} ≥{}k",
+                crate::clean_text(&app.filter.query),
+                app.filter.country.as_deref().unwrap_or("全部国家"),
+                app.filter.language.as_deref().unwrap_or("全部语言"),
+                app.filter.tag.as_deref().unwrap_or("全部标签"),
+                app.filter.min_bitrate
+            ))
+        };
         let context = context_hint(app.source, app.focus);
         frame.render_widget(
             Paragraph::new(vec![
@@ -615,7 +626,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         );
     }
     if let Some((selected, values)) = &app.filter_edit {
-        let rect = popup(area, 72, 13);
+        let rect = popup(area, 72, 18);
         frame.render_widget(Clear, rect);
         let names = ["国家代码", "语言", "标签", "最低码率"];
         let mut text = names
@@ -646,36 +657,36 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             })
             .chain([
                 Line::from("Tab 下一项 · ↑/↓ 候选 · Enter 应用 · Ctrl-U 清空 · Esc 取消"),
-                Line::from(app.message.clone()),
+                Line::from(crate::clean_text(&app.message)),
             ])
             .collect::<Vec<_>>();
         if *selected < 3 {
-            let candidates = &view.facets[*selected];
-            let start = app.facet_index.unwrap_or(0).saturating_sub(1);
+            let candidates = app.facet_candidates(view, *selected);
+            let count = usize::from(rect.height.saturating_sub(9)).min(8);
+            let start = app
+                .facet_index
+                .unwrap_or(0)
+                .saturating_sub(count / 2)
+                .min(candidates.len().saturating_sub(count));
             text.push(Line::from(if view.facets_loading {
                 "正在加载本地候选…"
             } else {
                 "本地候选（电台数）:"
             }));
-            text.extend(
-                candidates
-                    .iter()
-                    .enumerate()
-                    .skip(start)
-                    .take(3)
-                    .map(|(index, facet)| {
-                        Line::from(format!(
-                            "{} {} ({})",
-                            if app.facet_index == Some(index) {
-                                "›"
-                            } else {
-                                " "
-                            },
-                            crate::clean_text(&facet.value),
-                            facet.count
-                        ))
-                    }),
-            );
+            text.extend(candidates.iter().enumerate().skip(start).take(count).map(
+                |(index, facet)| {
+                    Line::from(format!(
+                        "{} {} ({})",
+                        if app.facet_index == Some(index) {
+                            "›"
+                        } else {
+                            " "
+                        },
+                        crate::clean_text(&facet.value),
+                        facet.count
+                    ))
+                },
+            ));
         }
         frame.render_widget(Paragraph::new(text).block(panel("筛选".into(), true)), rect);
         let label_width = format!("› {}: ", names[*selected]).width() as u16;
