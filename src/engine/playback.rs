@@ -129,6 +129,7 @@ impl PlaybackController {
         session: &mut Session,
         recording: &mut RecordingController,
     ) -> Result<()> {
+        self.reconnect_due = None;
         self.reconnect_attempts = 0;
         self.url = self
             .candidates

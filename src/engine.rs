@@ -459,6 +459,13 @@ mod tests {
         assert_eq!(engine.playback.reconnect_attempts, 0);
         assert!(engine.playback.reconnect_window.is_empty());
         assert!(engine.playback.reconnect_due.is_none());
+        let failed_state = engine.status.playback_state.clone();
+        for _ in 0..3 {
+            engine.tick().unwrap();
+            assert!(engine.playback_failed);
+            assert_eq!(engine.status.playback_state, failed_state);
+            assert!(!engine.playback_active());
+        }
         engine.playback.reconnect_window =
             std::iter::repeat_n(Instant::now() - Duration::from_secs(61), 6).collect();
         engine
