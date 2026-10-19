@@ -704,6 +704,17 @@ fn completions_and_manual_are_generated_without_preparing_data() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&v2.stdout).unwrap();
     assert!(value["data"].as_str().unwrap().contains("#compdef radio"));
+    let english = radio(&data).args(["--lang", "en", "man"]).output().unwrap();
+    let chinese_host = radio(&data)
+        .env("LANG", "zh_CN.UTF-8")
+        .env("LC_ALL", "zh_CN.UTF-8")
+        .env("RADIO_LANG", "zh-CN")
+        .args(["--lang", "en", "man"])
+        .output()
+        .unwrap();
+    assert!(english.status.success());
+    assert!(chinese_host.status.success());
+    assert_eq!(english.stdout, chinese_host.stdout);
 }
 
 #[test]

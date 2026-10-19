@@ -23,7 +23,7 @@ for release_shell in bash zsh fish; do
     "$release_binary" completions "$release_shell" > "$release_dir/completions/radio.$release_shell"
 done
 mv "$release_dir/completions/radio.zsh" "$release_dir/completions/_radio"
-"$release_binary" man > "$release_dir/man/radio.1"
+"$release_binary" --lang en man > "$release_dir/man/radio.1"
 {
     git rev-parse HEAD
     git rev-parse 'HEAD^{tree}'
