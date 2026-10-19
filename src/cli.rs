@@ -568,6 +568,12 @@ fn run_inner(mut cli: Cli) -> Result<()> {
                             r.error.as_deref().unwrap_or("")
                         ))
                     );
+                    if r.reconnects > 0 {
+                        println!(
+                            "  {}",
+                            crate::t!("recording_reconnected", "count" => r.reconnects)
+                        );
+                    }
                 }
             }
         }

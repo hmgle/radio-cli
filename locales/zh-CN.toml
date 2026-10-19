@@ -59,6 +59,7 @@ cli_last = "最后一页"
 usage_error = "用法错误：{detail}"
 
 recording_started = "正在录音"
+recording_reconnected = "录音流已重连 {count} 次；音频可能有缺口"
 recording_space_unestimated = "正在录音：时长或码率未知，仅检查最低可用空间，无法估算总大小"
 
 cli_sync_progress = "已获取 {count} 台…"

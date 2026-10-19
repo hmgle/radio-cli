@@ -1266,7 +1266,7 @@ fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
             "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
             "stopped_at":null, "media_duration_ms":null, "codec":"mp3", "container":"mp3",
             "path":"/tmp/sample", "size_bytes":1, "status":"failed",
-            "error":"first line\nFFmpeg disk failure details"
+            "error":"first line\nFFmpeg disk failure details", "reconnects": 2
         }))
         .unwrap(),
     ]
@@ -1293,11 +1293,12 @@ fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
     assert!(matches!(receiver.try_recv(), Ok(Command::OpenRecordings)));
     app.key(key(KeyCode::Char('e')), &data, &sender);
     assert!(app.recording_error_expanded);
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
     terminal
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
     assert!(text(&terminal).contains("FFmpeg disk failure details"));
+    assert!(text(&terminal).contains(&crate::t!("recording_reconnected", "count" => 2)));
 }
 
 #[test]

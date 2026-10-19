@@ -62,6 +62,7 @@ fn native_formats_are_copied_and_finalized_with_sidecars() {
         }
         let saved = recorder.finish(&config, &store, None).unwrap();
         assert_eq!(saved.status, "complete", "{:?}", saved);
+        assert_eq!(saved.reconnects, 0);
         assert_eq!(saved.codec, codec);
         assert!(saved.path.ends_with(ext));
         assert!(saved.size_bytes > 0);
@@ -267,6 +268,11 @@ fn recording_reconnects_after_truncated_live_aac_responses() {
         let record = recorder.finish(&config, &store, None).unwrap();
         assert_eq!(record.status, "complete", "{record:?}");
         assert!(record.media_duration_ms.unwrap() >= seconds * 1000 - 100);
+        assert_eq!(record.reconnects, 1);
+        assert_eq!(store.recordings(1).unwrap()[0].reconnects, 1);
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(format!("{}.json", record.path)).unwrap()).unwrap();
+        assert_eq!(metadata["reconnects"], 1);
         assert_eq!(requests.load(Ordering::SeqCst), 2);
     }
 }

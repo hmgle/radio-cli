@@ -400,7 +400,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         let text = if app.source == Source::Recordings && !app.inspect_info {
             view.recordings.get(app.list.selected().unwrap_or(0)).map(|r| {
                 format!(
-                    "{}\n状态: {}\n编码: {} / {}\n时长: {}\n大小: {} bytes\n开始: {}\n结束: {}\n电台 UUID: {}\n地址: {}\n文件: {}\n{}",
+                    "{}\n状态: {}\n编码: {} / {}\n时长: {}\n大小: {} bytes\n开始: {}\n结束: {}\n电台 UUID: {}\n地址: {}\n文件: {}\n{}{}",
                     value(&r.station_name),
                     r.status,
                     r.codec,
@@ -414,6 +414,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                     r.stationuuid,
                     crate::clean_text(&r.source_url_resolved),
                     crate::clean_text(&r.path),
+                    if r.reconnects > 0 {
+                        format!("{}\n", crate::t!("recording_reconnected", "count" => r.reconnects))
+                    } else {
+                        String::new()
+                    },
                     r.error.as_deref().map(|error| if app.recording_error_expanded {
                         error.lines().map(crate::clean_text).collect::<Vec<_>>().join("\n")
                     } else {

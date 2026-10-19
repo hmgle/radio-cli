@@ -229,6 +229,12 @@ impl RecordingController {
         };
         session.status.recording_path = record.path;
         session.status.message = crate::t!("recording_result", "status" => record.status, "path" => session.status.recording_path);
+        if record.reconnects > 0 {
+            session.status.message.push_str(&format!(
+                " · {}",
+                crate::t!("recording_reconnected", "count" => record.reconnects)
+            ));
+        }
         if record.status != "complete" {
             session
                 .status

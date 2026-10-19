@@ -118,6 +118,9 @@ pub struct Recording {
     pub size_bytes: u64,
     pub status: String,
     pub error: Option<String>,
+    /// FFmpeg reconnect attempts; live audio may have gaps even on completion.
+    #[serde(default)]
+    pub reconnects: u64,
     #[serde(default)]
     pub recovery_pending: bool,
 }

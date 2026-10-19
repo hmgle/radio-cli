@@ -34,6 +34,7 @@ pub struct Recorder {
     duration_ms: u64,
     readers: Vec<thread::JoinHandle<()>>,
     errors: Arc<std::sync::Mutex<String>>,
+    reconnects: Arc<AtomicU64>,
     finished: bool,
     stop_requested: bool,
 }
@@ -409,6 +410,8 @@ impl Recorder {
         let latest = progress.clone();
         let errors = Arc::new(std::sync::Mutex::new(String::new()));
         let target = errors.clone();
+        let reconnects = Arc::new(AtomicU64::new(0));
+        let retry_count = reconnects.clone();
         let stderr = child.stderr.take().unwrap();
         let reader = thread::spawn(move || {
             let mut input = BufReader::new(stderr);
@@ -424,6 +427,11 @@ impl Recorder {
                         latest.fetch_max(value / 1000, Ordering::Relaxed);
                     }
                 } else if !recording_progress(line.trim()) {
+                    // Count before trimming the tail so later diagnostics cannot
+                    // erase evidence of an interrupted stream.
+                    if line.contains("Will reconnect at") {
+                        retry_count.fetch_add(1, Ordering::Relaxed);
+                    }
                     let mut text = target.lock().unwrap();
                     append_error_tail(&mut text, &line);
                 }
@@ -444,6 +452,7 @@ impl Recorder {
             size_bytes: 0,
             status: "recording".into(),
             error: None,
+            reconnects: 0,
             recovery_pending: false,
         };
         let recorder = Self {
@@ -461,6 +470,7 @@ impl Recorder {
             duration_ms: 0,
             readers: vec![reader],
             errors,
+            reconnects,
             finished: false,
             stop_requested: false,
         };
@@ -519,6 +529,7 @@ impl Recorder {
         }
         self.duration_ms = self.progress.load(Ordering::Relaxed);
         self.record.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+        self.record.reconnects = self.reconnects.load(Ordering::Relaxed);
         self.record.size_bytes = fs::metadata(&self.partial)?.len();
         let verification = probe_with_timeout(
             config,
@@ -668,6 +679,7 @@ mod tests {
             size_bytes: 14,
             status: "finalizing".into(),
             error: None,
+            reconnects: 0,
             recovery_pending: false,
         }
     }
@@ -708,6 +720,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::open(&dir.path().join("radio.db")).unwrap();
             let mut r = pending(dir.path());
+            r.reconnects = 2;
             store.save_recording(&r).unwrap();
             sidecar(&r).unwrap();
             if phase >= 1 {
@@ -734,6 +747,7 @@ mod tests {
             recover(&store).unwrap();
             let saved = store.recordings(1).unwrap().remove(0);
             assert_eq!(saved.status, "complete");
+            assert_eq!(saved.reconnects, 2);
             assert_eq!(fs::read(&saved.path).unwrap(), b"verified audio");
             assert_eq!(
                 serde_json::from_slice::<Recording>(
