@@ -299,6 +299,8 @@ pub(super) fn execute(
         } => {
             let result = (|| -> Result<_> {
                 let mut target = Filter {
+                    // The rank and subsequent page must use the same stable order;
+                    // do not inherit a random sort from the current search.
                     limit: limit.clamp(1, 1000),
                     ..Filter::default()
                 };

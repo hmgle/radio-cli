@@ -111,10 +111,10 @@ pub(crate) fn parse_keybinding(
             return Some(vec![(KeyCode::BackTab, modifiers)]);
         }
         if let KeyCode::Char(c) = code {
-            let c = if modifiers.contains(KeyModifiers::SHIFT) {
-                c.to_ascii_uppercase()
-            } else if modifiers.contains(KeyModifiers::CONTROL) {
+            let c = if modifiers.contains(KeyModifiers::CONTROL) {
                 c.to_ascii_lowercase()
+            } else if modifiers.contains(KeyModifiers::SHIFT) {
+                c.to_ascii_uppercase()
             } else {
                 c
             };
@@ -122,7 +122,8 @@ pub(crate) fn parse_keybinding(
             return Some(vec![(KeyCode::Char(c), modifiers)]);
         }
         Some(vec![(code, modifiers)])
-    } else if (1..=4).contains(&value.chars().count())
+    } else if !value.starts_with('<')
+        && (1..=4).contains(&value.chars().count())
         && value.chars().all(|c| !c.is_control() && !c.is_whitespace())
     {
         Some(
@@ -187,7 +188,8 @@ impl Config {
         if let Some(api) = api {
             settings.api_url = Some(api.to_owned());
         }
-        if parse_keybinding(&settings.keybindings.jump_to_playing).is_none()
+        if (!settings.keybindings.jump_to_playing.is_empty()
+            && parse_keybinding(&settings.keybindings.jump_to_playing).is_none())
             || settings.recording_min_free_mb == 0
             || settings
                 .recording_min_free_mb
@@ -271,6 +273,7 @@ mod tests {
             "<Hyper-p>",
             "<Ctrl-c>",
             "<Ctrl-C>",
+            "<foo",
         ] {
             assert!(parse_keybinding(binding).is_none(), "{binding}");
         }
@@ -279,6 +282,10 @@ mod tests {
             Some(vec![(KeyCode::Char('p'), KeyModifiers::CONTROL)])
         );
         assert_eq!(parse_keybinding("<Ctrl-P>"), parse_keybinding("<Ctrl-p>"));
+        assert_eq!(
+            parse_keybinding("<Ctrl-Shift-p>"),
+            parse_keybinding("<Ctrl-p>")
+        );
         assert_eq!(
             parse_keybinding("<Shift-Tab>"),
             Some(vec![(KeyCode::BackTab, KeyModifiers::NONE)])
@@ -296,6 +303,8 @@ mod tests {
         );
         fs::write(&path, "[keybindings]\njump_to_playing = '<Ctrl-c>'\n").unwrap();
         assert!(Config::load(Some(&path), Some(dir.path()), None).is_err());
+        fs::write(&path, "[keybindings]\njump_to_playing = ''\n").unwrap();
+        assert!(Config::load(Some(&path), Some(dir.path()), None).is_ok());
     }
 
     #[test]

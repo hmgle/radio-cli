@@ -831,10 +831,17 @@ impl App {
             self.jump_progress = 0;
         }
         let mut modifiers = key.modifiers;
+        let code = if modifiers.contains(KeyModifiers::CONTROL)
+            && let KeyCode::Char(c) = key.code
+        {
+            KeyCode::Char(c.to_ascii_lowercase())
+        } else {
+            key.code
+        };
         if matches!(key.code, KeyCode::Char(_) | KeyCode::BackTab) {
             modifiers.remove(KeyModifiers::SHIFT);
         }
-        let stroke = (key.code, modifiers);
+        let stroke = (code, modifiers);
         if sequence.get(self.jump_progress) != Some(&stroke) {
             self.jump_progress = 0;
         }

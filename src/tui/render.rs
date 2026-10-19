@@ -714,6 +714,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         frame.render_widget(
             scroll_text(
                 &app.help_content.clone().unwrap_or_else(|| {
+                    if app.jump_binding.is_empty() {
+                        return HELP.into();
+                    }
                     format!(
                         "{HELP}\n{}  定位当前播放电台（可在 keybindings.jump_to_playing 配置）",
                         app.jump_binding

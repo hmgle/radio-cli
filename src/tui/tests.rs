@@ -2013,6 +2013,23 @@ fn jump_shortcut_selects_the_playing_row_without_replaying() {
         &tx,
     );
     assert_eq!(app.list.selected(), Some(2));
+    app.jump_binding = "<Ctrl-P>".into();
+    app.list.select(Some(0));
+    app.key(
+        KeyEvent::new(
+            KeyCode::Char('P'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.list.selected(), Some(2));
+    app.jump_binding.clear();
+    app.list.select(Some(0));
+    app.key(key(KeyCode::Char('\'')), &data, &tx);
+    app.key(key(KeyCode::Char('\'')), &data, &tx);
+    assert_eq!(app.list.selected(), Some(0));
+    app.jump_binding = "<Ctrl-p>".into();
     app.mode = Mode::Search;
     app.key(
         KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
@@ -2047,6 +2064,7 @@ fn jump_locates_a_filtered_out_station_on_another_page() {
     let shared = Arc::new(Mutex::new(data));
     let mut filter = Filter {
         query: "Station 00".into(),
+        sort: crate::model::Sort::Random,
         limit: 4,
         ..Filter::default()
     };
@@ -2076,6 +2094,7 @@ fn jump_locates_a_filtered_out_station_on_another_page() {
     .unwrap();
     app.reconcile(&shared.lock().unwrap().snapshot());
     assert_eq!(app.filter.offset, 8);
+    assert_eq!(app.filter.sort, crate::model::Sort::Clickcount);
     assert!(app.filter.query.is_empty());
     app.flush_search(&tx);
     worker::execute(

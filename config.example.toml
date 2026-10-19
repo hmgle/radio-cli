@@ -32,6 +32,7 @@ mouse = true
 
 # Normal-mode shortcut: 1-4 printable keys, or one named key.
 # Examples: "''", "gp", "<F6>", "<Ctrl-p>". Ctrl-c is reserved for exit.
+# Set to "" to disable the shortcut.
 # A binding takes precedence over existing normal-mode shortcuts.
 [keybindings]
 jump_to_playing = "''"
