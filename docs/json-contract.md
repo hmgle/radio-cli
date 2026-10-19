@@ -30,7 +30,7 @@ Legacy `--json` remains available throughout 0.3.x. Its success shapes are:
 | `favorites list`, `history`, `station list`, `recordings list` | Page object: `items`, `total`, `offset`, `limit`, `has_more` |
 | `countries`, `languages`, `tags` | Array of `{value,count}` |
 | `favorites add/remove` | `{stationuuid,name,favorite}` |
-| `station remove` | `{stationuuid,removed}` |
+| `station remove` | `{stationuuid,removed,placeholder_kept}` |
 | `station backups` | URL array |
 | `sync` | `{stations,last_sync}` |
 | `record` | Array containing the most recent recording |
@@ -57,3 +57,10 @@ radio --lang en --json-v2 info missing    # station_not_found; exit 1
 `completions <shell>` and `man` return generated text normally; with `--json`
 it is a JSON string, and with `--json-v2` it is the envelope's `data` string.
 Generation does not read configuration, create data directories or open SQLite.
+
+`info`, `station edit/remove/backups`, and `recordings remove` always produce
+JSON, even without a JSON flag. For station removal, `removed:true` means the
+custom station was removed; `placeholder_kept:true` explicitly indicates that
+an inactive name-only row remains for references or `--keep-references`.
+Malformed equals forms such as `--json-v2=true` are usage errors and also
+receive the v2 error envelope (the option itself is a valueless flag).

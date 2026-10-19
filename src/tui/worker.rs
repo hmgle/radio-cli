@@ -383,8 +383,11 @@ pub(super) fn execute(
                     uuid,
                     keep_references,
                 } => {
-                    engine.store.remove_custom(&uuid, keep_references)?;
-                    format!("已删除自定义电台 {uuid}；引用名称保留")
+                    let kept = engine.store.remove_custom(&uuid, keep_references)?;
+                    format!(
+                        "已删除自定义电台 {uuid}{}",
+                        if kept { "；引用名称保留" } else { "" }
+                    )
                 }
                 StationAction::Backups { uuid, add, remove } => {
                     let backups = engine.store.update_backups(&uuid, &add, &remove)?;

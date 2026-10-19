@@ -452,7 +452,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn remove_custom(&mut self, uuid: &str, keep_references: bool) -> Result<()> {
+    pub fn remove_custom(&mut self, uuid: &str, keep_references: bool) -> Result<bool> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -477,7 +477,7 @@ impl Store {
             tx.execute("DELETE FROM stations WHERE uuid=?1", [uuid])?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(referenced || keep_references)
     }
 
     pub fn update_backups(

@@ -455,8 +455,10 @@ fn run_inner(mut cli: Cli) -> Result<()> {
                     keep_references,
                 },
         } => {
-            store.remove_custom(&uuid, keep_references)?;
-            emit(&serde_json::json!({"stationuuid":uuid,"removed":true}))?;
+            let placeholder_kept = store.remove_custom(&uuid, keep_references)?;
+            emit(
+                &serde_json::json!({"stationuuid":uuid,"removed":true,"placeholder_kept":placeholder_kept}),
+            )?;
         }
         Action::Station {
             action: StationAction::Backups { uuid, add, remove },

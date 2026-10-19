@@ -239,14 +239,13 @@ fn station_cli_supports_edit_backups_list_and_remove() {
         .unwrap();
     assert!(!duplicate.status.success());
     assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
-    assert!(
-        radio(dir.path())
-            .args(["station", "remove", id, "--keep-references"])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
+    let output = radio(dir.path())
+        .args(["station", "remove", id, "--keep-references"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let removed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(removed["placeholder_kept"], true);
     let output = radio(dir.path()).args(["info", id]).output().unwrap();
     let row: Station = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(row.name, "After");
@@ -727,4 +726,15 @@ fn doctor_missing_dependencies_return_one_error_envelope_with_exit_three() {
     assert_eq!(result["ok"], false);
     assert_eq!(result["error"]["code"], "missing_dependency");
     assert!(result.get("data").is_none());
+}
+
+#[test]
+fn malformed_json_v2_flags_still_receive_usage_envelopes() {
+    let dir = tempfile::tempdir().unwrap();
+    for flag in ["--json-v2=true", "--json-v2=false", "--json-v2=invalid"] {
+        let output = radio(dir.path()).args([flag, "search"]).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["code"], "usage_error");
+    }
 }
