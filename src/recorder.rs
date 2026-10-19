@@ -428,8 +428,12 @@ impl Recorder {
                     }
                 } else if !recording_progress(line.trim()) {
                     // Count before trimming the tail so later diagnostics cannot
-                    // erase evidence of an interrupted stream.
-                    if line.contains("Will reconnect at") {
+                    // erase evidence of an interrupted stream. HTTP/ICY inputs
+                    // report "Will reconnect at"; the HLS demuxer reports
+                    // "Failed to open segment" when a segment cannot be
+                    // re-fetched and is skipped.
+                    if line.contains("Will reconnect at") || line.contains("Failed to open segment")
+                    {
                         retry_count.fetch_add(1, Ordering::Relaxed);
                     }
                     let mut text = target.lock().unwrap();

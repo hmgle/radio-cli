@@ -22,6 +22,8 @@
   restarting playback. Accept an empty binding to disable it, reject incomplete
   named keys and normalize shifted control keys consistently.
 - Generate release manuals in English regardless of packaging host language.
+- Count HLS segment re-fetch failures as reconnects so HLS recordings also warn
+  about possible audio gaps.
 
 ## 0.3.1 — 2026-10-19
 

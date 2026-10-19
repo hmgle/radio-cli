@@ -223,6 +223,109 @@ fn hls_aac_is_saved_as_native_aac() {
 }
 
 #[test]
+fn hls_segment_failures_count_as_potential_audio_gaps() {
+    let source = tempfile::tempdir().unwrap();
+    let playlist = source.path().join("index.m3u8");
+    let result = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=4",
+            "-c:a",
+            "aac",
+            "-f",
+            "hls",
+            "-hls_time",
+            "1",
+            "-hls_list_size",
+            "0",
+        ])
+        .arg(&playlist)
+        .status()
+        .unwrap();
+    assert!(result.success());
+    // Point the second segment at a missing file: the HLS demuxer reports a
+    // failed segment open, skips it, and keeps recording the remaining audio.
+    let mut lines: Vec<String> = fs::read_to_string(&playlist)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let segments: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.ends_with(".ts"))
+        .map(|(index, _)| index)
+        .collect();
+    assert!(segments.len() >= 2, "{lines:?}");
+    lines[segments[1]] = "missing.ts".to_owned();
+    fs::write(&playlist, lines.join("\n") + "\n").unwrap();
+    let root = source.path().to_path_buf();
+    let server = Server::new(move |request, stream| {
+        let path = request
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("/")
+            .trim_start_matches('/');
+        if path.contains("..") {
+            response(stream, 404, "text/plain", b"");
+            return;
+        }
+        match fs::read(root.join(path)) {
+            Ok(bytes) => response(
+                stream,
+                200,
+                if path.ends_with("m3u8") {
+                    "application/vnd.apple.mpegurl"
+                } else {
+                    "video/mp2t"
+                },
+                &bytes,
+            ),
+            Err(_) => response(stream, 404, "text/plain", b""),
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let url = format!("{}/index.m3u8", server.url);
+    let station = sample(&url);
+    store.upsert(&station).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut recorder = Recorder::start(
+        &config,
+        &store,
+        &station,
+        &url,
+        &config.recording_dir,
+        Some(Duration::from_secs(2)),
+        &stop,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !recorder.poll().unwrap() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    let record = recorder.finish(&config, &store, None).unwrap();
+    // The skipped segment leaves a gap in the audio timeline, so the requested
+    // duration is not fully captured; the file is retained as interrupted with
+    // diagnostics, and the segment failures are counted as reconnects.
+    assert_eq!(record.status, "interrupted", "{record:?}");
+    assert!(record.reconnects >= 1, "{record:?}");
+    assert!(
+        record
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("Failed to open segment")),
+        "{record:?}"
+    );
+}
+
+#[test]
 fn recording_reconnects_after_truncated_live_aac_responses() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
