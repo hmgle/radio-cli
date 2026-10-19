@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preserve one-shot ICY song-title updates with a bounded 512 KiB back buffer;
+  keep its memory budget separate from the forward cache.
+
 ## 0.4.0 — 2026-10-19
 
 - Retry truncated HTTP/ICY recording connections with bounded backoff, including

@@ -610,6 +610,90 @@ fn mpv_ipc_reads_icy_titles_and_reaps_child() {
 }
 
 #[test]
+fn mpv_ipc_delivers_one_shot_icy_titles_during_playback() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let dir = tempfile::tempdir().unwrap();
+    let Some(config) = mpv_config(dir.path()) else {
+        return;
+    };
+    let bytes = support::fixture("aac", "adts").repeat(16);
+    let stage = Arc::new(AtomicUsize::new(0));
+    let server_stage = stage.clone();
+    let titles = ["First song", "第二首歌"];
+    let server = Server::new(move |_, stream| {
+        if stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: audio/aacp\r\nicy-metaint: 1024\r\nicy-name: Local test\r\nConnection: close\r\n\r\n")
+            .is_err()
+        {
+            return;
+        }
+        let mut sent_stage = 0;
+        for chunk in bytes.chunks_exact(1024) {
+            let current = server_stage.load(Ordering::Relaxed);
+            if current == 3 || stream.write_all(chunk).is_err() {
+                return;
+            }
+            let mut metadata = Vec::new();
+            if current > sent_stage {
+                metadata = format!("StreamTitle='{}';", titles[current - 1]).into_bytes();
+                sent_stage = current;
+            }
+            let blocks = metadata.len().div_ceil(16);
+            metadata.resize(blocks * 16, 0);
+            if stream.write_all(&[blocks as u8]).is_err() || stream.write_all(&metadata).is_err() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+    });
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut player = Player::start(&config, &server.url, &stop).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if player
+            .poll()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, Event::Playing))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "playback must start before titles"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    for (index, title) in titles.iter().enumerate() {
+        // Each title is sent exactly once, after playback (or the previous
+        // title) is observed. Zero-length ICY blocks must retain that title.
+        stage.store(index + 1, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut received = false;
+        let mut retain_until = None;
+        loop {
+            for event in player.poll().unwrap() {
+                if let Event::Title(actual) = event {
+                    if received {
+                        assert_eq!(actual, *title, "empty ICY blocks must keep the title");
+                    } else if actual == *title {
+                        received = true;
+                        retain_until = Some(Instant::now() + Duration::from_millis(500));
+                    }
+                }
+            }
+            if retain_until.is_some_and(|until| Instant::now() >= until) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "missing one-shot title: {title}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    stage.store(3, Ordering::Relaxed);
+}
+
+#[test]
 fn edited_custom_station_plays_the_new_url() {
     let dir = tempfile::tempdir().unwrap();
     let Some(config) = mpv_config(dir.path()) else {

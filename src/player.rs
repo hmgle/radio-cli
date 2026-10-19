@@ -74,7 +74,10 @@ impl Player {
                 "--cache=yes",
                 "--cache-secs=3",
                 "--demuxer-max-bytes=2097152",
-                "--demuxer-max-back-bytes=0",
+                // Keep recent packets until playback observes timed ICY metadata.
+                // Disabling the back buffer can lose one-shot title updates.
+                "--demuxer-max-back-bytes=524288",
+                "--demuxer-donate-buffer=no",
                 "--audio-buffer=0.2",
             ])
             .arg(format!("--user-agent={USER_AGENT}"))
