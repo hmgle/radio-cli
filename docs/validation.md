@@ -138,9 +138,9 @@ Reproduce each sample with the corresponding release test executable:
 cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
 ```
 
-## Unreleased review validation — 2026-10-19
+## 0.4.0 validation — 2026-10-19
 
-- `cargo test --all-targets --all-features --locked`: **133 passed**, with the
+- `cargo test --all-targets --all-features --locked`: **139 passed**, with the
   opt-in catalog benchmark excluded (one ignored). Real mpv/FFmpeg and terminal
   tests ran; sources and data directories remain local and isolated.
 - `cargo fmt --check`, strict all-target/all-feature Clippy and
@@ -158,5 +158,10 @@ cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
   `zh_CN.UTF-8`; it observes playback states instead of localized status text.
 - Release manual generation with `--lang en` produces identical bytes under
   English/default and Chinese host language settings, including `RADIO_LANG`.
-  `bash -n scripts/package-release.sh` passes. A fresh archive reproducibility
-  comparison was not run for this review.
+  Release completion generation is also pinned to English and covered by all
+  three shells. A real local HLS fixture with a missing segment records an
+  interrupted result, preserves diagnostics, and counts the failure as a
+  reconnect. Recording lists retain tab-separated diagnostics and mark rows
+  whose reconnect count is positive. `bash -n scripts/package-release.sh`
+  passes. A fresh archive reproducibility comparison was not run for this
+  review.

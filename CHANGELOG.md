@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-19
 
 - Retry truncated HTTP/ICY recording connections with bounded backoff, including
   disconnects before AAC startup parameters are available. Preserve finite-source
@@ -32,6 +32,14 @@
   tests guarding the packaging script and locale-invariant completions.
 - Mark reconnected recordings in the TUI recording list so potential audio
   gaps are visible without opening the details panel.
+
+### Compatibility
+
+- Existing configuration and schema-v2 databases continue to work. The new
+  `keybindings.jump_to_playing` setting defaults to `''` and can be set to an
+  empty string to disable the shortcut.
+- The supported release target remains Linux x86_64. External mpv and
+  FFmpeg/ffprobe remain required.
 
 ## 0.3.1 — 2026-10-19
 
