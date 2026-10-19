@@ -460,11 +460,7 @@ impl App {
         view: &'a View,
         selected: usize,
     ) -> Vec<&'a crate::model::Facet> {
-        let prefix = self.facet_prefix.trim().to_lowercase();
-        view.facets[selected]
-            .iter()
-            .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
-            .collect()
+        matching_facets(&view.facets[selected], &self.facet_prefix)
     }
     fn request_info(&mut self, uuid: String, sender: &CommandSender) {
         self.info_request = self.info_request.wrapping_add(1);
@@ -787,11 +783,7 @@ impl App {
             }
             match key.code {
                 KeyCode::Down | KeyCode::Up if *selected < 3 => {
-                    let prefix = self.facet_prefix.trim().to_lowercase();
-                    let candidates = view.facets[*selected]
-                        .iter()
-                        .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
-                        .collect::<Vec<_>>();
+                    let candidates = matching_facets(&view.facets[*selected], &self.facet_prefix);
                     if !candidates.is_empty() {
                         let index = match self.facet_index {
                             Some(index) if key.code == KeyCode::Down => {
@@ -1097,4 +1089,15 @@ impl App {
 fn nonempty(text: &str) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.into())
+}
+
+fn matching_facets<'a>(
+    facets: &'a [crate::model::Facet],
+    prefix: &str,
+) -> Vec<&'a crate::model::Facet> {
+    let prefix = prefix.trim().to_lowercase();
+    facets
+        .iter()
+        .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
+        .collect()
 }
