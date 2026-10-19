@@ -170,6 +170,35 @@ mod tests {
         assert_eq!(select(None, None, None, None, None), (Locale::En, None));
     }
 
+    fn literal_keys(source: &str) -> BTreeSet<String> {
+        ["crate::t!", "messages::text"]
+            .into_iter()
+            .flat_map(|call| {
+                source.split(call).skip(1).filter_map(|part| {
+                    let literal = part
+                        .trim_start()
+                        .strip_prefix('(')?
+                        .trim_start()
+                        .strip_prefix('"')?;
+                    Some(literal.split('"').next().unwrap().to_owned())
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn key_scan_includes_direct_message_lookups() {
+        let source = r#"crate::t!("macro"); messages::text("direct");
+            crate::messages::text ( "qualified" ); messages::text_in(locale, "excluded");"#;
+        assert_eq!(
+            literal_keys(source),
+            ["macro", "direct", "qualified"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+    }
+
     #[test]
     fn catalogs_have_exactly_the_used_keys_and_matching_placeholders() {
         let en: toml::Table = toml::from_str(include_str!("../locales/en.toml")).unwrap();
@@ -188,16 +217,7 @@ mod tests {
                     continue;
                 }
                 let source = std::fs::read_to_string(path).unwrap();
-                for part in source.split("crate::t!").skip(1) {
-                    let literal = part
-                        .trim_start()
-                        .strip_prefix('(')
-                        .unwrap()
-                        .trim_start()
-                        .strip_prefix('"')
-                        .unwrap();
-                    used.insert(literal.split('"').next().unwrap().into());
-                }
+                used.extend(literal_keys(&source));
             }
         }
         assert_eq!(en.keys().cloned().collect::<BTreeSet<_>>(), used);
