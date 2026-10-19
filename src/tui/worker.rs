@@ -22,6 +22,8 @@ use std::{
 #[derive(Clone)]
 pub(super) struct View {
     published: Option<(u64, Arc<View>)>,
+    store_revision: Option<(u64, u64)>,
+    refresh_requested: bool,
     pub immediate_revision: u64,
     pub recordings_revision: u64,
     pub logs_revision: u64,
@@ -48,6 +50,8 @@ impl View {
     pub fn new(status: Status) -> Self {
         Self {
             published: None,
+            store_revision: None,
+            refresh_requested: false,
             immediate_revision: 1,
             recordings_revision: 0,
             logs_revision: 0,
@@ -181,6 +185,7 @@ fn catalog_note(store: &Store, days: u16) -> Result<String> {
 }
 
 fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
+    let store_revision = engine.store.revision()?;
     let note = catalog_note(&engine.store, engine.config.settings.auto_sync_days)?;
     if filter.recordings {
         let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
@@ -191,18 +196,16 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
         data.recordings_revision += 1;
     } else {
         let rows = engine.store.search(filter)?;
-        let backups = rows
-            .iter()
-            .map(|s| Ok((s.stationuuid.clone(), engine.store.backups(&s.stationuuid)?)))
-            .collect::<Result<_>>()?;
         let total = engine.store.search_count(filter)?;
         let mut data = view.lock().unwrap();
         data.rows = Arc::new(rows);
-        data.backups = Arc::new(backups);
+        data.backups = Default::default();
         data.total = total;
         data.rows_revision += 1;
     }
     let mut data = view.lock().unwrap();
+    data.store_revision = Some(store_revision);
+    data.refresh_requested = false;
     data.catalog_note = note;
     data.filter = filter.clone();
     data.revision += 1;
@@ -210,13 +213,27 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
     Ok(())
 }
 
-fn favorite_changed(
+fn request_refresh(view: &Arc<Mutex<View>>) {
+    view.lock().unwrap().refresh_requested = true;
+}
+
+pub(super) fn refresh_if_needed(
     engine: &Engine,
     filter: &Filter,
     view: &Arc<Mutex<View>>,
-    uuid: &str,
-    add: bool,
+    recording_ended: bool,
 ) -> Result<()> {
+    let revision = engine.store.revision()?;
+    let data = view.lock().unwrap();
+    let needed = data.refresh_requested || data.store_revision != Some(revision) || recording_ended;
+    drop(data);
+    if needed {
+        refresh(engine, filter, view)?;
+    }
+    Ok(())
+}
+
+fn favorite_changed(view: &Arc<Mutex<View>>, uuid: &str, add: bool) -> Result<()> {
     let mut data = view.lock().unwrap();
     data.log(if add {
         "已收藏电台"
@@ -227,7 +244,8 @@ fn favorite_changed(
         station.favorite = add;
     }
     drop(data);
-    refresh(engine, filter, view)
+    request_refresh(view);
+    Ok(())
 }
 
 pub(super) fn execute(
@@ -282,7 +300,7 @@ pub(super) fn execute(
             engine.store.set_meta("pref_source", source.preference())?;
             *filter = value;
             view.lock().unwrap().inspected = None;
-            refresh(engine, filter, view)?;
+            request_refresh(view);
         }
         Command::Play(uuid) => engine.play(&uuid)?,
         Command::PlayRecording(id) => engine.play_recording(&id)?,
@@ -291,12 +309,12 @@ pub(super) fn execute(
         Command::Random(filter) => engine.random(filter)?,
         Command::ToggleFavorite(uuid) => {
             let add = engine.store.toggle_favorite(&uuid)?;
-            favorite_changed(engine, filter, view, &uuid, add)?;
+            favorite_changed(view, &uuid, add)?;
         }
         Command::AdjustVolume(delta) => engine.volume(delta)?,
         Command::Favorite(uuid, add) => {
             engine.store.favorite(&uuid, add)?;
-            favorite_changed(engine, filter, view, &uuid, add)?;
+            favorite_changed(view, &uuid, add)?;
         }
         Command::Pause => engine.pause()?,
         Command::Mute => engine.mute()?,
@@ -341,7 +359,7 @@ pub(super) fn execute(
                 "已添加 {} ({})",
                 station.name, station.stationuuid
             ));
-            refresh(engine, filter, view)?;
+            request_refresh(view);
         }
         Command::Station(action) => {
             use crate::cli::StationAction;
@@ -375,7 +393,7 @@ pub(super) fn execute(
                 _ => unreachable!("station list/add use their existing commands"),
             };
             view.lock().unwrap().log(&output);
-            refresh(engine, filter, view)?;
+            request_refresh(view);
         }
         Command::Sync(accept_shrink) => {
             if job.is_some() {
@@ -404,9 +422,16 @@ pub(super) fn execute(
             engine.store.set_meta("pref_source", "recordings")?;
             *filter = value;
             filter.recordings = true;
-            refresh(engine, filter, view)?;
+            request_refresh(view);
         }
-        Command::Refresh => refresh(engine, filter, view)?,
+        Command::Refresh => request_refresh(view),
+        Command::Backups(uuid) => {
+            let backups = engine.store.backups(&uuid)?;
+            let mut data = view.lock().unwrap();
+            Arc::make_mut(&mut data.backups).insert(uuid, backups);
+            data.revision += 1;
+            data.immediate_revision += 1;
+        }
         Command::Info(uuid, request) => {
             let result = engine.store.station(&uuid);
             let backups = engine.store.backups(&uuid)?;
@@ -475,7 +500,6 @@ pub(super) fn run(
     };
     let mut last_message = String::new();
     let mut was_recording = false;
-    let mut revision = engine.store.revision()?;
     let result = (|| -> Result<()> {
         while !stop.load(Ordering::Relaxed) {
             match commands.recv_timeout(Duration::from_millis(100)) {
@@ -531,7 +555,7 @@ pub(super) fn run(
                 data.log(&text);
                 drop(data);
                 drop(active);
-                refresh(&engine, &filter, &view)?;
+                request_refresh(&view);
             }
             if let Some(result) = engine.diagnostics.as_ref().and_then(Background::poll) {
                 engine.diagnostics = None;
@@ -553,11 +577,12 @@ pub(super) fn run(
             if let Err(error) = engine.tick() {
                 view.lock().unwrap().log(&format!("错误: {error:#}"));
             }
-            let current_revision = engine.store.revision()?;
-            if revision != current_revision || was_recording && !engine.status.recording() {
-                revision = current_revision;
-                refresh(&engine, &filter, &view)?;
-            }
+            refresh_if_needed(
+                &engine,
+                &filter,
+                &view,
+                was_recording && !engine.status.recording(),
+            )?;
             was_recording = engine.status.recording();
             let mut data = view.lock().unwrap();
             if !data.status.ui_eq(&engine.status) {

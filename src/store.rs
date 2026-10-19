@@ -137,7 +137,7 @@ impl Store {
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            "INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE meta.value IS NOT excluded.value",
             params![key, value],
         )?;
         Ok(())

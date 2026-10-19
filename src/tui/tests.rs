@@ -912,6 +912,7 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
         &shared,
     )
     .unwrap();
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
     assert!(shared.lock().unwrap().rows[0].favorite);
 }
 
@@ -1490,18 +1491,18 @@ fn station_refresh_does_not_read_recordings_until_that_source_is_selected() {
         &data,
     )
     .unwrap();
+    worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
     assert_eq!(data.lock().unwrap().rows.len(), 1);
     assert_eq!(data.lock().unwrap().recordings_revision, 0);
-    assert!(
-        worker::execute(
-            Command::Recordings(filter.clone()),
-            &mut engine,
-            &mut filter,
-            &mut job,
-            &data
-        )
-        .is_err()
-    );
+    worker::execute(
+        Command::Recordings(filter.clone()),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &data,
+    )
+    .unwrap();
+    assert!(worker::refresh_if_needed(&engine, &filter, &data, false).is_err());
 }
 
 #[test]
@@ -1635,4 +1636,60 @@ fn failure_details_sanitize_external_control_text_and_scroll_the_full_tail() {
     assert!(!rendered.contains('\x1b'));
     assert!(!rendered.contains('\x07'));
     assert!(rendered.contains("last FFmpeg failure"));
+}
+
+#[test]
+fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let rows = [station("A"), station("B")];
+    for row in &rows {
+        engine.store.upsert(row).unwrap();
+        engine
+            .store
+            .add_backup(&row.stationuuid, "https://example.com/backup")
+            .unwrap();
+    }
+    let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    worker::execute(
+        Command::Search(filter.clone()),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &data,
+    )
+    .unwrap();
+    worker::execute(Command::Refresh, &mut engine, &mut filter, &mut job, &data).unwrap();
+    assert_eq!(data.lock().unwrap().rows_revision, 0);
+    worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
+    assert_eq!(data.lock().unwrap().rows_revision, 1);
+    assert!(data.lock().unwrap().backups.is_empty());
+    worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
+    assert_eq!(data.lock().unwrap().rows_revision, 1);
+    let revision = engine.store.revision().unwrap();
+    engine.store.set_meta("pref_source", "stations").unwrap();
+    assert_eq!(engine.store.revision().unwrap(), revision);
+    let snapshot = data.lock().unwrap().snapshot();
+    let (tx, rx) = command::channel(10);
+    let mut app = App::default();
+    app.reconcile(&snapshot);
+    app.request_selected_backups(&snapshot, &tx);
+    app.request_selected_backups(&snapshot, &tx);
+    let command = rx.try_recv().unwrap();
+    assert!(matches!(&command, Command::Backups(id) if id == &snapshot.rows[0].stationuuid));
+    assert!(rx.try_recv().is_err());
+    worker::execute(command, &mut engine, &mut filter, &mut job, &data).unwrap();
+    let snapshot = data.lock().unwrap().snapshot();
+    assert_eq!(snapshot.backups.len(), 1);
+    assert_eq!(
+        snapshot.backups[&snapshot.rows[0].stationuuid],
+        ["https://example.com/backup"]
+    );
 }

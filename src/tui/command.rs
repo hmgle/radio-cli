@@ -102,6 +102,7 @@ pub(super) enum Command {
     Mute,
     SetLanguage(String),
     Facets,
+    Backups(String),
     Station(crate::cli::StationAction),
     Search(Filter),
     Play(String),

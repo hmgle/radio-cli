@@ -300,6 +300,7 @@ pub(super) struct App {
     original_query: String,
     pub filter_edit: Option<(usize, [String; 4])>,
     pub facet_index: Option<usize>,
+    backups_request: Option<(String, u64)>,
     pub help: bool,
     pub help_content: Option<String>,
     pub help_scroll: u16,
@@ -342,6 +343,7 @@ impl Default for App {
             original_query: String::new(),
             filter_edit: None,
             facet_index: None,
+            backups_request: None,
             help: false,
             help_content: None,
             help_scroll: 0,
@@ -418,6 +420,17 @@ impl App {
                 .map(|r| r.id.clone())
         } else {
             self.selected(view).map(|s| s.stationuuid.clone())
+        }
+    }
+    pub fn request_selected_backups(&mut self, view: &View, sender: &CommandSender) {
+        if let Some(station) = self.selected(view) {
+            let request = (station.stationuuid.clone(), view.rows_revision);
+            if !view.backups.contains_key(&station.stationuuid)
+                && self.backups_request.as_ref() != Some(&request)
+                && self.send(sender, Command::Backups(station.stationuuid.clone()))
+            {
+                self.backups_request = Some(request);
+            }
         }
     }
     fn request_info(&mut self, uuid: String, sender: &CommandSender) {
