@@ -738,3 +738,16 @@ fn malformed_json_v2_flags_still_receive_usage_envelopes() {
         assert_eq!(value["error"]["code"], "usage_error");
     }
 }
+
+#[test]
+fn operation_messages_follow_the_selected_cli_language() {
+    let dir = tempfile::tempdir().unwrap();
+    for (lang, expected) in [("en", "Recovery complete"), ("zh-CN", "恢复完成")] {
+        let output = radio(dir.path())
+            .args(["--lang", lang, "recordings", "recover"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(expected));
+    }
+}

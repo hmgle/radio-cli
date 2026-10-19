@@ -60,3 +60,13 @@ usage_error = "用法错误：{detail}"
 
 recording_started = "正在录音"
 recording_space_unestimated = "正在录音：时长或码率未知，仅检查最低可用空间，无法估算总大小"
+
+cli_sync_progress = "已获取 {count} 台…"
+cli_sync_done = "同步完成：{count} 台"
+cli_recovered = "恢复完成"
+cli_recovery_pending = "部分录音仍需恢复，详见 recordings list"
+cli_bootstrap = "获取热门电台…"
+cli_probe = "检测音频编码…"
+cli_recording_incomplete = "录音未完整保存，见 recordings list"
+cli_recording_dir_unavailable = "录音目录不可用"
+cli_doctor_failed = "依赖或目录检查未通过"

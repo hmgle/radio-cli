@@ -60,3 +60,13 @@ usage_error = "Usage error: {detail}"
 
 recording_started = "Recording"
 recording_space_unestimated = "Recording: duration or bitrate unknown; only the free-space reserve was checked, total size cannot be estimated"
+
+cli_sync_progress = "Fetched {count} stations…"
+cli_sync_done = "Sync complete: {count} stations"
+cli_recovered = "Recovery complete"
+cli_recovery_pending = "Some recordings still need recovery; see recordings list"
+cli_bootstrap = "Fetching popular stations…"
+cli_probe = "Probing audio codec…"
+cli_recording_incomplete = "Recording was not fully saved; see recordings list"
+cli_recording_dir_unavailable = "Recording directory is unavailable"
+cli_doctor_failed = "Dependency or directory checks failed"

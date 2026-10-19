@@ -352,13 +352,13 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             let mut directory = Directory::new(&config, stop.clone())?;
             let count = directory.sync_with_policy(
                 &mut store,
-                |n| eprintln!("已获取 {n} 台…"),
+                |n| eprintln!("{}", crate::t!("cli_sync_progress", "count" => n)),
                 accept_shrink,
             )?;
             if cli.json {
                 emit(&serde_json::json!({"stations":count,"last_sync":store.meta("last_sync")?}))?;
             } else {
-                println!("同步完成：{count} 台");
+                println!("{}", crate::t!("cli_sync_done", "count" => count));
             }
         }
         Action::Search(search) => print_stations(&store.search(&search.filter())?, cli.json)?,
@@ -493,14 +493,14 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             if cli.json {
                 emit(&serde_json::json!({"warnings": warnings}))?;
             } else if warnings.is_empty() {
-                println!("恢复完成");
+                println!("{}", crate::t!("cli_recovered"));
             } else {
                 for warning in &warnings {
                     eprintln!("{warning}");
                 }
             }
             if !warnings.is_empty() {
-                bail!("部分录音仍需恢复，详见 recordings list");
+                bail!("{}", crate::t!("cli_recovery_pending"));
             }
         }
         Action::Recordings {
@@ -545,7 +545,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             drop(store);
             let mut engine = Engine::new(config, stop.clone())?;
             if engine.store.count()? == 0 {
-                eprintln!("获取热门电台…");
+                eprintln!("{}", crate::t!("cli_bootstrap"));
                 engine.bootstrap()?;
             }
             engine.random(search.filter())?;
@@ -558,7 +558,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
         } => {
             drop(store);
             let mut engine = Engine::new(config, stop.clone())?;
-            eprintln!("检测音频编码…");
+            eprintln!("{}", crate::t!("cli_probe"));
             engine.standalone_record(&uuid, duration, output_dir.as_deref())?;
             eprintln!(
                 "{} · Ctrl-C: {}",
@@ -580,7 +580,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
                 .first()
                 .is_some_and(|r| r.status != "complete")
             {
-                bail!("录音未完整保存，见 recordings list");
+                bail!("{}", crate::t!("cli_recording_incomplete"));
             }
         }
     }
@@ -658,7 +658,8 @@ pub(crate) fn doctor_report(
         failed |= !ok;
         checks.push(serde_json::json!({"name":name,"ok":ok,"detail":detail,"code":code}));
     }
-    std::fs::create_dir_all(&config.recording_dir).context("录音目录不可用")?;
+    std::fs::create_dir_all(&config.recording_dir)
+        .context(crate::t!("cli_recording_dir_unavailable"))?;
     let test_path = config
         .recording_dir
         .join(format!(".doctor-{}", uuid::Uuid::new_v4()));
@@ -713,7 +714,7 @@ fn doctor(config: &Config, json: bool, stop: &Arc<AtomicBool>) -> Result<()> {
                     .with("program", check["name"].as_str().unwrap_or(""))
             );
         }
-        bail!("依赖或目录检查未通过");
+        bail!("{}", crate::t!("cli_doctor_failed"));
     }
     Ok(())
 }

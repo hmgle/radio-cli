@@ -95,10 +95,34 @@ pub fn text_in(locale: Locale, key: &str) -> &'static str {
         .unwrap_or("Unknown message")
 }
 
+pub fn format_text(template: &str, params: &[(&str, String)]) -> String {
+    let mut output = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        output.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find('}') else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let key = &rest[start + 1..start + end];
+        if let Some((_, value)) = params.iter().find(|(name, _)| *name == key) {
+            output.push_str(value);
+        } else {
+            output.push_str(&rest[start..=start + end]);
+        }
+        rest = &rest[start + end + 1..];
+    }
+    output.push_str(rest);
+    output
+}
+
 #[macro_export]
 macro_rules! t {
     ($key:literal) => {
         $crate::messages::text($key)
+    };
+    ($key:literal, $($name:literal => $value:expr),+ $(,)?) => {
+        $crate::messages::format_text($crate::messages::text($key), &[$(($name, $value.to_string())),+])
     };
 }
 
@@ -107,6 +131,15 @@ mod tests {
     use super::*;
     use crate::error::ErrorCode;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn formatted_values_are_not_reinterpreted_as_placeholders() {
+        assert_eq!(
+            format_text("Hello {name}: {missing}", &[("name", "{missing}".into())]),
+            "Hello {missing}: {missing}"
+        );
+        assert_eq!(format_text("Hello {name", &[]), "Hello {name");
+    }
 
     #[test]
     fn locale_precedence_and_fallback_are_deterministic() {
@@ -141,15 +174,34 @@ mod tests {
     fn catalogs_have_exactly_the_used_keys_and_matching_placeholders() {
         let en: toml::Table = toml::from_str(include_str!("../locales/en.toml")).unwrap();
         let zh: toml::Table = toml::from_str(include_str!("../locales/zh-CN.toml")).unwrap();
-        let mut used: BTreeSet<_> = ErrorCode::ALL.iter().map(|c| c.as_str()).collect();
-        for part in concat!(include_str!("cli.rs"), include_str!("engine/recording.rs"))
-            .split("crate::t!(\"")
-            .skip(1)
-        {
-            used.insert(part.split('"').next().unwrap());
+        let mut used: BTreeSet<String> = ErrorCode::ALL.iter().map(|c| c.as_str().into()).collect();
+        let mut directories =
+            vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(directory) = directories.pop() {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    directories.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("messages.rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(path).unwrap();
+                for part in source.split("crate::t!").skip(1) {
+                    let literal = part
+                        .trim_start()
+                        .strip_prefix('(')
+                        .unwrap()
+                        .trim_start()
+                        .strip_prefix('"')
+                        .unwrap();
+                    used.insert(literal.split('"').next().unwrap().into());
+                }
+            }
         }
-        assert_eq!(en.keys().map(String::as_str).collect::<BTreeSet<_>>(), used);
-        assert_eq!(zh.keys().map(String::as_str).collect::<BTreeSet<_>>(), used);
+        assert_eq!(en.keys().cloned().collect::<BTreeSet<_>>(), used);
+        assert_eq!(zh.keys().cloned().collect::<BTreeSet<_>>(), used);
         let placeholders = |s: &str| {
             s.split('{')
                 .skip(1)
@@ -157,8 +209,8 @@ mod tests {
                 .collect::<BTreeSet<_>>()
         };
         for key in used {
-            let a = text_in(Locale::En, key);
-            let b = text_in(Locale::ZhCn, key);
+            let a = text_in(Locale::En, &key);
+            let b = text_in(Locale::ZhCn, &key);
             assert!(!a.is_empty() && !b.is_empty());
             assert_eq!(placeholders(a), placeholders(b), "{key}");
         }
