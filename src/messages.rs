@@ -171,15 +171,18 @@ mod tests {
     }
 
     fn literal_keys(source: &str) -> BTreeSet<String> {
-        ["crate::t!", "messages::text"]
+        ["crate::t!", "messages::text", "messages::text_in"]
             .into_iter()
             .flat_map(|call| {
                 source.split(call).skip(1).filter_map(|part| {
-                    let literal = part
-                        .trim_start()
-                        .strip_prefix('(')?
-                        .trim_start()
-                        .strip_prefix('"')?;
+                    let args = part.trim_start().strip_prefix('(')?;
+                    let literal = if call.ends_with("text_in") {
+                        args.split_once(',')?.1
+                    } else {
+                        args
+                    }
+                    .trim_start()
+                    .strip_prefix('"')?;
                     Some(literal.split('"').next().unwrap().to_owned())
                 })
             })
@@ -189,10 +192,10 @@ mod tests {
     #[test]
     fn key_scan_includes_direct_message_lookups() {
         let source = r#"crate::t!("macro"); messages::text("direct");
-            crate::messages::text ( "qualified" ); messages::text_in(locale, "excluded");"#;
+            crate::messages::text ( "qualified" ); messages::text_in(locale, "explicit_locale");"#;
         assert_eq!(
             literal_keys(source),
-            ["macro", "direct", "qualified"]
+            ["macro", "direct", "qualified", "explicit_locale"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect()
@@ -204,8 +207,8 @@ mod tests {
         let en: toml::Table = toml::from_str(include_str!("../locales/en.toml")).unwrap();
         let zh: toml::Table = toml::from_str(include_str!("../locales/zh-CN.toml")).unwrap();
         let mut used: BTreeSet<String> = ErrorCode::ALL.iter().map(|c| c.as_str().into()).collect();
-        let mut directories =
-            vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut directories = vec![root.join("src"), root.join("tests")];
         while let Some(directory) = directories.pop() {
             for entry in std::fs::read_dir(directory).unwrap() {
                 let path = entry.unwrap().path();
