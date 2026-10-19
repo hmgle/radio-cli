@@ -562,17 +562,19 @@ fn run_inner(mut cli: Cli) -> Result<()> {
                         r.id,
                         r.status,
                         crate::clean_text(&r.station_name),
-                        crate::clean_text(&format!(
-                            "{} {}",
-                            r.path,
-                            r.error.as_deref().unwrap_or("")
-                        ))
+                        crate::clean_text(&r.path)
                     );
                     if r.reconnects > 0 {
                         println!(
                             "  {}",
                             crate::t!("recording_reconnected", "count" => r.reconnects)
                         );
+                    }
+                    if let Some(error) = r.error {
+                        for line in error.lines() {
+                            let line: String = line.chars().filter(|c| !c.is_control()).collect();
+                            println!("  {line}");
+                        }
                     }
                 }
             }

@@ -514,6 +514,35 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
 }
 
 #[test]
+fn recordings_list_preserves_diagnostic_tails_without_terminal_controls() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let body = "x".repeat(7000);
+    let record: radio_cli::model::Recording = serde_json::from_value(serde_json::json!({
+        "id":"diagnostics", "stationuuid":"s", "station_name":"Recorded stream",
+        "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+        "stopped_at":null, "media_duration_ms":null, "codec":"mp3", "container":"mp3",
+        "path":"/tmp/sample", "size_bytes":1, "status":"complete", "reconnects":2,
+        "error":format!("first line\n{body}\n\u{1b}[31mFINAL_DIAGNOSTIC\u{1b}[0m")
+    }))
+    .unwrap();
+    store.save_recording(&record).unwrap();
+    for (lang, warning) in [("en", "audio may have gaps"), ("zh-CN", "音频可能有缺口")] {
+        let output = radio(dir.path())
+            .args(["--lang", lang, "recordings", "list"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains(&body));
+        assert!(text.contains("\n  first line\n"));
+        assert!(text.contains("FINAL_DIAGNOSTIC"));
+        assert!(text.contains(warning));
+        assert!(!text.contains('\u{1b}'));
+    }
+}
+
+#[test]
 fn large_lists_expose_pages_totals_and_full_exports() {
     let dir = tempfile::tempdir().unwrap();
     let _config = support::config(dir.path());
