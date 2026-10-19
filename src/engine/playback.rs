@@ -117,6 +117,7 @@ impl PlaybackController {
         recording.clear_finished(session);
         session.playback_failed = false;
         session.status.title.clear();
+        session.status.muted = false;
         session.status.playback_state = PlaybackState::Idle;
         session.status.station = Some(station.clone());
         self.candidates.extend(candidates);
@@ -265,6 +266,7 @@ impl PlaybackController {
         reason: &str,
     ) -> Result<()> {
         self.retire_player(session, recording);
+        session.status.muted = false;
         session.status.playback_state = PlaybackState::Idle;
         recording.stop_recording(session, self, Some(reason))?;
         let station = session
@@ -302,6 +304,10 @@ impl PlaybackController {
         {
             return Ok(());
         }
+        self.reconnect_due = None;
+        self.reconnect_attempts = 0;
+        self.reconnect_window.clear();
+        session.status.muted = false;
         session.playback_failed = true;
         session.status.playback_state = PlaybackState::Failed {
             reason: reason.into(),
@@ -487,9 +493,12 @@ impl PlaybackController {
         recording: &mut RecordingController,
     ) -> Result<()> {
         self.reconnect_due = None;
+        self.reconnect_attempts = 0;
+        self.reconnect_window.clear();
         self.generation = self.generation.wrapping_add(1);
         self.refresh_task = None;
         self.retire_player(session, recording);
+        session.status.muted = false;
         session.status.playback_state = PlaybackState::Idle;
         recording.stop_recording(session, self, None)
     }

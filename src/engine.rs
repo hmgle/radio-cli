@@ -455,6 +455,9 @@ mod tests {
             .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
             .unwrap();
         assert!(engine.playback_failed);
+        assert!(!engine.status.muted);
+        assert_eq!(engine.playback.reconnect_attempts, 0);
+        assert!(engine.playback.reconnect_window.is_empty());
         assert!(engine.playback.reconnect_due.is_none());
         engine.playback.reconnect_window =
             std::iter::repeat_n(Instant::now() - Duration::from_secs(61), 6).collect();
@@ -477,6 +480,7 @@ mod tests {
             name: "Test".into(),
             ..Station::default()
         });
+        engine.status.muted = true;
         engine.playback.history_recorded = true;
         for delay in [1, 3, 7] {
             engine
@@ -498,13 +502,20 @@ mod tests {
             .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
             .unwrap();
         assert!(engine.playback_failed);
+        assert!(!engine.status.muted);
+        assert_eq!(engine.playback.reconnect_attempts, 0);
+        assert!(engine.playback.reconnect_window.is_empty());
         assert!(engine.playback.reconnect_due.is_none());
         engine.playback.reconnect_attempts = 0;
         engine
             .playback
             .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
             .unwrap();
+        engine.status.muted = true;
         engine.stop_playback().unwrap();
+        assert!(!engine.status.muted);
+        assert_eq!(engine.playback.reconnect_attempts, 0);
+        assert!(engine.playback.reconnect_window.is_empty());
         assert!(engine.playback.reconnect_due.is_none());
         let generation = engine.playback.generation;
         engine.tick().unwrap();
