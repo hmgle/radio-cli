@@ -17,6 +17,7 @@ pub(super) struct PlaybackController {
     pub(super) local_recording_id: Option<String>,
     pub(super) reconnect_attempts: usize,
     pub(super) reconnect_due: Option<Instant>,
+    pub(super) reconnect_window: VecDeque<Instant>,
     pub(super) started: Instant,
     pub(super) random_filter: Option<Filter>,
     pub(super) random_tried: Vec<String>,
@@ -111,7 +112,9 @@ impl PlaybackController {
         self.local_playback = local;
         self.local_recording_id = None;
         self.reconnect_attempts = 0;
+        self.reconnect_window.clear();
         self.reconnect_due = None;
+        recording.clear_finished(session);
         session.playback_failed = false;
         session.status.title.clear();
         session.status.playback_state = PlaybackState::Idle;
@@ -125,6 +128,7 @@ impl PlaybackController {
         session: &mut Session,
         recording: &mut RecordingController,
     ) -> Result<()> {
+        self.reconnect_attempts = 0;
         self.url = self
             .candidates
             .pop_front()
@@ -188,7 +192,21 @@ impl PlaybackController {
         // Three bounded attempts span a ten-second outage even when the
         // unavailable source rejects each connection immediately.
         const BACKOFF: [u64; 3] = [1, 3, 7];
-        if self.history_recorded && self.reconnect_attempts < BACKOFF.len() {
+        let now = Instant::now();
+        while self
+            .reconnect_window
+            .front()
+            .is_some_and(|time| now.saturating_duration_since(*time) >= Duration::from_secs(60))
+        {
+            self.reconnect_window.pop_front();
+        }
+        // Successful restarts renew the outage budget, but a flapping stream
+        // cannot restart indefinitely (at most six retries per minute).
+        if self.history_recorded
+            && self.reconnect_attempts < BACKOFF.len()
+            && self.reconnect_window.len() < 6
+        {
+            self.reconnect_window.push_back(now);
             let delay = BACKOFF[self.reconnect_attempts];
             self.reconnect_attempts += 1;
             self.retire_player(session, recording);
@@ -309,6 +327,8 @@ impl PlaybackController {
                     for event in events {
                         match event {
                             Event::Playing => {
+                                self.reconnect_attempts = 0;
+                                self.reconnect_due = None;
                                 session.status.playback_state = PlaybackState::Playing;
                                 session.status.message = "播放中".into();
                                 if !self.confirmed {

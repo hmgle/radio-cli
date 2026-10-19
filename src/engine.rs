@@ -159,6 +159,7 @@ impl Engine {
                 local_recording_id: None,
                 reconnect_attempts: 0,
                 reconnect_due: None,
+                reconnect_window: VecDeque::new(),
                 started: Instant::now(),
                 random_filter: None,
                 random_tried: vec![],
@@ -399,6 +400,68 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_station_clears_finished_recording_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+        config.prepare().unwrap();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        for state in [
+            RecordingState::Done,
+            RecordingState::Failed {
+                reason: "disk".into(),
+            },
+        ] {
+            engine.status.recording_state = state;
+            engine.status.recording_path = "old.mp3".into();
+            engine.status.recording_ms = 1000;
+            // No source reaches mpv; the new station still owns clean status.
+            assert!(
+                engine
+                    .playback
+                    .play_source(
+                        &mut engine.session,
+                        &mut engine.recording,
+                        Station::default(),
+                        vec![],
+                        false
+                    )
+                    .is_err()
+            );
+            assert_eq!(engine.status.recording_state, RecordingState::Idle);
+            assert!(engine.status.recording_path.is_empty());
+            assert_eq!(engine.status.recording_ms, 0);
+        }
+    }
+
+    #[test]
+    fn flapping_reconnects_have_a_sliding_window_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+        config.prepare().unwrap();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine.status.station = Some(Station {
+            custom: true,
+            ..Station::default()
+        });
+        engine.playback.history_recorded = true;
+        engine.playback.reconnect_window = std::iter::repeat_n(Instant::now(), 6).collect();
+        engine
+            .playback
+            .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
+            .unwrap();
+        assert!(engine.playback_failed);
+        assert!(engine.playback.reconnect_due.is_none());
+        engine.playback.reconnect_window =
+            std::iter::repeat_n(Instant::now() - Duration::from_secs(61), 6).collect();
+        engine
+            .playback
+            .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
+            .unwrap();
+        assert!(engine.playback.reconnect_due.is_some());
+        assert_eq!(engine.playback.reconnect_window.len(), 1);
+    }
 
     #[test]
     fn reconnect_budget_is_bounded_and_stop_cancels_it() {

@@ -16,6 +16,17 @@ pub(super) struct RecordingProbe {
 }
 
 impl RecordingController {
+    pub(super) fn clear_finished(&self, session: &mut Session) {
+        if matches!(
+            session.status.recording_state,
+            RecordingState::Done | RecordingState::Failed { .. }
+        ) {
+            session.status.recording_state = RecordingState::Idle;
+            session.status.recording_path.clear();
+            session.status.recording_ms = 0;
+        }
+    }
+
     pub(super) fn toggle_recording(
         &mut self,
         session: &mut Session,

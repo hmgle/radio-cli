@@ -375,7 +375,7 @@ fn edited_custom_station_plays_the_new_url() {
 }
 
 #[test]
-fn live_stream_reconnects_after_a_ten_second_outage_without_duplicate_history() {
+fn live_stream_reconnects_across_outages_without_duplicate_history() {
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -406,15 +406,24 @@ fn live_stream_reconnects_after_a_ten_second_outage_without_duplicate_history() 
     let station = sample(&server.url);
     engine.store.upsert(&station).unwrap();
     engine.play(&station.stationuuid).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(23);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut first_played = false;
     let mut reconnecting = false;
+    let mut recoveries = 0;
     loop {
         engine.tick().unwrap();
         first_played |= engine.status.playing();
         reconnecting |= engine.status.message.contains("重连中");
         if first_played && reconnecting && engine.status.playing() {
-            break;
+            recoveries += 1;
+            reconnecting = false;
+            if recoveries == 2 {
+                break;
+            }
+        }
+        if recoveries == 1 {
+            assert!(!matches!(engine.status.playback_state,
+                radio_cli::engine::PlaybackState::Reconnecting { attempt } if attempt != 1));
         }
         assert!(!engine.playback_failed, "{}", engine.status.message);
         assert!(Instant::now() < deadline, "{}", engine.status.message);
