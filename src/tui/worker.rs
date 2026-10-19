@@ -29,6 +29,8 @@ pub(super) struct View {
     pub logs_revision: u64,
     pub facets: Arc<[Vec<crate::model::Facet>; 3]>,
     pub facets_loading: bool,
+    pub facets_request: Option<(usize, String)>,
+    pub facets_error: Option<String>,
     pub backups_errors: Arc<std::collections::BTreeMap<String, String>>,
     pub backups: Arc<std::collections::BTreeMap<String, Vec<String>>>,
     pub rows: Arc<Vec<Station>>,
@@ -58,6 +60,8 @@ impl View {
             logs_revision: 0,
             facets: Default::default(),
             facets_loading: false,
+            facets_request: None,
+            facets_error: None,
             backups_errors: Default::default(),
             backups: Default::default(),
             total: 0,
@@ -277,8 +281,15 @@ pub(super) fn execute(
     view: &Arc<Mutex<View>>,
 ) -> Result<()> {
     match command {
-        Command::Facets => {
+        Command::Facets { selected, prefix } => {
+            if selected >= 3 {
+                bail!("无效的筛选字段");
+            }
             let mut data = view.lock().unwrap();
+            data.facets_request = Some((selected, prefix));
+            data.facets_error = None;
+            data.revision += 1;
+            data.immediate_revision += 1;
             if !data.facets_loading {
                 data.facets_loading = true;
                 let path = engine.config.data_dir.join("radio.db");
@@ -287,22 +298,37 @@ pub(super) fn execute(
                     thread::Builder::new()
                         .name("radio-facets".into())
                         .spawn(move || {
-                            let result = (|| -> Result<_> {
-                                let store = Store::open(&path)?;
-                                use crate::model::FacetKind;
-                                Ok([
-                                    store.facets(FacetKind::Country, "")?,
-                                    store.facets(FacetKind::Language, "")?,
-                                    store.facets(FacetKind::Tag, "")?,
-                                ])
-                            })();
-                            let mut data = shared.lock().unwrap();
-                            data.facets_loading = false;
-                            match result {
-                                Ok(facets) => data.facets = Arc::new(facets),
-                                Err(error) => data.log(&format!("筛选候选加载失败: {error:#}")),
+                            // Only one query runs at a time; intermediate input is coalesced.
+                            loop {
+                                let request =
+                                    shared.lock().unwrap().facets_request.clone().unwrap();
+                                let (selected, prefix) = &request;
+                                let result = (|| -> Result<_> {
+                                    use crate::model::FacetKind;
+                                    let kind =
+                                        [FacetKind::Country, FacetKind::Language, FacetKind::Tag]
+                                            [*selected];
+                                    Store::open(&path)?.facets_limited(kind, prefix, 100)
+                                })();
+                                let mut data = shared.lock().unwrap();
+                                if data.facets_request.as_ref() != Some(&request) {
+                                    continue;
+                                }
+                                data.facets_loading = false;
+                                match result {
+                                    Ok(facets) => {
+                                        Arc::make_mut(&mut data.facets)[*selected] = facets
+                                    }
+                                    Err(error) => {
+                                        let message = format!("筛选候选加载失败: {error:#}");
+                                        data.log(&message);
+                                        data.facets_error = Some(message);
+                                    }
+                                }
+                                data.revision += 1;
+                                data.immediate_revision += 1;
+                                break;
                             }
-                            data.revision += 1;
                         })
                 {
                     data.facets_loading = false;

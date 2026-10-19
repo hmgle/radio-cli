@@ -302,6 +302,8 @@ pub(super) struct App {
     pub facet_index: Option<usize>,
     pub facet_prefix: String,
     backups_request: Option<(String, u64, Instant)>,
+    facets_request: Option<(usize, String)>,
+    facet_due: Option<Instant>,
     pub help: bool,
     pub help_content: Option<String>,
     pub help_scroll: u16,
@@ -346,6 +348,8 @@ impl Default for App {
             facet_index: None,
             facet_prefix: String::new(),
             backups_request: None,
+            facets_request: None,
+            facet_due: None,
             help: false,
             help_content: None,
             help_scroll: 0,
@@ -387,6 +391,15 @@ impl App {
         }
     }
     pub fn reconcile(&mut self, view: &View) {
+        if let Some((selected, values)) = &self.filter_edit
+            && *selected < 3
+            && self.facet_index.is_some()
+        {
+            self.facet_index = matching_facets(&view.facets[*selected], &self.facet_prefix)
+                .iter()
+                .position(|facet| facet.value == values[*selected]);
+        }
+
         let len = self.length(view);
         if self.source != Source::Recordings && self.filter != view.filter {
             return;
@@ -461,6 +474,27 @@ impl App {
         selected: usize,
     ) -> Vec<&'a crate::model::Facet> {
         matching_facets(&view.facets[selected], &self.facet_prefix)
+    }
+    pub fn request_facets(&mut self, sender: &CommandSender) {
+        let Some((selected, _)) = &self.filter_edit else {
+            return;
+        };
+        if *selected >= 3 || self.facet_due.is_some_and(|due| Instant::now() < due) {
+            return;
+        }
+        let request = (*selected, self.facet_prefix.trim().to_lowercase());
+        if self.facets_request.as_ref() != Some(&request)
+            && self.send(
+                sender,
+                Command::Facets {
+                    selected: request.0,
+                    prefix: request.1.clone(),
+                },
+            )
+        {
+            self.facets_request = Some(request);
+            self.facet_due = None;
+        }
     }
     fn request_info(&mut self, uuid: String, sender: &CommandSender) {
         self.info_request = self.info_request.wrapping_add(1);
@@ -804,12 +838,14 @@ impl App {
                     self.facet_index = None;
                     self.filter_input.set(&values[*selected]);
                     self.facet_prefix = values[*selected].clone();
+                    self.facet_due = None;
                 }
                 KeyCode::BackTab => {
                     *selected = (*selected + 3) % 4;
                     self.facet_index = None;
                     self.filter_input.set(&values[*selected]);
                     self.facet_prefix = values[*selected].clone();
+                    self.facet_due = None;
                 }
                 KeyCode::Enter => match values[3].parse::<u32>() {
                     Ok(bitrate) => {
@@ -828,6 +864,7 @@ impl App {
                     self.filter_input.key(key, false);
                     values[*selected] = self.filter_input.text.clone();
                     self.facet_prefix = self.filter_input.text.clone();
+                    self.facet_due = Some(Instant::now() + Duration::from_millis(200));
                     self.facet_index = None;
                 }
             }
@@ -966,7 +1003,8 @@ impl App {
                     .set(self.filter.country.as_deref().unwrap_or(""));
                 self.facet_index = None;
                 self.facet_prefix = self.filter_input.text.clone();
-                self.send(sender, Command::Facets);
+                self.facets_request = None;
+                self.facet_due = None;
                 self.filter_edit = Some((
                     0,
                     [

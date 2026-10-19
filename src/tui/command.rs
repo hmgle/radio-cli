@@ -101,7 +101,10 @@ impl CommandReceiver {
 pub(super) enum Command {
     Mute,
     SetLanguage(String),
-    Facets,
+    Facets {
+        selected: usize,
+        prefix: String,
+    },
     Backups(String),
     Station(crate::cli::StationAction),
     Search(Filter),

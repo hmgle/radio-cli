@@ -201,7 +201,11 @@ fn filter_popup_selects_local_candidates_with_the_keyboard() {
     let (sender, receiver) = command::channel(10);
     let mut app = App::default();
     app.key(key(KeyCode::Char('F')), &data, &sender);
-    assert!(matches!(receiver.try_recv(), Ok(Command::Facets)));
+    app.request_facets(&sender);
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(Command::Facets { selected: 0, .. })
+    ));
     app.key(key(KeyCode::Down), &data, &sender);
     app.key(key(KeyCode::Down), &data, &sender);
     assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "FR");
@@ -254,6 +258,7 @@ fn clear_filters_keeps_source_and_pagination_size() {
             );
         } else {
             app.key(key(KeyCode::Char('F')), &data, &sender);
+            app.request_facets(&sender);
             receiver.try_recv().unwrap();
             app.key(
                 KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
@@ -1736,6 +1741,13 @@ fn facet_candidates_follow_the_typed_prefix_without_losing_it() {
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     assert!(text(&terminal).contains("english04 (5)"));
     assert!(text(&terminal).contains("english11 (12)"));
+    Arc::make_mut(&mut data.facets)[1].drain(..4);
+    app.reconcile(&data);
+    assert_eq!(
+        app.facet_index,
+        Some(7),
+        "async results must keep the selected value aligned"
+    );
     app.key(key(KeyCode::Char('z')), &data, &sender);
     assert!(app.facet_candidates(&data, 1).is_empty());
 }
@@ -1874,4 +1886,69 @@ fn failed_backup_query_retries_without_a_selection_or_row_change() {
     );
     app.request_selected_backups_at(&recovered, &tx, now + Duration::from_secs(20));
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn facets_query_only_the_latest_field_and_bound_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let mut row = station("Facets");
+    row.tags = (0..150)
+        .map(|i| format!("tag{i:03}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    engine.store.upsert(&row).unwrap();
+    let shared = Arc::new(Mutex::new(view()));
+    let mut filter = Filter::default();
+    let mut job = None;
+    for prefix in ["", "t", "tag1"] {
+        worker::execute(
+            Command::Facets {
+                selected: 2,
+                prefix: prefix.into(),
+            },
+            &mut engine,
+            &mut filter,
+            &mut job,
+            &shared,
+        )
+        .unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let data = shared.lock().unwrap();
+        if !data.facets_loading {
+            assert!(data.facets[0].is_empty() && data.facets[1].is_empty());
+            assert_eq!(data.facets[2].len(), 50);
+            assert!(
+                data.facets[2]
+                    .iter()
+                    .all(|facet| facet.value.starts_with("tag1"))
+            );
+            break;
+        }
+        drop(data);
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    let (tx, rx) = command::channel(1);
+    let data = shared.lock().unwrap().snapshot();
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('F')), &data, &tx);
+    // Queue pressure must leave the latest query available for retry.
+    tx.try_send(Command::Refresh).unwrap();
+    app.request_facets(&tx);
+    rx.try_recv().unwrap();
+    app.request_facets(&tx);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Command::Facets { selected: 0, .. })
+    ));
+    app.key(key(KeyCode::Tab), &data, &tx);
+    app.request_facets(&tx);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Command::Facets { selected: 1, .. })
+    ));
 }

@@ -529,3 +529,33 @@ fn history_retention_uses_an_indexed_id_threshold() {
         .unwrap();
     assert_eq!((count, min, max), (1000, 201, 1200));
 }
+
+#[test]
+fn bounded_facets_can_reach_values_beyond_the_initial_limit() {
+    use radio_cli::model::FacetKind;
+    let (_dir, store) = db();
+    let mut row = station("Many tags");
+    row.tags = (0..150)
+        .map(|i| format!("tag{i:03}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    store.upsert(&row).unwrap();
+    assert_eq!(
+        store.facets_limited(FacetKind::Tag, "", 100).unwrap().len(),
+        100
+    );
+    assert_eq!(store.facets(FacetKind::Tag, "").unwrap().len(), 150);
+    assert_eq!(
+        store
+            .facets_limited(FacetKind::Tag, " TAG149 ", 100)
+            .unwrap()[0]
+            .value,
+        "tag149"
+    );
+    assert!(
+        store
+            .facets_limited(FacetKind::Tag, "", 0)
+            .unwrap()
+            .is_empty()
+    );
+}

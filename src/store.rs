@@ -335,10 +335,19 @@ impl Store {
         kind: crate::model::FacetKind,
         prefix: &str,
     ) -> Result<Vec<crate::model::Facet>> {
+        self.facets_limited(kind, prefix, usize::MAX)
+    }
+
+    pub fn facets_limited(
+        &self,
+        kind: crate::model::FacetKind,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::model::Facet>> {
         use crate::model::{Facet, FacetKind};
         let (sql, prefix) = match kind {
             FacetKind::Country => (
-                "SELECT country,count(*) FROM stations WHERE active=1 AND country<>'' AND substr(country,1,length(?1))=?1 GROUP BY country ORDER BY country".to_owned(), prefix.trim().to_uppercase()
+                "SELECT country,count(*) FROM stations WHERE active=1 AND country<>'' AND substr(country,1,length(?1))=?1 GROUP BY country ORDER BY country LIMIT ?2".to_owned(), prefix.trim().to_uppercase()
             ),
             FacetKind::Language | FacetKind::Tag => {
                 let column = if matches!(kind, FacetKind::Language) { "languages" } else { "tags" };
@@ -346,11 +355,11 @@ impl Store {
                     SELECT uuid,'',trim({column},',')||',' FROM stations WHERE active=1
                     UNION ALL SELECT uuid,substr(rest,1,instr(rest,',')-1),substr(rest,instr(rest,',')+1) FROM split WHERE rest<>''
                 ), entries AS (SELECT DISTINCT uuid,value FROM split WHERE value<>'')
-                SELECT value,count(*) FROM entries WHERE substr(value,1,length(?1))=?1 GROUP BY value ORDER BY value"), prefix.trim().to_lowercase())
+                SELECT value,count(*) FROM entries WHERE substr(value,1,length(?1))=?1 GROUP BY value ORDER BY value LIMIT ?2"), prefix.trim().to_lowercase())
             }
         };
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map([prefix], |r| {
+        let rows = stmt.query_map(params![prefix, limit.min(i64::MAX as usize) as i64], |r| {
             Ok(Facet {
                 value: r.get(0)?,
                 count: r.get(1)?,

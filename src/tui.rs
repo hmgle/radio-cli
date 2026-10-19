@@ -89,6 +89,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             let snapshot = view.lock().unwrap().snapshot();
             app.reconcile(&snapshot);
             app.request_selected_backups(&snapshot, &sender);
+            app.request_facets(&sender);
             if dirty
                 || revision != snapshot.revision
                     && (immediate_revision != snapshot.immediate_revision

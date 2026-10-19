@@ -676,8 +676,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             text.push(Line::from(if view.facets_loading {
                 "正在加载本地候选…"
             } else {
-                "本地候选（电台数）:"
+                "本地候选（电台数，最多100项；输入缩小）:"
             }));
+            if let Some(error) = &view.facets_error {
+                text.push(Line::from(crate::clean_text(error)));
+            }
             text.extend(candidates.iter().enumerate().skip(start).take(count).map(
                 |(index, facet)| {
                     Line::from(format!(
