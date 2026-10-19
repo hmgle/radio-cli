@@ -129,6 +129,19 @@ filters with Ctrl-U in `F`, or click the bottom filter summary. Search text
 remains a literal substring; quote multiword CLI arguments in your shell.
 Advanced query operators such as `-tag:` are reserved for a future change.
 
+In the TUI, press `''` (two single quotes within one second) in normal mode to
+locate the playing station and focus the list. The shortcut is configurable as
+`jump_to_playing` under `[keybindings]` (for example `"gp"`, `"<F6>"`, or
+`"<Ctrl-p>"`); bindings accept 1–4 printable non-space characters or a named key
+such as `<F1>`–`<F12>` with optional `Ctrl-`, `Alt-`, or `Shift-` modifiers.
+Ctrl-C stays reserved for quitting, and an empty string disables the shortcut.
+When the target is on the current page the source, filters, and sort order are
+kept; otherwise the view switches to all stations, clears filters, and loads
+only the target page. Locating never replays audio, works while paused,
+connecting, or reconnecting, and prompts when nothing is playing. The help panel
+shows the configured key and hides the entry when disabled. See
+[docs/tui.md](docs/tui.md) for details.
+
 Default paths on Linux:
 
 - Config: `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
