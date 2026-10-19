@@ -89,7 +89,8 @@ TUI 按键：
 
 CLI 错误和列表文案支持 `--lang en` / `--lang zh-CN`。优先级为 `--lang`、
 `RADIO_LANG`、配置 `language`、`LC_ALL`/`LANG`，未知语言提示一次并回退英文。
-TUI 静态文案和 clap 帮助的迁移将单独处理。
+CLI 列表、领域错误、播放进度和顶层帮助简介已支持语言切换；子命令帮助、
+TUI 静态文案和部分运行消息仍待迁移。
 
 自定义电台支持 `station list --all`、`station edit UUID --name 名称 --url URL`、
 `station remove UUID`。删除有引用的电台时保留名称占位并清除播放地址；

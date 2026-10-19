@@ -56,7 +56,12 @@ radio --lang en --json-v2 info missing    # station_not_found; exit 1
 
 `completions <shell>` and `man` return generated text normally; with `--json`
 it is a JSON string, and with `--json-v2` it is the envelope's `data` string.
-Generation does not read configuration, create data directories or open SQLite.
+Generation reads configuration only to select the language; it does not create
+data directories or open SQLite.
+
+Recording objects include `reconnects`, the number of HTTP retry attempts
+reported by FFmpeg. A positive count means live audio may have gaps even when
+`status` is `complete`; old metadata without this field reads as zero.
 
 `info`, `station edit/remove/backups`, and `recordings remove` always produce
 JSON, even without a JSON flag. For station removal, `removed:true` means the

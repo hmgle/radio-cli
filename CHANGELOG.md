@@ -7,6 +7,21 @@
   EOF behavior and partial files when retries fail.
 - Retain the latest 8 KiB of recording diagnostics with line breaks, including
   messages containing equals signs and errors accompanying premature stream EOF.
+- Preserve recording reconnect counts through finalization and recovery; warn
+  that audio may have gaps even when the recording completes successfully.
+  Print full diagnostic tails in the CLI text list as well as JSON and sidecars.
+- Check recording space before creating destination directories; clear inactive
+  playback state after stop or failure and cancel stale candidate retry timers.
+- Localize top-level CLI help descriptions and playback progress; validate
+  message keys in direct and explicit-locale lookups and integration tests.
+- Retry failed TUI backup queries with backoff, suppress repeated errors and
+  retain station details; invalidate cached results when station rows refresh.
+- Share case-insensitive facet matching between navigation and rendering;
+  debounce queries for the active field and prefix, with at most 100 candidates.
+- Add a configurable normal-mode shortcut to locate the playing station without
+  restarting playback. Accept an empty binding to disable it, reject incomplete
+  named keys and normalize shifted control keys consistently.
+- Generate release manuals in English regardless of packaging host language.
 
 ## 0.3.1 — 2026-10-19
 

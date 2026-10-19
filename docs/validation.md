@@ -75,12 +75,15 @@ translation is the explicitly separate follow-up to the i18n foundation #42.
 The extracted 0.3.0 archive also passes CLI/JSON/exits/doctor and real local mpv
 playback-to-EOF/deletion smoke tests. Completion files and man output match the
 binary; bash/zsh syntax checks and SHA-256 verification pass. Repackaging the same
-commit produces the same archive hash. The internal roadmap is not archived.
+commit with the same toolchain and built binary produces the same archive hash.
+This is a repackaging check, not a claim of reproducible compilation across
+different host toolchains. The internal roadmap is not archived.
 
 
-## 0.3.1 / review follow-up — 2026-10-19
+## 0.3.1 / review follow-up — 2026-10-19 (release snapshot)
 
-- 118 tests pass with real mpv/FFmpeg, including two successive stream outages,
+- At the 0.3.1 release snapshot, 118 tests passed with real mpv/FFmpeg,
+  including two successive stream outages,
   real ffprobe bitrate preflight for a custom station with bitrate=0, active
   recording playback guards, coalesced refreshes and lazy backup reads.
 - Strict all-target/all-feature Clippy, formatting, Rust 1.88 and a fresh RustSec
@@ -134,3 +137,26 @@ Reproduce each sample with the corresponding release test executable:
 ```sh
 cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
 ```
+
+## Unreleased review validation — 2026-10-19
+
+- `cargo test --all-targets --all-features --locked`: **133 passed**, with the
+  opt-in catalog benchmark excluded (one ignored). Real mpv/FFmpeg and terminal
+  tests ran; sources and data directories remain local and isolated.
+- `cargo fmt --check`, strict all-target/all-feature Clippy and
+  `cargo +1.88.0 check --all-targets --all-features --locked` pass.
+- Backup-query regressions cover 2/4/8/16/30-second retry backoff, unchanged-error
+  log/redraw suppression, visible error details, recovery and cache invalidation.
+- Playing-station location from a randomly sorted search uses the stable default
+  order for both rank and page queries. Empty shortcut bindings, incomplete named
+  keys and shifted control input have regression coverage.
+- Real truncated AAC streams preserve reconnect counts in SQLite and sidecars;
+  finalization recovery retains the count. CLI/TUI details warn about possible
+  gaps. CLI text lists retain a diagnostic tail beyond 1024 characters while
+  stripping terminal control characters.
+- The real two-outage playback test also passes with `LANG` and `LC_ALL` set to
+  `zh_CN.UTF-8`; it observes playback states instead of localized status text.
+- Release manual generation with `--lang en` produces identical bytes under
+  English/default and Chinese host language settings, including `RADIO_LANG`.
+  `bash -n scripts/package-release.sh` passes. A fresh archive reproducibility
+  comparison was not run for this review.

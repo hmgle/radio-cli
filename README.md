@@ -93,8 +93,9 @@ Inside the TUI, `:sync` runs a background sync, `:sync-cancel` cancels the task,
 
 Select the CLI error and list language with `--lang en` or `--lang zh-CN`.
 Precedence is `--lang`, `RADIO_LANG`, config `language`, then `LC_ALL`/`LANG`;
-unknown languages fall back to English with one notice. TUI text and clap
-help migration follow separately.
+unknown languages fall back to English with one notice. CLI lists, domain
+errors, playback progress and the top-level help description use this language.
+Subcommand help, static TUI text and some runtime messages await migration.
 
 Manage custom stations with `station list --all`, `station edit UUID --name NAME
 --url URL`, and `station remove UUID`. Removing a referenced station preserves
