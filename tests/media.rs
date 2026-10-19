@@ -812,6 +812,73 @@ fn recording_library_deletion_is_retryable_and_protects_pending_files() {
 }
 
 #[test]
+fn real_probe_bitrate_guards_custom_stations_before_creating_files() {
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = sample(&server.url);
+    assert_eq!(station.bitrate, 0);
+    let stop = Arc::new(AtomicBool::new(false));
+    let info = recorder::probe(&config, &server.url, &stop).unwrap();
+    assert!(
+        info["streams"][0]["bit_rate"]
+            .as_str()
+            .or(info["format"]["bit_rate"].as_str())
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > 0
+    );
+    let error = Recorder::start_with_info(
+        &config,
+        &store,
+        &station,
+        station.primary_url(),
+        &config.recording_dir,
+        Some(Duration::from_secs(u64::MAX)),
+        info,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::InsufficientSpace
+    );
+    assert_eq!(store.recordings_count().unwrap(), 0);
+    assert_eq!(fs::read_dir(&config.recording_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn local_recording_playback_rejects_active_or_pending_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let mut record = library_record(&dir.path().join("absent.mp3"));
+    for (status, pending) in [
+        ("recording", false),
+        ("finalizing", false),
+        ("interrupted", true),
+    ] {
+        record.status = status.into();
+        record.recovery_pending = pending;
+        engine.store.save_recording(&record).unwrap();
+        let error = engine.play_recording(&record.id).unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<radio_cli::error::DomainError>()
+                .unwrap()
+                .code,
+            radio_cli::error::ErrorCode::RecordingInUse
+        );
+    }
+}
+
+#[test]
 fn insufficient_disk_space_refuses_before_creating_partial_files() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = support::config(dir.path());

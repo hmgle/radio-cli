@@ -199,10 +199,16 @@ impl RecordingController {
         recorder: Recorder,
     ) {
         session.status.recording_path = recorder.record.path.clone();
+        let estimated = recorder.space_estimated;
         self.recorder = Some(recorder);
         session.status.recording_state = RecordingState::Recording;
         session.status.recording_ms = 0;
-        session.status.message = "正在录音".into();
+        session.status.message = if estimated {
+            crate::t!("recording_started")
+        } else {
+            crate::t!("recording_space_unestimated")
+        }
+        .into();
     }
 
     pub(super) fn recording_finished(

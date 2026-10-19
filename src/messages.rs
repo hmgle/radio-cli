@@ -142,7 +142,10 @@ mod tests {
         let en: toml::Table = toml::from_str(include_str!("../locales/en.toml")).unwrap();
         let zh: toml::Table = toml::from_str(include_str!("../locales/zh-CN.toml")).unwrap();
         let mut used: BTreeSet<_> = ErrorCode::ALL.iter().map(|c| c.as_str()).collect();
-        for part in include_str!("cli.rs").split("crate::t!(\"").skip(1) {
+        for part in concat!(include_str!("cli.rs"), include_str!("engine/recording.rs"))
+            .split("crate::t!(\"")
+            .skip(1)
+        {
             used.insert(part.split('"').next().unwrap());
         }
         assert_eq!(en.keys().map(String::as_str).collect::<BTreeSet<_>>(), used);
