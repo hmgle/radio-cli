@@ -1048,12 +1048,12 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
     );
     sender.send(Command::Play(bad.stationuuid.clone())).unwrap();
     wait(
-        &|v| v.status.message.contains("后台刷新"),
+        &|v| v.status.message == crate::t!("playback_refreshing"),
         Duration::from_secs(2),
     );
     sender.send(Command::Stop).unwrap();
     wait(
-        &|v| v.status.message == "已停止播放",
+        &|v| v.status.message == crate::t!("playback_stopped"),
         Duration::from_millis(250),
     );
     sender

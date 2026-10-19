@@ -24,7 +24,7 @@ use std::{
 #[command(
     name = "radio",
     version,
-    about = "轻量终端收音机：搜索、收藏、播放与本地录音"
+    about = crate::t!("cli_about")
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -42,6 +42,36 @@ pub struct Cli {
     pub json_v2: bool,
     #[command(subcommand)]
     pub command: Option<Action>,
+}
+
+impl Cli {
+    pub fn try_parse_localized() -> Result<Self, clap::Error> {
+        let args: Vec<_> = std::env::args_os().collect();
+        let preview = Self::command()
+            .disable_help_flag(true)
+            .arg(
+                clap::Arg::new("help")
+                    .long("help")
+                    .short('h')
+                    .global(true)
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .disable_help_subcommand(true)
+            .disable_version_flag(true)
+            .ignore_errors(true)
+            .try_get_matches_from(&args)?;
+        let config = Config::load(
+            preview.get_one::<PathBuf>("config").map(PathBuf::as_path),
+            preview.get_one::<PathBuf>("data_dir").map(PathBuf::as_path),
+            None,
+        )
+        .ok();
+        crate::messages::preview(
+            preview.get_one::<String>("lang").map(String::as_str),
+            config.as_ref().and_then(|c| c.settings.language.as_deref()),
+        );
+        Self::try_parse_from(args)
+    }
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -289,7 +319,13 @@ thread_local! {
 
 fn run_inner(mut cli: Cli) -> Result<()> {
     cli.json |= cli.json_v2;
-    crate::messages::preview(cli.lang.as_deref());
+    let preview_config = Config::load(cli.config.as_deref(), cli.data_dir.as_deref(), None).ok();
+    crate::messages::preview(
+        cli.lang.as_deref(),
+        preview_config
+            .as_ref()
+            .and_then(|c| c.settings.language.as_deref()),
+    );
     if let Some(Action::Completions { shell }) = cli.command.as_ref() {
         let mut bytes = Vec::new();
         clap_complete::generate(*shell, &mut Cli::command(), "radio", &mut bytes);
@@ -683,7 +719,7 @@ pub(crate) fn doctor_report(
     failed |= !enough;
     checks.push(serde_json::json!({"name":"recording_space","ok":enough,
         "available_bytes":available,"minimum_bytes":minimum,
-        "detail":format!("{available} bytes available; reserve {minimum} bytes")}));
+        "detail":crate::t!("cli_recording_space", "available" => available, "minimum" => minimum)}));
     let report = serde_json::json!({"checks":checks,"config":config.config_path,"database":config.data_dir.join("radio.db")});
     Ok((report, failed))
 }

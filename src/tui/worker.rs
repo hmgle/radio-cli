@@ -325,7 +325,7 @@ pub(super) fn execute(
         }
         Command::Stop => {
             engine.stop_playback()?;
-            engine.status.message = "已停止播放".into();
+            engine.status.message = crate::t!("playback_stopped").into();
         }
         Command::Volume(value) => {
             engine.volume(i32::from(value) - i32::from(engine.status.volume))?

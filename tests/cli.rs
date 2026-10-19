@@ -784,3 +784,97 @@ fn completed_recording_summaries_follow_cli_language() {
         assert!(String::from_utf8_lossy(&output.stdout).contains(expected));
     }
 }
+
+#[test]
+fn help_about_uses_the_language_before_clap_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("help.toml");
+    fs::write(&config, "language = 'zh-CN'\n").unwrap();
+    for (args, expected) in [
+        (vec!["--lang", "en", "--help"], "Lightweight terminal radio"),
+        (vec!["--lang=zh-CN", "--help"], "轻量终端收音机"),
+        (vec!["--help", "--lang", "zh-CN"], "轻量终端收音机"),
+        (vec!["--help", "--lang", "en"], "Lightweight terminal radio"),
+        (vec!["--help"], "轻量终端收音机"),
+    ] {
+        let output = radio(dir.path())
+            .env("RADIO_LANG", "")
+            .env("LC_ALL", "C")
+            .arg("--config")
+            .arg(&config)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    assert!(!dir.path().join("radio.db").exists());
+}
+
+#[test]
+fn doctor_space_detail_follows_the_cli_language() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("doctor.toml");
+    fs::write(
+        &config,
+        "mpv='/missing/mpv'\nffmpeg='/missing/ffmpeg'\nffprobe='/missing/ffprobe'\n",
+    )
+    .unwrap();
+    for (language, expected) in [("en", "bytes available"), ("zh-CN", "可用")] {
+        let output = radio(dir.path())
+            .arg("--config")
+            .arg(&config)
+            .args(["--lang", language, "--json", "doctor"])
+            .output()
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let space = value["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "recording_space")
+            .unwrap();
+        assert!(space["detail"].as_str().unwrap().contains(expected));
+        assert!(space["available_bytes"].is_u64() && space["minimum_bytes"].is_u64());
+    }
+}
+
+#[test]
+fn play_and_random_progress_follow_the_cli_language() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("play.toml");
+    let mpv = support::fake_mpv(dir.path());
+    fs::write(&config, format!("mpv = {:?}\n", mpv.to_str().unwrap())).unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "Progress".into(),
+        url: "https://example.com/fail".into(),
+        custom: true,
+        active: true,
+        ..Station::default()
+    };
+    store.upsert(&station).unwrap();
+    for (language, expected, unexpected) in [
+        ("en", "Playback failed:", "播放失败"),
+        ("zh-CN", "播放失败:", "Playback failed:"),
+    ] {
+        for command in [vec!["play", station.stationuuid.as_str()], vec!["random"]] {
+            let output = radio(dir.path())
+                .arg("--config")
+                .arg(&config)
+                .args(["--lang", language])
+                .args(command)
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(expected), "{stderr}");
+            assert!(!stderr.contains(unexpected), "{stderr}");
+        }
+    }
+}

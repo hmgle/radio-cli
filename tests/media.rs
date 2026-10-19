@@ -576,7 +576,7 @@ fn live_stream_reconnects_across_outages_without_duplicate_history() {
     loop {
         engine.tick().unwrap();
         first_played |= engine.status.playing();
-        reconnecting |= engine.status.message.contains("重连中");
+        reconnecting |= engine.status.message.starts_with("Reconnecting");
         if first_played && reconnecting && engine.status.playing() {
             recoveries += 1;
             reconnecting = false;

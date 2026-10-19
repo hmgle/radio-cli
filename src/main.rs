@@ -1,11 +1,9 @@
-use clap::Parser;
-
 fn main() {
     let json_v2 = std::env::args_os()
         .skip(1)
         .take_while(|s| s != "--")
         .any(|s| s == "--json-v2" || s.to_str().is_some_and(|s| s.starts_with("--json-v2=")));
-    let cli = match radio_cli::cli::Cli::try_parse() {
+    let cli = match radio_cli::cli::Cli::try_parse_localized() {
         Ok(cli) => cli,
         Err(error) => {
             if json_v2 && error.use_stderr() {

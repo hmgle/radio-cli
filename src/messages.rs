@@ -38,8 +38,8 @@ pub fn init(explicit: Option<&str>, config: Option<&str>) {
     configure(explicit, config, true);
 }
 
-pub(crate) fn preview(explicit: Option<&str>) {
-    configure(explicit, None, false);
+pub(crate) fn preview(explicit: Option<&str>, config: Option<&str>) {
+    configure(explicit, config, false);
 }
 
 fn configure(explicit: Option<&str>, config: Option<&str>, report_unknown: bool) {

@@ -76,7 +76,7 @@ impl PlaybackController {
         let path = std::fs::canonicalize(&record.path)?;
         let station = Station {
             stationuuid: record.stationuuid,
-            name: format!("{} · 本地录音", record.station_name),
+            name: crate::t!("playback_local_name", "name" => record.station_name),
             custom: true,
             ..Station::default()
         };
@@ -174,7 +174,7 @@ impl PlaybackController {
         session.status.muted = false;
         self.started = Instant::now();
         self.confirmed = false;
-        session.status.message = "连接中…".into();
+        session.status.message = crate::t!("playback_connecting").into();
         session.status.playback_state = if self.reconnect_attempts > 0 {
             PlaybackState::Reconnecting {
                 attempt: self.reconnect_attempts,
@@ -216,11 +216,8 @@ impl PlaybackController {
                 attempt: self.reconnect_attempts,
             };
             self.reconnect_due = Some(Instant::now() + Duration::from_secs(delay));
-            session.status.message = format!(
-                "重连中 · {}/{} · {delay}s: {reason}",
-                self.reconnect_attempts,
-                BACKOFF.len()
-            );
+            session.status.message = crate::t!("playback_reconnecting", "attempt" => self.reconnect_attempts,
+                "total" => BACKOFF.len(), "delay" => delay, "reason" => reason);
             return Ok(());
         }
         self.fail(session, recording, reason)
@@ -286,7 +283,7 @@ impl PlaybackController {
                 Directory::new(&config, cancel)?.refresh(&uuid)
             })?;
             self.refresh_task = Some((self.generation, reason.into(), task));
-            session.status.message = "正在后台刷新线路…".into();
+            session.status.message = crate::t!("playback_refreshing").into();
             return Ok(());
         }
         self.exhausted(session, recording, reason)
@@ -312,7 +309,7 @@ impl PlaybackController {
         session.status.playback_state = PlaybackState::Failed {
             reason: reason.into(),
         };
-        session.status.message = format!("播放失败: {reason}");
+        session.status.message = crate::t!("playback_failed", "reason" => reason);
         Ok(())
     }
 
@@ -337,7 +334,7 @@ impl PlaybackController {
                                 self.reconnect_attempts = 0;
                                 self.reconnect_due = None;
                                 session.status.playback_state = PlaybackState::Playing;
-                                session.status.message = "播放中".into();
+                                session.status.message = crate::t!("playback_playing").into();
                                 if !self.confirmed {
                                     self.confirmed = true;
                                     if let Some(s) = &session.status.station
@@ -387,12 +384,13 @@ impl PlaybackController {
                             Event::End(reason) if reason == "redirect" => {}
                             Event::End(reason) if self.local_playback && reason == "eof" => {
                                 self.stop_playback(session, recording)?;
-                                session.status.message = "本地录音播放结束".into();
+                                session.status.message =
+                                    crate::t!("playback_local_finished").into();
                                 break;
                             }
                             Event::End(reason) if matches!(reason.as_str(), "stop" | "quit") => {
                                 self.stop_playback(session, recording)?;
-                                session.status.message = "已停止播放".into();
+                                session.status.message = crate::t!("playback_stopped").into();
                                 break;
                             }
                             Event::End(reason) => {
@@ -400,13 +398,13 @@ impl PlaybackController {
                                     self.stream_failed(
                                         session,
                                         recording,
-                                        &format!("音频流结束 ({reason})"),
+                                        &crate::t!("playback_stream_ended", "reason" => reason),
                                     )?;
                                 } else {
                                     self.fail(
                                         session,
                                         recording,
-                                        &format!("音频流结束 ({reason})"),
+                                        &crate::t!("playback_stream_ended", "reason" => reason),
                                     )?;
                                 }
                                 break;
@@ -421,7 +419,7 @@ impl PlaybackController {
                 && self.started.elapsed()
                     > Duration::from_secs(session.config.settings.playback_timeout_secs)
             {
-                self.stream_failed(session, recording, "起播超时")?;
+                self.stream_failed(session, recording, crate::t!("playback_timeout"))?;
             }
         }
         Ok(())
@@ -530,7 +528,7 @@ impl PlaybackController {
                         self.stream_failed(
                             session,
                             recording,
-                            &format!("播放器启动失败: {error:#}"),
+                            &crate::t!("playback_start_failed", "reason" => format!("{error:#}")),
                         )?;
                     }
                 }
