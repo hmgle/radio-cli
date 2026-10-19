@@ -273,6 +273,9 @@ fn load_backups(store: &Store, uuid: &str, view: &Arc<Mutex<View>>) {
         }
         Err(error) => {
             let message = format!("备用地址查询失败，将重试: {error:#}");
+            if data.backups_errors.get(uuid) == Some(&message) {
+                return;
+            }
             data.log(&message);
             Arc::make_mut(&mut data.backups_errors).insert(uuid.to_owned(), message);
         }

@@ -307,7 +307,7 @@ pub(super) struct App {
     pub filter_edit: Option<(usize, [String; 4])>,
     pub facet_index: Option<usize>,
     pub facet_prefix: String,
-    backups_request: Option<(String, u64, Instant)>,
+    backups_request: Option<(String, u64, Instant, u32)>,
     facets_request: Option<(usize, String)>,
     facet_due: Option<Instant>,
     pub help: bool,
@@ -501,18 +501,21 @@ impl App {
         };
         if let Some(station) = station {
             let request = (station.stationuuid.clone(), view.rows_revision);
+            let previous = self
+                .backups_request
+                .as_ref()
+                .filter(|(uuid, revision, _, _)| (uuid, *revision) == (&request.0, request.1));
+            let attempt = previous.map_or(0, |(_, _, _, attempt)| attempt.saturating_add(1));
             if !view.backups.contains_key(&station.stationuuid)
-                && self
-                    .backups_request
-                    .as_ref()
-                    .is_none_or(|(uuid, revision, sent)| {
-                        (uuid, *revision) != (&request.0, request.1)
-                            || view.backups_errors.contains_key(uuid)
-                                && now.saturating_duration_since(*sent) >= Duration::from_secs(2)
-                    })
+                && previous.is_none_or(|(uuid, _, sent, previous_attempt)| {
+                    // Back off persistent storage failures, up to one query per 30s.
+                    let delay = Duration::from_secs((2_u64 << (*previous_attempt).min(4)).min(30));
+                    view.backups_errors.contains_key(uuid)
+                        && now.saturating_duration_since(*sent) >= delay
+                })
                 && self.send(sender, Command::Backups(station.stationuuid.clone()))
             {
-                self.backups_request = Some((request.0, request.1, now));
+                self.backups_request = Some((request.0, request.1, now, attempt));
             }
         }
     }

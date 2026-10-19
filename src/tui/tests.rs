@@ -1851,6 +1851,28 @@ fn failed_backup_query_retries_without_a_selection_or_row_change() {
     let failed = shared.lock().unwrap().snapshot();
     assert!(failed.backups_errors.contains_key(&row.stationuuid));
     assert!(!failed.backups.contains_key(&row.stationuuid));
+    let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &failed))
+        .unwrap();
+    assert!(text(&terminal).contains("备用地址查询失败"));
+    for seconds in [2, 6, 14, 30, 60, 90] {
+        app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(seconds - 1));
+        assert!(rx.try_recv().is_err(), "retry must respect backoff");
+        app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(seconds));
+        worker::execute(
+            rx.try_recv().unwrap(),
+            &mut engine,
+            &mut filter,
+            &mut job,
+            &shared,
+        )
+        .unwrap();
+        let repeated = shared.lock().unwrap().snapshot();
+        assert_eq!(repeated.revision, failed.revision);
+        assert_eq!(repeated.immediate_revision, failed.immediate_revision);
+        assert_eq!(repeated.logs.len(), failed.logs.len());
+    }
     worker::execute(
         Command::Info(row.stationuuid.clone(), 7),
         &mut engine,
@@ -1864,11 +1886,11 @@ fn failed_backup_query_retries_without_a_selection_or_row_change() {
         shared.lock().unwrap().inspected.is_some(),
         "a backup failure must not hide station details"
     );
-    app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(1));
+    app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(119));
     assert!(rx.try_recv().is_err(), "failure must not flood the queue");
     conn.execute_batch("ALTER TABLE unavailable_streams RENAME TO streams")
         .unwrap();
-    app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(2));
+    app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(120));
     worker::execute(
         rx.try_recv().unwrap(),
         &mut engine,
@@ -1884,8 +1906,23 @@ fn failed_backup_query_retries_without_a_selection_or_row_change() {
         recovered.backups[&row.stationuuid],
         ["https://example.com/recovered"]
     );
-    app.request_selected_backups_at(&recovered, &tx, now + Duration::from_secs(20));
+    app.request_selected_backups_at(&recovered, &tx, now + Duration::from_secs(150));
     assert!(rx.try_recv().is_err());
+    // A list refresh invalidates both success and failure caches.
+    Arc::make_mut(&mut shared.lock().unwrap().backups_errors)
+        .insert(row.stationuuid.clone(), "stale failure".into());
+    worker::execute(
+        Command::Refresh,
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
+    let refreshed = shared.lock().unwrap().snapshot();
+    assert!(refreshed.backups_errors.is_empty());
+    assert!(refreshed.backups.is_empty());
 }
 
 #[test]
