@@ -331,6 +331,22 @@ fn mpv_ipc_reads_icy_titles_and_reaps_child() {
         title && playing,
         "must receive playback and ICY metadata events"
     );
+    for muted in [true, false] {
+        player.toggle_mute().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if player
+                .poll()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, Event::Muted(value) if *value == muted))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "mute observation missing");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
     player.toggle_pause().unwrap();
     player.volume(-10).unwrap();
     drop(player);

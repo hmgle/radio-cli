@@ -26,6 +26,7 @@ pub enum Event {
     End(String),
     Paused(bool),
     Volume(u8),
+    Muted(bool),
 }
 
 pub struct Player {
@@ -112,7 +113,7 @@ impl Player {
             socket,
             buffer: vec![],
         };
-        for (id, property) in [(1, "metadata"), (2, "pause"), (3, "volume")] {
+        for (id, property) in [(1, "metadata"), (2, "pause"), (3, "volume"), (4, "mute")] {
             player.command(json!(["observe_property", id, property]))?;
         }
         player.command(json!(["loadfile", url, "replace"]))?;
@@ -180,6 +181,7 @@ impl Player {
                         out.push(Event::Title(crate::clean_text(title)));
                     }
                     "pause" => out.push(Event::Paused(value["data"].as_bool().unwrap_or(false))),
+                    "mute" => out.push(Event::Muted(value["data"].as_bool().unwrap_or(false))),
                     "volume" => out.push(Event::Volume(
                         value["data"].as_f64().unwrap_or(80.).clamp(0., 100.) as u8,
                     )),

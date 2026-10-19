@@ -29,6 +29,7 @@ pub struct Status {
     pub message: String,
     pub playback_state: PlaybackState,
     pub volume: u8,
+    pub muted: bool,
     pub recording_state: RecordingState,
     pub recording_ms: u64,
     pub recording_path: String,
@@ -43,6 +44,7 @@ impl Status {
             && self.playback_state == other.playback_state
             && self.recording_state == other.recording_state
             && self.volume == other.volume
+            && self.muted == other.muted
             && self.recording_path == other.recording_path
             && self.source_url == other.source_url
     }
@@ -124,6 +126,7 @@ impl Engine {
             },
             playback_state: PlaybackState::Idle,
             volume: config.settings.volume,
+            muted: false,
             recording_state: RecordingState::Idle,
             recording_ms: 0,
             recording_path: String::new(),

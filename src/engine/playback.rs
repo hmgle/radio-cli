@@ -170,6 +170,7 @@ impl PlaybackController {
                 Player::start(&session.config, &self.url, &session.stop)?
             });
         }
+        session.status.muted = false;
         self.started = Instant::now();
         self.confirmed = false;
         session.status.message = "连接中…".into();
@@ -370,6 +371,7 @@ impl PlaybackController {
                                     };
                                 }
                             }
+                            Event::Muted(muted) => session.status.muted = muted,
                             Event::Volume(volume) => {
                                 if volume != session.status.volume {
                                     session.status.volume = volume;

@@ -203,16 +203,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             ""
         }
     );
+    let volume = format!(
+        "{}%{}",
+        view.status.volume,
+        if view.status.muted { " · 静音" } else { "" }
+    );
     let player_text = if let Some(station) = &view.status.station {
         format!(
-            "{} · {} · 音量 {}%\n{} · {} · {}（目录）\n{} · {} · {}",
+            "{} · {} · 音量 {}\n{} · {} · {}（目录）\n{} · {} · {}",
             playing,
             fit(
                 &value(&station.name),
                 usize::from(area.width.saturating_sub(40))
             )
             .trim_end(),
-            view.status.volume,
+            volume,
             recording,
             codec(station),
             bitrate(station),
@@ -226,8 +231,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         )
     } else {
         format!(
-            "尚未播放 · 音量 {}%{}\n在列表选择电台，Enter 播放；:sync 同步目录",
-            view.status.volume, recording
+            "尚未播放 · 音量 {}{}\n在列表选择电台，Enter 播放；:sync 同步目录",
+            volume, recording
         )
     };
     let player_text = if area.width < 100 || area.height < 20 {

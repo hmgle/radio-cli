@@ -51,6 +51,7 @@ fn view() -> View {
         message: "播放中".into(),
         playback_state: crate::engine::PlaybackState::Playing,
         volume: 80,
+        muted: false,
         recording_state: crate::engine::RecordingState::Idle,
         recording_ms: 0,
         recording_path: String::new(),
@@ -1743,4 +1744,15 @@ fn short_wide_player_keeps_the_title_visible() {
         terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
         assert!(text(&terminal).contains("VISIBLE_TITLE"), "height={height}");
     }
+}
+
+#[test]
+fn muted_state_is_visible_without_color() {
+    let mut data = view();
+    data.status.muted = true;
+    let mut app = App::default();
+    app.theme = crate::config::Theme::Mono;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("静音"));
 }
