@@ -572,7 +572,13 @@ fn run_inner(mut cli: Cli) -> Result<()> {
                     }
                     if let Some(error) = r.error {
                         for line in error.lines() {
-                            let line: String = line.chars().filter(|c| !c.is_control()).collect();
+                            // Keep tabs so diagnostic columns stay aligned, as the
+                            // recorder and TUI already do; other control
+                            // characters remain filtered out.
+                            let line: String = line
+                                .chars()
+                                .filter(|c| !c.is_control() || *c == '\t')
+                                .collect();
                             println!("  {line}");
                         }
                     }

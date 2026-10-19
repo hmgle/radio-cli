@@ -24,6 +24,8 @@
 - Generate release manuals in English regardless of packaging host language.
 - Count HLS segment re-fetch failures as reconnects so HLS recordings also warn
   about possible audio gaps.
+- Keep tab characters in CLI recording diagnostic lines so column alignment
+  survives; other control characters remain filtered.
 
 ## 0.3.1 — 2026-10-19
 

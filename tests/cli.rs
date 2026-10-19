@@ -514,6 +514,29 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
 }
 
 #[test]
+fn recordings_list_keeps_tabs_in_diagnostic_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let record: radio_cli::model::Recording = serde_json::from_value(serde_json::json!({
+        "id":"tabs", "stationuuid":"s", "station_name":"Recorded stream",
+        "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+        "stopped_at":null, "media_duration_ms":null, "codec":"mp3", "container":"mp3",
+        "path":"/tmp/sample", "size_bytes":1, "status":"complete", "reconnects":0,
+        "error":"frame\tpts\tsize\n1\t0\t64"
+    }))
+    .unwrap();
+    store.save_recording(&record).unwrap();
+    let output = radio(dir.path())
+        .args(["recordings", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("frame\tpts\tsize"), "{text}");
+    assert!(text.contains("1\t0\t64"), "{text}");
+}
+
+#[test]
 fn recordings_list_preserves_diagnostic_tails_without_terminal_controls() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("radio.db")).unwrap();
