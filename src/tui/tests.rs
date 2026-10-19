@@ -1693,3 +1693,54 @@ fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
         ["https://example.com/backup"]
     );
 }
+
+#[test]
+fn facet_candidates_follow_the_typed_prefix_without_losing_it() {
+    let mut data = view();
+    Arc::make_mut(&mut data.facets)[0] = ["AU", "CA", "CN", "FR"]
+        .into_iter()
+        .map(|value| crate::model::Facet {
+            value: value.into(),
+            count: 1,
+        })
+        .collect();
+    Arc::make_mut(&mut data.facets)[1] = (0..12)
+        .map(|i| crate::model::Facet {
+            value: format!("english{i:02}"),
+            count: i + 1,
+        })
+        .collect();
+    let (sender, _) = command::channel(10);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    app.key(key(KeyCode::Char('c')), &data, &sender);
+    assert_eq!(app.facet_candidates(&data, 0).len(), 2);
+    app.key(key(KeyCode::Down), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "CA");
+    app.key(key(KeyCode::Down), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "CN");
+    assert_eq!(app.facet_prefix, "c");
+    app.key(key(KeyCode::Tab), &data, &sender);
+    for c in "eng".chars() {
+        app.key(key(KeyCode::Char(c)), &data, &sender);
+    }
+    assert_eq!(app.facet_candidates(&data, 1).len(), 12);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("english07 (8)"));
+    assert!(!text(&terminal).contains("english08 (9)"));
+    app.key(key(KeyCode::Char('z')), &data, &sender);
+    assert!(app.facet_candidates(&data, 1).is_empty());
+}
+
+#[test]
+fn short_wide_player_keeps_the_title_visible() {
+    let mut data = view();
+    data.status.title = "VISIBLE_TITLE".into();
+    for height in 16..20 {
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains("VISIBLE_TITLE"), "height={height}");
+    }
+}

@@ -230,7 +230,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             view.status.volume, recording
         )
     };
-    let player_text = if area.width < 100 {
+    let player_text = if area.width < 100 || area.height < 20 {
         let lines = player_text.lines().collect::<Vec<_>>();
         format!("{}\n{}", lines[0], lines[1..].join(" · "))
     } else {
@@ -615,7 +615,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         );
     }
     if let Some((selected, values)) = &app.filter_edit {
-        let rect = popup(area, 72, 13);
+        let rect = popup(area, 72, 18);
         frame.render_widget(Clear, rect);
         let names = ["国家代码", "语言", "标签", "最低码率"];
         let mut text = names
@@ -650,7 +650,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             ])
             .collect::<Vec<_>>();
         if *selected < 3 {
-            let candidates = &view.facets[*selected];
+            let candidates = app.facet_candidates(view, *selected);
             let start = app.facet_index.unwrap_or(0).saturating_sub(1);
             text.push(Line::from(if view.facets_loading {
                 "正在加载本地候选…"
@@ -662,7 +662,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                     .iter()
                     .enumerate()
                     .skip(start)
-                    .take(3)
+                    .take(usize::from(rect.height.saturating_sub(9)).min(8))
                     .map(|(index, facet)| {
                         Line::from(format!(
                             "{} {} ({})",

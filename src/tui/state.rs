@@ -300,6 +300,7 @@ pub(super) struct App {
     original_query: String,
     pub filter_edit: Option<(usize, [String; 4])>,
     pub facet_index: Option<usize>,
+    pub facet_prefix: String,
     backups_request: Option<(String, u64)>,
     pub help: bool,
     pub help_content: Option<String>,
@@ -343,6 +344,7 @@ impl Default for App {
             original_query: String::new(),
             filter_edit: None,
             facet_index: None,
+            facet_prefix: String::new(),
             backups_request: None,
             help: false,
             help_content: None,
@@ -432,6 +434,17 @@ impl App {
                 self.backups_request = Some(request);
             }
         }
+    }
+    pub fn facet_candidates<'a>(
+        &self,
+        view: &'a View,
+        selected: usize,
+    ) -> Vec<&'a crate::model::Facet> {
+        let prefix = self.facet_prefix.trim().to_lowercase();
+        view.facets[selected]
+            .iter()
+            .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
+            .collect()
     }
     fn request_info(&mut self, uuid: String, sender: &CommandSender) {
         self.info_request = self.info_request.wrapping_add(1);
@@ -733,7 +746,11 @@ impl App {
             }
             match key.code {
                 KeyCode::Down | KeyCode::Up if *selected < 3 => {
-                    let candidates = &view.facets[*selected];
+                    let prefix = self.facet_prefix.trim().to_lowercase();
+                    let candidates = view.facets[*selected]
+                        .iter()
+                        .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
+                        .collect::<Vec<_>>();
                     if !candidates.is_empty() {
                         let index = match self.facet_index {
                             Some(index) if key.code == KeyCode::Down => {
@@ -753,11 +770,13 @@ impl App {
                     *selected = (*selected + 1) % 4;
                     self.facet_index = None;
                     self.filter_input.set(&values[*selected]);
+                    self.facet_prefix = values[*selected].clone();
                 }
                 KeyCode::BackTab => {
                     *selected = (*selected + 3) % 4;
                     self.facet_index = None;
                     self.filter_input.set(&values[*selected]);
+                    self.facet_prefix = values[*selected].clone();
                 }
                 KeyCode::Enter => match values[3].parse::<u32>() {
                     Ok(bitrate) => {
@@ -775,6 +794,7 @@ impl App {
                 _ => {
                     self.filter_input.key(key, false);
                     values[*selected] = self.filter_input.text.clone();
+                    self.facet_prefix = self.filter_input.text.clone();
                     self.facet_index = None;
                 }
             }
@@ -912,6 +932,7 @@ impl App {
                 self.filter_input
                     .set(self.filter.country.as_deref().unwrap_or(""));
                 self.facet_index = None;
+                self.facet_prefix = self.filter_input.text.clone();
                 self.send(sender, Command::Facets);
                 self.filter_edit = Some((
                     0,
