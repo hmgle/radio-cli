@@ -231,7 +231,7 @@ fn required_space(
     let reserve = reserve_mb.saturating_mul(1024 * 1024);
     match (duration, bitrate) {
         (Some(duration), Some(bitrate)) => {
-            let bytes = u128::from(bitrate) * duration.as_nanos();
+            let bytes = u128::from(bitrate).saturating_mul(duration.as_nanos());
             let bytes = bytes.div_ceil(8_000_000_000).min(u128::from(u64::MAX)) as u64;
             (reserve.saturating_add(bytes), true)
         }
@@ -626,6 +626,11 @@ mod tests {
         assert_eq!(
             required_space(16, 128, &Value::Null, Some(Duration::from_secs(1))),
             (reserve + 16000, true)
+        );
+        let extreme = serde_json::json!({"streams":[{"bit_rate":u64::MAX.to_string()}]});
+        assert_eq!(
+            required_space(16, 0, &extreme, Some(Duration::from_secs(u64::MAX))),
+            (u64::MAX, true)
         );
     }
 
