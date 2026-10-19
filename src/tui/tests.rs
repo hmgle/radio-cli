@@ -1196,6 +1196,39 @@ fn recording_refresh_preserves_selected_identity() {
 }
 
 #[test]
+fn recordings_list_marks_reconnected_recordings() {
+    let recording = |id: &str, reconnects: u64| {
+        serde_json::from_value(serde_json::json!({
+            "id":id,"stationuuid":"s","station_name":id,"source_url_resolved":"https://example.com",
+            "started_at":"2026-01-01","stopped_at":null,"media_duration_ms":null,"codec":"mp3",
+            "container":"mp3","path":"/tmp/test","size_bytes":1,"status":"complete","error":null,
+            "reconnects":reconnects
+        }))
+        .unwrap()
+    };
+    let marker = crate::t!("recording_gap_marker");
+    let mut data = view();
+    data.recordings = vec![recording("clean", 0), recording("gapped", 2)].into();
+    data.recordings_revision = 1;
+    let mut app = App::default();
+    app.source = Source::Recordings;
+    app.reconcile(&data);
+    let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    // Only the reconnected row carries the marker in the list.
+    assert_eq!(text(&terminal).matches(marker).count(), 1);
+    data.recordings = vec![recording("clean", 0)].into();
+    data.recordings_revision += 1;
+    app.reconcile(&data);
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    assert!(!text(&terminal).contains(marker));
+}
+
+#[test]
 fn source_commands_submit_only_the_requested_page() {
     let data = view();
     for (line, source) in [

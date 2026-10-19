@@ -30,6 +30,8 @@
   nested block comments and comment-like text inside strings and raw strings.
 - Generate release shell completions in English as well as the manual, with
   tests guarding the packaging script and locale-invariant completions.
+- Mark reconnected recordings in the TUI recording list so potential audio
+  gaps are visible without opening the details panel.
 
 ## 0.3.1 — 2026-10-19
 

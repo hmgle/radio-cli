@@ -327,9 +327,14 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                 .iter()
                 .map(|r| {
                     ListItem::new(format!(
-                        "{} · {} · {}",
+                        "{} · {}{} · {}",
                         value(&r.station_name),
                         r.status,
+                        if r.reconnects > 0 {
+                            format!(" · {}", crate::t!("recording_gap_marker"))
+                        } else {
+                            String::new()
+                        },
                         crate::clean_text(&r.path)
                     ))
                 })

@@ -60,6 +60,7 @@ usage_error = "Usage error: {detail}"
 
 recording_started = "Recording"
 recording_reconnected = "Stream reconnected {count} time(s); audio may have gaps"
+recording_gap_marker = "audio may have gaps"
 recording_space_unestimated = "Recording: duration or bitrate unknown; only the free-space reserve was checked, total size cannot be estimated"
 
 cli_sync_progress = "Fetched {count} stations…"
