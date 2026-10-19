@@ -36,6 +36,23 @@ pub struct Player {
     buffer: Vec<u8>,
 }
 
+fn metadata_title(metadata: &Value) -> String {
+    let Some(title) = metadata["icy-title"].as_str() else {
+        return crate::clean_text(metadata["title"].as_str().unwrap_or(""));
+    };
+    // Some ICY sources re-encode UTF-8 as Latin-1. Reverse this only when
+    // the entire title maps to bytes that form valid UTF-8. This heuristic
+    // deliberately leaves mixed encodings and ordinary file tags alone.
+    // Repair before clean_text removes C1 characters needed as UTF-8 bytes.
+    if !title.is_ascii() && title.chars().all(|c| c <= '\u{ff}') {
+        let bytes = title.chars().map(|c| c as u8).collect();
+        if let Ok(repaired) = String::from_utf8(bytes) {
+            return crate::clean_text(&repaired);
+        }
+    }
+    crate::clean_text(title)
+}
+
 impl Player {
     pub fn start(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
         validate_url(url)?;
@@ -176,12 +193,7 @@ impl Player {
                 )),
                 "property-change" => match value["name"].as_str().unwrap_or("") {
                     "metadata" => {
-                        let data = &value["data"];
-                        let title = data["icy-title"]
-                            .as_str()
-                            .or_else(|| data["title"].as_str())
-                            .unwrap_or("");
-                        out.push(Event::Title(crate::clean_text(title)));
+                        out.push(Event::Title(metadata_title(&value["data"])));
                     }
                     "pause" => out.push(Event::Paused(value["data"].as_bool().unwrap_or(false))),
                     "mute" => out.push(Event::Muted(value["data"].as_bool().unwrap_or(false))),
@@ -213,5 +225,61 @@ impl Drop for Player {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = fs::remove_file(&self.socket);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::metadata_title;
+    use serde_json::json;
+
+    #[test]
+    fn icy_titles_repair_latin1_mojibake_before_sanitizing() {
+        // UTF-8 bytes for "邝美云 - 雪花" were decoded as Latin-1 and then
+        // encoded as UTF-8. The C1 characters must survive until repaired.
+        let title = "é\u{82}\u{9d}ç¾\u{8e}äº\u{91} - é\u{9b}ªè\u{8a}±\x1b\n";
+        assert_eq!(
+            metadata_title(&json!({"icy-title": title})),
+            "邝美云 - 雪花"
+        );
+    }
+
+    #[test]
+    fn icy_titles_keep_text_without_a_lossless_latin1_repair() {
+        for title in [
+            "Radio Swiss Jazz",
+            "张柏芝 - 乱了感觉",
+            "Café à côté",
+            "BeyoncÃ© - Café",
+            "CafÃ© — Live",
+            "â€™",
+        ] {
+            assert_eq!(metadata_title(&json!({"icy-title": title})), title);
+        }
+        assert_eq!(metadata_title(&json!({"icy-title": "中文\x1b\n"})), "中文");
+    }
+
+    #[test]
+    fn metadata_titles_preserve_file_tags_and_explicit_empty_icy_titles() {
+        // A literal Latin-1-looking sequence in a file tag is not ICY data.
+        assert_eq!(metadata_title(&json!({"title": "Â©\x1b\n"})), "Â©");
+        assert_eq!(
+            metadata_title(&json!({"icy-title": "", "title": "File title"})),
+            ""
+        );
+        assert_eq!(
+            metadata_title(&json!({"icy-title": 1, "title": "File title"})),
+            "File title"
+        );
+        assert_eq!(metadata_title(&json!(null)), "");
+    }
+
+    #[test]
+    fn icy_titles_are_limited_after_repair() {
+        let title = "ä¸\u{ad}".repeat(1100);
+        assert_eq!(
+            metadata_title(&json!({"icy-title": title})),
+            "中".repeat(1024)
+        );
     }
 }

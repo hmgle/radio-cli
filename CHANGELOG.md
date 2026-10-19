@@ -4,6 +4,9 @@
 
 - Preserve one-shot ICY song-title updates with a bounded 512 KiB back buffer;
   keep its memory budget separate from the forward cache.
+- Repair ICY titles whose UTF-8 bytes were re-encoded as Latin-1, when the
+  entire conversion produces valid UTF-8. Apply this before filtering control
+  characters; leave ordinary file-title tags unchanged.
 
 ## 0.4.0 — 2026-10-19
 
