@@ -425,7 +425,12 @@ impl App {
         }
     }
     pub fn request_selected_backups(&mut self, view: &View, sender: &CommandSender) {
-        if let Some(station) = self.selected(view) {
+        let station = if self.inspect_info && view.inspected_request == self.info_request {
+            view.inspected.as_ref()
+        } else {
+            self.selected(view)
+        };
+        if let Some(station) = station {
             let request = (station.stationuuid.clone(), view.rows_revision);
             if !view.backups.contains_key(&station.stationuuid)
                 && self.backups_request.as_ref() != Some(&request)
@@ -518,6 +523,19 @@ impl App {
         self.flush_search(sender);
     }
     fn focus_direction(&mut self, dx: i32, dy: i32) {
+        if self.rects[Focus::List.index()] == self.rects[Focus::Details.index()] && dy == 0 {
+            match (self.focus, dx) {
+                (Focus::List, 1) => {
+                    self.focus = Focus::Details;
+                    return;
+                }
+                (Focus::Details, -1) => {
+                    self.focus = Focus::List;
+                    return;
+                }
+                _ => {}
+            }
+        }
         let origin = self.rects[self.focus.index()];
         let x = i32::from(origin.x) * 2 + i32::from(origin.width);
         let y = i32::from(origin.y) * 2 + i32::from(origin.height);
@@ -626,7 +644,7 @@ impl App {
                         self.focus = Focus::List;
                         self.flush_search(sender);
                     }
-                    Parsed::Worker(command) => {
+                    Parsed::Worker(mut command) => {
                         if matches!(
                             command,
                             Command::Station(crate::cli::StationAction::Remove { .. })
@@ -640,6 +658,14 @@ impl App {
                         if let Command::Info(uuid, _) = command {
                             self.request_info(uuid, sender);
                             return;
+                        }
+                        if matches!(command, Command::Random(_))
+                            && self.source == Source::Recordings
+                        {
+                            if let Command::Random(filter) = &mut command {
+                                filter.recordings = false;
+                            }
+                            self.switch_source(Source::Stations, None, sender);
                         }
                         if matches!(command, Command::Doctor) {
                             self.focus = Focus::Activity;
@@ -948,6 +974,9 @@ impl App {
                 self.flush_search(sender);
             }
             KeyCode::Char('n') => {
+                if self.source == Source::Recordings {
+                    self.switch_source(Source::Stations, None, sender);
+                }
                 self.send(sender, Command::Random(self.filter.clone()));
             }
             KeyCode::Char('r') => {

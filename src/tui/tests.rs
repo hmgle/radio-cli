@@ -1730,6 +1730,12 @@ fn facet_candidates_follow_the_typed_prefix_without_losing_it() {
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     assert!(text(&terminal).contains("english07 (8)"));
     assert!(!text(&terminal).contains("english08 (9)"));
+    for _ in 0..12 {
+        app.key(key(KeyCode::Down), &data, &sender);
+    }
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("english04 (5)"));
+    assert!(text(&terminal).contains("english11 (12)"));
     app.key(key(KeyCode::Char('z')), &data, &sender);
     assert!(app.facet_candidates(&data, 1).is_empty());
 }
@@ -1755,4 +1761,49 @@ fn muted_state_is_visible_without_color() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     assert!(text(&terminal).contains("静音"));
+}
+
+#[test]
+fn narrow_details_focus_and_recording_random_match_the_visible_source() {
+    let data = view();
+    let mut app = App::default();
+    let (tx, rx) = command::channel(10);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.key(
+        KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.focus, Focus::Details);
+    app.key(
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.focus, Focus::List);
+    app.source = Source::Recordings;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("不使用电台筛选"));
+    assert_eq!(app.filter_summary.width, 0);
+    app.key(key(KeyCode::Char('n')), &data, &tx);
+    assert_eq!(app.source, Source::Stations);
+    assert!(matches!(rx.recv().unwrap(), Command::Search(_)));
+    assert!(matches!(rx.recv().unwrap(), Command::Random(filter) if !filter.recordings));
+}
+
+#[test]
+fn explicit_station_details_reload_backups_after_a_row_refresh() {
+    let mut data = view();
+    let mut app = App::default();
+    app.inspect_info = true;
+    app.info_request = 7;
+    data.inspected_request = 7;
+    data.inspected = data.status.station.clone();
+    data.rows_revision = 2;
+    let (tx, rx) = command::channel(10);
+    app.request_selected_backups(&data, &tx);
+    assert!(
+        matches!(rx.recv().unwrap(), Command::Backups(id) if id == data.inspected.as_ref().unwrap().stationuuid)
+    );
 }
