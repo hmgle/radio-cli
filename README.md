@@ -104,7 +104,8 @@ UUID --add URL --remove URL` to manage fallback URLs. Normalized duplicate URLs
 are rejected with the existing UUID. TUI removal asks for a second confirmation.
 
 Established live streams reconnect after unexpected EOF/errors at most three
-times, after 1, 3, and 7 seconds. A reconnect keeps the same station and URL
+times per outage, after 1, 3, and 7 seconds. Successful playback renews this
+budget; a rolling limit of six retries per minute bounds flapping streams. A reconnect keeps the same station and URL
 and does not duplicate history or click reports. Stop, switching stations,
 and exit cancel pending retries. Exhausted retries use the normal fallback
 chain; initial connection failures retain their existing fallback behavior.
