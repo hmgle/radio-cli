@@ -52,6 +52,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|s| !s.is_empty());
     let theme = config.settings.theme.effective(no_color);
     let mouse = config.settings.mouse;
+    let jump_binding = config.settings.keybindings.jump_to_playing.clone();
     let history_path = config.data_dir.join("command-history.json");
     if theme == crate::config::Theme::Mono {
         crossterm::style::force_color_output(false);
@@ -73,6 +74,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         )?;
         let mut app = App::default();
         app.mouse_enabled = mouse;
+        app.jump_binding = jump_binding;
         if let Err(error) = app.editor.load_history(history_path) {
             app.message = format!("历史加载失败: {error}");
         }

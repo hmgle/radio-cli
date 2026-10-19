@@ -283,6 +283,12 @@ impl Editor {
 }
 
 pub(super) struct App {
+    pub jump_binding: String,
+    jump_progress: usize,
+    jump_last: Option<Instant>,
+    jump_request: u64,
+    pending_jump: Option<(u64, String)>,
+    jump_selection: Option<(String, u64)>,
     pub mouse_enabled: bool,
     pub clipboard: Option<String>,
     pub filter_input: Editor,
@@ -326,6 +332,12 @@ impl Default for App {
         let mut list = ListState::default();
         list.select(Some(0));
         Self {
+            jump_binding: "''".into(),
+            jump_progress: 0,
+            jump_last: None,
+            jump_request: 0,
+            pending_jump: None,
+            jump_selection: None,
             mouse_enabled: true,
             clipboard: None,
             filter_input: Editor::default(),
@@ -400,6 +412,42 @@ impl App {
                 .position(|facet| facet.value == values[*selected]);
         }
 
+        if let Some((request, _)) = &self.pending_jump
+            && let Some(located) = &view.located
+            && *request == located.request
+        {
+            let (_, uuid) = self.pending_jump.take().unwrap();
+            match &located.filter {
+                Ok(filter) => {
+                    self.source = Source::Stations;
+                    self.filter = filter.clone();
+                    self.jump_selection = Some((uuid.clone(), view.rows_revision));
+                    self.selected_id = Some(uuid);
+                    self.list = ListState::default().with_selected(Some(0));
+                    self.rows_revision = u64::MAX;
+                    self.inspect_info = false;
+                    self.details_scroll = 0;
+                    self.search_due = Some(Instant::now());
+                    self.message = crate::t!("jump_loading").into();
+                }
+                Err(error) => self.message = crate::clean_text(error),
+            }
+        }
+
+        if let Some((_, revision)) = &self.jump_selection {
+            if self.filter != view.filter || *revision == view.rows_revision {
+                return;
+            }
+            let (uuid, _) = self.jump_selection.take().unwrap();
+            if let Some(index) = view.rows.iter().position(|row| row.stationuuid == uuid) {
+                self.list.select(Some(index));
+                if self.message == crate::t!("jump_loading") {
+                    self.message.clear();
+                }
+            } else {
+                self.message = crate::t!("jump_unavailable").into();
+            }
+        }
         let len = self.length(view);
         if self.source != Source::Recordings && self.filter != view.filter {
             return;
@@ -512,6 +560,7 @@ impl App {
         }
     }
     pub fn flush_search(&mut self, sender: &CommandSender) {
+        self.pending_jump = None;
         if self.send(
             sender,
             if self.source == Source::Recordings {
@@ -526,6 +575,7 @@ impl App {
         }
     }
     fn reset_selection(&mut self) {
+        self.jump_selection = None;
         self.list = ListState::default().with_selected(Some(0));
         self.selected_id = None;
         self.details_scroll = 0;
@@ -552,6 +602,7 @@ impl App {
         page: Option<crate::cli::Page>,
         sender: &CommandSender,
     ) {
+        self.jump_selection = None;
         self.positions[self.source.index()] = self.list.selected().unwrap_or(0);
         self.source = source;
         self.list = ListState::default().with_selected(Some(self.positions[source.index()]));
@@ -724,6 +775,78 @@ impl App {
             Err(error) => self.message = crate::clean_text(&format!("{error}")),
         }
     }
+    fn jump_to_playing(&mut self, view: &View, sender: &CommandSender) {
+        let Some(station) = view.status.station.as_ref().filter(|_| {
+            !matches!(
+                view.status.playback_state,
+                crate::engine::PlaybackState::Idle | crate::engine::PlaybackState::Failed { .. }
+            )
+        }) else {
+            self.message = crate::t!("jump_not_playing").into();
+            return;
+        };
+        self.pending_jump = None;
+        self.jump_selection = None;
+        self.focus = Focus::List;
+        self.inspect_info = false;
+        self.details_scroll = 0;
+        if self.source != Source::Recordings
+            && self.filter == view.filter
+            && let Some(index) = view
+                .rows
+                .iter()
+                .position(|row| row.stationuuid == station.stationuuid)
+        {
+            self.list.select(Some(index));
+            self.selected_id = Some(station.stationuuid.clone());
+            self.message.clear();
+            return;
+        }
+        let request = self.jump_request.wrapping_add(1);
+        if self.send(
+            sender,
+            Command::LocatePlaying {
+                uuid: station.stationuuid.clone(),
+                request,
+                limit: self.filter.limit,
+            },
+        ) {
+            self.jump_request = request;
+            self.pending_jump = Some((request, station.stationuuid.clone()));
+            self.search_due = None;
+            self.message = crate::t!("jump_loading").into();
+        }
+    }
+    fn jump_key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) -> bool {
+        let Some(sequence) = crate::config::parse_keybinding(&self.jump_binding) else {
+            return false;
+        };
+        if self
+            .jump_last
+            .is_some_and(|time| time.elapsed() > Duration::from_secs(1))
+        {
+            self.jump_progress = 0;
+        }
+        let mut modifiers = key.modifiers;
+        if matches!(key.code, KeyCode::Char(_) | KeyCode::BackTab) {
+            modifiers.remove(KeyModifiers::SHIFT);
+        }
+        let stroke = (key.code, modifiers);
+        if sequence.get(self.jump_progress) != Some(&stroke) {
+            self.jump_progress = 0;
+        }
+        if sequence.get(self.jump_progress) == Some(&stroke) {
+            self.pending_g = false;
+            self.jump_progress += 1;
+            self.jump_last = Some(Instant::now());
+            if self.jump_progress == sequence.len() {
+                self.jump_progress = 0;
+                self.jump_to_playing(view, sender);
+            }
+            return true;
+        }
+        false
+    }
     pub fn key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
             || self.too_small && key.code == KeyCode::Char('q')
@@ -868,6 +991,9 @@ impl App {
                     self.facet_index = None;
                 }
             }
+            return;
+        }
+        if self.jump_key(key, view, sender) {
             return;
         }
         self.message.clear();

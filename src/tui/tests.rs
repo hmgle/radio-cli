@@ -1952,3 +1952,160 @@ fn facets_query_only_the_latest_field_and_bound_results() {
         Ok(Command::Facets { selected: 1, .. })
     ));
 }
+
+#[test]
+fn jump_shortcut_selects_the_playing_row_without_replaying() {
+    let mut data = view();
+    Arc::make_mut(&mut data.rows).push(data.status.station.clone().unwrap());
+    let (tx, rx) = command::channel(5);
+    let mut app = App::default();
+    app.focus = Focus::Details;
+    app.inspect_info = true;
+    app.key(key(KeyCode::Char('\'')), &data, &tx);
+    assert_eq!(app.list.selected(), Some(0));
+    app.key(key(KeyCode::Char('\'')), &data, &tx);
+    assert_eq!(app.focus, Focus::List);
+    assert_eq!(app.list.selected(), Some(2));
+    assert!(!app.inspect_info);
+    assert!(rx.try_recv().is_err());
+    app.jump_binding = "<Ctrl-p>".into();
+    app.list.select(Some(0));
+    app.key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.list.selected(), Some(2));
+    app.mode = Mode::Search;
+    app.key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.mode, Mode::Search);
+    app.mode = Mode::Normal;
+    data.status.playback_state = crate::engine::PlaybackState::Idle;
+    app.key(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &data,
+        &tx,
+    );
+    assert!(!app.message.is_empty());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn jump_locates_a_filtered_out_station_on_another_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let mut rows = vec![];
+    for i in 0..12 {
+        let row = station(&format!("Station {i:02}"));
+        engine.store.upsert(&row).unwrap();
+        rows.push(row);
+    }
+    let mut data = view();
+    data.status.station = Some(rows[9].clone());
+    let shared = Arc::new(Mutex::new(data));
+    let mut filter = Filter {
+        query: "Station 00".into(),
+        limit: 4,
+        ..Filter::default()
+    };
+    let mut job = None;
+    worker::execute(
+        Command::Search(filter.clone()),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
+    let mut app = App::default();
+    app.filter = filter.clone();
+    app.jump_binding = "<F6>".into();
+    let (tx, rx) = command::channel(3);
+    let snapshot = shared.lock().unwrap().snapshot();
+    app.key(key(KeyCode::F(6)), &snapshot, &tx);
+    worker::execute(
+        rx.try_recv().unwrap(),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    app.reconcile(&shared.lock().unwrap().snapshot());
+    assert_eq!(app.filter.offset, 8);
+    assert!(app.filter.query.is_empty());
+    app.flush_search(&tx);
+    worker::execute(
+        rx.try_recv().unwrap(),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
+    app.reconcile(&shared.lock().unwrap().snapshot());
+    assert_eq!(app.list.selected(), Some(1));
+    assert_eq!(
+        app.selected(&shared.lock().unwrap()).unwrap().stationuuid,
+        rows[9].stationuuid
+    );
+    assert!(rx.try_recv().is_err());
+    // A newer source command supersedes a pending locate response.
+    app.source = Source::Recordings;
+    app.key(key(KeyCode::F(6)), &snapshot, &tx);
+    worker::execute(
+        rx.try_recv().unwrap(),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    app.key(key(KeyCode::Char(']')), &snapshot, &tx);
+    let chosen = app.filter.clone();
+    app.reconcile(&shared.lock().unwrap().snapshot());
+    assert_eq!(app.filter, chosen);
+}
+
+#[test]
+fn jump_waits_for_a_fresh_page_even_when_the_filter_is_unchanged() {
+    let mut data = view();
+    let (tx, rx) = command::channel(2);
+    let mut app = App::default();
+    app.jump_binding = "gp".into();
+    app.key(key(KeyCode::Char('g')), &data, &tx);
+    app.key(key(KeyCode::Char('p')), &data, &tx);
+    let request = match rx.try_recv().unwrap() {
+        Command::LocatePlaying { request, .. } => request,
+        _ => panic!("expected locate"),
+    };
+    data.located = Some(worker::LocatedStation {
+        request,
+        filter: Ok(app.filter.clone()),
+    });
+    app.reconcile(&data);
+    app.flush_search(&tx);
+    rx.try_recv().unwrap();
+    app.reconcile(&data); // A slow refresh must not replace the target UUID with row zero.
+    Arc::make_mut(&mut data.rows).push(data.status.station.clone().unwrap());
+    data.rows_revision += 1;
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(2));
+    assert!(app.message.is_empty());
+    app.list.select(Some(0));
+    app.key(key(KeyCode::Char('g')), &data, &tx);
+    app.key(key(KeyCode::Esc), &data, &tx);
+    app.key(key(KeyCode::Char('p')), &data, &tx);
+    assert_eq!(
+        app.list.selected(),
+        Some(0),
+        "Esc cancels a partial sequence"
+    );
+}

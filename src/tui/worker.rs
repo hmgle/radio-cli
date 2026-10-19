@@ -20,6 +20,12 @@ use std::{
 };
 
 #[derive(Clone)]
+pub(super) struct LocatedStation {
+    pub request: u64,
+    pub filter: Result<Filter, String>,
+}
+
+#[derive(Clone)]
 pub(super) struct View {
     published: Option<(u64, Arc<View>)>,
     store_revision: Option<(u64, u64)>,
@@ -40,6 +46,7 @@ pub(super) struct View {
     pub task: String,
     pub task_active: bool,
     pub logs: Arc<VecDeque<String>>,
+    pub located: Option<LocatedStation>,
     pub inspected: Option<Station>,
     pub inspected_request: u64,
     pub inspected_error: Option<String>,
@@ -73,6 +80,7 @@ impl View {
             task: String::new(),
             task_active: false,
             logs: Default::default(),
+            located: None,
             inspected: None,
             inspected_request: 0,
             inspected_error: None,
@@ -281,6 +289,31 @@ pub(super) fn execute(
     view: &Arc<Mutex<View>>,
 ) -> Result<()> {
     match command {
+        Command::LocatePlaying {
+            uuid,
+            request,
+            limit,
+        } => {
+            let result = (|| -> Result<_> {
+                let mut target = Filter {
+                    limit: limit.clamp(1, 1000),
+                    ..Filter::default()
+                };
+                let position = engine
+                    .store
+                    .station_position(&uuid, &target)?
+                    .ok_or_else(|| anyhow::anyhow!(crate::t!("jump_unavailable")))?;
+                target.offset = position / target.limit * target.limit;
+                Ok(target)
+            })();
+            let mut data = view.lock().unwrap();
+            data.located = Some(LocatedStation {
+                request,
+                filter: result.map_err(|error| format!("{error:#}")),
+            });
+            data.revision += 1;
+            data.immediate_revision += 1;
+        }
         Command::Facets { selected, prefix } => {
             if selected >= 3 {
                 bail!("无效的筛选字段");

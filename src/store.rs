@@ -277,9 +277,8 @@ impl Store {
         (clauses.join(" AND "), args)
     }
 
-    pub fn search(&self, filter: &Filter) -> Result<Vec<Station>> {
-        let (conditions, mut args) = Self::conditions(filter);
-        let order = if filter.history {
+    fn search_order(filter: &Filter) -> &'static str {
+        if filter.history {
             "(SELECT max(id) FROM history WHERE uuid=s.uuid) DESC"
         } else {
             match filter.sort {
@@ -289,7 +288,30 @@ impl Store {
                 crate::model::Sort::Clickcount => "s.popularity DESC,s.name,s.uuid",
                 crate::model::Sort::Random => "random()",
             }
-        };
+        }
+    }
+
+    /// Locate a station without loading every preceding page into memory.
+    pub fn station_position(&self, uuid: &str, filter: &Filter) -> Result<Option<usize>> {
+        let (conditions, mut args) = Self::conditions(filter);
+        let order = Self::search_order(filter);
+        let sql = format!(
+            "WITH ranked AS (
+            SELECT s.uuid,row_number() OVER (ORDER BY {order})-1 AS position
+            FROM stations s LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions}
+        ) SELECT position FROM ranked WHERE uuid=?"
+        );
+        args.push(uuid.to_owned().into());
+        Ok(self
+            .conn
+            .query_row(&sql, params_from_iter(args), |row| row.get::<_, i64>(0))
+            .optional()?
+            .map(|position| position as usize))
+    }
+
+    pub fn search(&self, filter: &Filter) -> Result<Vec<Station>> {
+        let (conditions, mut args) = Self::conditions(filter);
+        let order = Self::search_order(filter);
         let sql = format!("SELECT s.json,s.active,f.uuid IS NOT NULL FROM stations s
             LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?");
         args.push((filter.limit.clamp(1, 1000) as i64).into());

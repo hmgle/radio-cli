@@ -713,7 +713,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         frame.render_widget(Clear, rect);
         frame.render_widget(
             scroll_text(
-                app.help_content.as_deref().unwrap_or(HELP),
+                &app.help_content.clone().unwrap_or_else(|| {
+                    format!(
+                        "{HELP}\n{}  定位当前播放电台（可在 keybindings.jump_to_playing 配置）",
+                        app.jump_binding
+                    )
+                }),
                 rect,
                 &mut app.help_scroll,
             )

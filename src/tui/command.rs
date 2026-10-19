@@ -99,6 +99,11 @@ impl CommandReceiver {
 }
 
 pub(super) enum Command {
+    LocatePlaying {
+        uuid: String,
+        request: u64,
+        limit: usize,
+    },
     Mute,
     SetLanguage(String),
     Facets {

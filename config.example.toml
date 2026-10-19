@@ -29,3 +29,9 @@ recording_min_free_mb = 16
 theme = "default"
 # false permits the terminal's native text selection.
 mouse = true
+
+# Normal-mode shortcut: 1-4 printable keys, or one named key.
+# Examples: "''", "gp", "<F6>", "<Ctrl-p>". Ctrl-c is reserved for exit.
+# A binding takes precedence over existing normal-mode shortcuts.
+[keybindings]
+jump_to_playing = "''"
