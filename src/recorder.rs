@@ -305,15 +305,28 @@ impl Recorder {
             .context(DomainError::new(ErrorCode::NoAudio))?
             .to_owned();
         let (extension, muxer) = format_for_codec(&codec)?;
-        fs::create_dir_all(dir)?;
-        let dir = fs::canonicalize(dir)?;
+        let dir = std::path::absolute(dir)?;
         let (required, space_estimated) = required_space(
             config.settings.recording_min_free_mb,
             station.bitrate,
             &info,
             duration,
         );
-        let available = fs2::available_space(&dir)?;
+        // A missing destination uses its nearest existing ancestor's filesystem.
+        // Check before creating it so a rejected recording leaves no directories.
+        let mut ancestor = dir.as_path();
+        loop {
+            match fs::metadata(ancestor) {
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    ancestor = ancestor
+                        .parent()
+                        .context(DomainError::new(ErrorCode::FinalPathMissing))?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let available = fs2::available_space(ancestor)?;
         if available < required {
             bail!(
                 DomainError::new(ErrorCode::InsufficientSpace)
@@ -321,6 +334,8 @@ impl Recorder {
                     .with("required", required)
             );
         }
+        fs::create_dir_all(&dir)?;
+        let dir = fs::canonicalize(dir)?;
         let id = uuid::Uuid::new_v4().to_string();
         let name: String = station
             .name

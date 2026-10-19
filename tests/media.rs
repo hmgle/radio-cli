@@ -1013,7 +1013,7 @@ fn real_probe_bitrate_guards_custom_stations_before_creating_files() {
         radio_cli::error::ErrorCode::InsufficientSpace
     );
     assert_eq!(store.recordings_count().unwrap(), 0);
-    assert_eq!(fs::read_dir(&config.recording_dir).unwrap().count(), 0);
+    assert!(!config.recording_dir.exists());
 }
 
 #[test]
@@ -1066,7 +1066,7 @@ fn insufficient_disk_space_refuses_before_creating_partial_files() {
             .is_some()
     );
     assert_eq!(store.recordings_count().unwrap(), 0);
-    assert_eq!(fs::read_dir(&config.recording_dir).unwrap().count(), 0);
+    assert!(!config.recording_dir.exists());
 }
 
 #[test]
