@@ -107,6 +107,9 @@ impl Store {
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
             bitrate=excluded.bitrate,popularity=excluded.popularity,custom=excluded.custom,active=excluded.active,json=excluded.json
             WHERE {table}.custom=0 OR {custom}");
+        // Facet queries compare normalized prefixes with binary SQL equality.
+        // Keep country codes uppercase and language/tag tokens Unicode lowercase
+        // here, for both catalog imports and custom stations.
         let normalize = |value: &str| {
             value
                 .split(',')
@@ -367,6 +370,8 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<crate::model::Facet>> {
         use crate::model::{Facet, FacetKind};
+        // Station writes normalize values with the same Rust Unicode case
+        // conversion as these prefixes; SQLite lower() only handles ASCII.
         let (sql, prefix) = match kind {
             FacetKind::Country => (
                 "SELECT country,count(*) FROM stations WHERE active=1 AND country<>'' AND substr(country,1,length(?1))=?1 GROUP BY country ORDER BY country LIMIT ?2".to_owned(), prefix.trim().to_uppercase()
