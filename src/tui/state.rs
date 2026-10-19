@@ -301,7 +301,7 @@ pub(super) struct App {
     pub filter_edit: Option<(usize, [String; 4])>,
     pub facet_index: Option<usize>,
     pub facet_prefix: String,
-    backups_request: Option<(String, u64)>,
+    backups_request: Option<(String, u64, Instant)>,
     pub help: bool,
     pub help_content: Option<String>,
     pub help_scroll: u16,
@@ -425,6 +425,14 @@ impl App {
         }
     }
     pub fn request_selected_backups(&mut self, view: &View, sender: &CommandSender) {
+        self.request_selected_backups_at(view, sender, Instant::now());
+    }
+    pub(super) fn request_selected_backups_at(
+        &mut self,
+        view: &View,
+        sender: &CommandSender,
+        now: Instant,
+    ) {
         let station = if self.inspect_info && view.inspected_request == self.info_request {
             view.inspected.as_ref()
         } else {
@@ -433,10 +441,17 @@ impl App {
         if let Some(station) = station {
             let request = (station.stationuuid.clone(), view.rows_revision);
             if !view.backups.contains_key(&station.stationuuid)
-                && self.backups_request.as_ref() != Some(&request)
+                && self
+                    .backups_request
+                    .as_ref()
+                    .is_none_or(|(uuid, revision, sent)| {
+                        (uuid, *revision) != (&request.0, request.1)
+                            || view.backups_errors.contains_key(uuid)
+                                && now.saturating_duration_since(*sent) >= Duration::from_secs(2)
+                    })
                 && self.send(sender, Command::Backups(station.stationuuid.clone()))
             {
-                self.backups_request = Some(request);
+                self.backups_request = Some((request.0, request.1, now));
             }
         }
     }

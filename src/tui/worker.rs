@@ -29,6 +29,7 @@ pub(super) struct View {
     pub logs_revision: u64,
     pub facets: Arc<[Vec<crate::model::Facet>; 3]>,
     pub facets_loading: bool,
+    pub backups_errors: Arc<std::collections::BTreeMap<String, String>>,
     pub backups: Arc<std::collections::BTreeMap<String, Vec<String>>>,
     pub rows: Arc<Vec<Station>>,
     pub recordings: Arc<Vec<Recording>>,
@@ -57,6 +58,7 @@ impl View {
             logs_revision: 0,
             facets: Default::default(),
             facets_loading: false,
+            backups_errors: Default::default(),
             backups: Default::default(),
             total: 0,
             recordings_total: 0,
@@ -200,6 +202,7 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
         let mut data = view.lock().unwrap();
         data.rows = Arc::new(rows);
         data.backups = Default::default();
+        data.backups_errors = Default::default();
         data.total = total;
         data.rows_revision += 1;
     }
@@ -246,6 +249,24 @@ fn favorite_changed(view: &Arc<Mutex<View>>, uuid: &str, add: bool) -> Result<()
     drop(data);
     request_refresh(view);
     Ok(())
+}
+
+fn load_backups(store: &Store, uuid: &str, view: &Arc<Mutex<View>>) {
+    let result = store.backups(uuid);
+    let mut data = view.lock().unwrap();
+    match result {
+        Ok(backups) => {
+            Arc::make_mut(&mut data.backups_errors).remove(uuid);
+            Arc::make_mut(&mut data.backups).insert(uuid.to_owned(), backups);
+        }
+        Err(error) => {
+            let message = format!("备用地址查询失败，将重试: {error:#}");
+            data.log(&message);
+            Arc::make_mut(&mut data.backups_errors).insert(uuid.to_owned(), message);
+        }
+    }
+    data.revision += 1;
+    data.immediate_revision += 1;
 }
 
 pub(super) fn execute(
@@ -428,18 +449,11 @@ pub(super) fn execute(
             request_refresh(view);
         }
         Command::Refresh => request_refresh(view),
-        Command::Backups(uuid) => {
-            let backups = engine.store.backups(&uuid)?;
-            let mut data = view.lock().unwrap();
-            Arc::make_mut(&mut data.backups).insert(uuid, backups);
-            data.revision += 1;
-            data.immediate_revision += 1;
-        }
+        Command::Backups(uuid) => load_backups(&engine.store, &uuid, view),
         Command::Info(uuid, request) => {
             let result = engine.store.station(&uuid);
-            let backups = engine.store.backups(&uuid)?;
+            load_backups(&engine.store, &uuid, view);
             let mut data = view.lock().unwrap();
-            Arc::make_mut(&mut data.backups).insert(uuid, backups);
             data.inspected_request = request;
             data.inspected = None;
             data.inspected_error = None;

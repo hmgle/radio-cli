@@ -461,14 +461,19 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                 },
                 station.stationuuid,
                 crate::clean_text(station.primary_url()),
-                view.backups
-                    .get(&station.stationuuid)
-                    .map(|urls| urls
-                        .iter()
-                        .map(|u| crate::clean_text(u))
-                        .collect::<Vec<_>>()
-                        .join("\n"))
-                    .unwrap_or_default(),
+                if let Some(error) = view.backups_errors.get(&station.stationuuid) {
+                    crate::clean_text(error)
+                } else {
+                    view.backups
+                        .get(&station.stationuuid)
+                        .map(|urls| {
+                            urls.iter()
+                                .map(|u| crate::clean_text(u))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default()
+                },
                 if current.is_some() {
                     format!(
                         "当前播放请求地址: {}\n",

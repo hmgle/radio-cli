@@ -1807,3 +1807,71 @@ fn explicit_station_details_reload_backups_after_a_row_refresh() {
         matches!(rx.recv().unwrap(), Command::Backups(id) if id == data.inspected.as_ref().unwrap().stationuuid)
     );
 }
+
+#[test]
+fn failed_backup_query_retries_without_a_selection_or_row_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let row = station("Retry");
+    engine.store.upsert(&row).unwrap();
+    engine
+        .store
+        .add_backup(&row.stationuuid, "https://example.com/recovered")
+        .unwrap();
+    let shared = Arc::new(Mutex::new(view()));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
+    let snapshot = shared.lock().unwrap().snapshot();
+    let mut app = App::default();
+    let (tx, rx) = command::channel(1);
+    let now = Instant::now();
+    app.request_selected_backups_at(&snapshot, &tx, now);
+    let command = rx.try_recv().unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+    conn.execute_batch("ALTER TABLE streams RENAME TO unavailable_streams")
+        .unwrap();
+    worker::execute(command, &mut engine, &mut filter, &mut job, &shared).unwrap();
+    let failed = shared.lock().unwrap().snapshot();
+    assert!(failed.backups_errors.contains_key(&row.stationuuid));
+    assert!(!failed.backups.contains_key(&row.stationuuid));
+    worker::execute(
+        Command::Info(row.stationuuid.clone(), 7),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    assert_eq!(shared.lock().unwrap().inspected_request, 7);
+    assert!(
+        shared.lock().unwrap().inspected.is_some(),
+        "a backup failure must not hide station details"
+    );
+    app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(1));
+    assert!(rx.try_recv().is_err(), "failure must not flood the queue");
+    conn.execute_batch("ALTER TABLE unavailable_streams RENAME TO streams")
+        .unwrap();
+    app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(2));
+    worker::execute(
+        rx.try_recv().unwrap(),
+        &mut engine,
+        &mut filter,
+        &mut job,
+        &shared,
+    )
+    .unwrap();
+    let recovered = shared.lock().unwrap().snapshot();
+    assert_eq!(recovered.rows_revision, snapshot.rows_revision);
+    assert!(recovered.backups_errors.is_empty());
+    assert_eq!(
+        recovered.backups[&row.stationuuid],
+        ["https://example.com/recovered"]
+    );
+    app.request_selected_backups_at(&recovered, &tx, now + Duration::from_secs(20));
+    assert!(rx.try_recv().is_err());
+}
