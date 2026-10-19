@@ -26,6 +26,8 @@
   about possible audio gaps.
 - Keep tab characters in CLI recording diagnostic lines so column alignment
   survives; other control characters remain filtered.
+- Ignore commented-out message lookups when validating catalog keys, covering
+  nested block comments and comment-like text inside strings and raw strings.
 
 ## 0.3.1 — 2026-10-19
 

@@ -189,6 +189,126 @@ mod tests {
             .collect()
     }
 
+    /// Strip `//` and `/* */` comments while preserving string and char
+    /// literals, so commented-out message lookups never register as used keys
+    /// and comment-looking text inside strings stays intact.
+    fn strip_comments(source: &str) -> String {
+        let chars: Vec<char> = source.chars().collect();
+        let mut out = String::with_capacity(source.len());
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            match c {
+                '/' if chars.get(i + 1) == Some(&'/') => {
+                    while i < chars.len() && chars[i] != '\n' {
+                        i += 1;
+                    }
+                }
+                '/' if chars.get(i + 1) == Some(&'*') => {
+                    // Rust block comments nest.
+                    let mut depth = 1usize;
+                    i += 2;
+                    while i < chars.len() && depth > 0 {
+                        match (chars[i], chars.get(i + 1)) {
+                            ('/', Some('*')) => {
+                                depth += 1;
+                                i += 2;
+                            }
+                            ('*', Some('/')) => {
+                                depth -= 1;
+                                i += 2;
+                            }
+                            _ => i += 1,
+                        }
+                    }
+                }
+                // Raw strings keep their content verbatim.
+                'r' if matches!(chars.get(i + 1), Some('"') | Some('#')) => {
+                    out.push('r');
+                    i += 1;
+                    let mut hashes = 0usize;
+                    while chars.get(i) == Some(&'#') {
+                        out.push('#');
+                        hashes += 1;
+                        i += 1;
+                    }
+                    if chars.get(i) == Some(&'"') {
+                        out.push('"');
+                        i += 1;
+                        loop {
+                            match chars.get(i) {
+                                None => break,
+                                Some('"')
+                                    if (0..hashes).all(|h| chars.get(i + 1 + h) == Some(&'#')) =>
+                                {
+                                    out.push('"');
+                                    out.extend(std::iter::repeat_n('#', hashes));
+                                    i += 1 + hashes;
+                                    break;
+                                }
+                                Some(&d) => {
+                                    out.push(d);
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                '"' => {
+                    out.push('"');
+                    i += 1;
+                    while let Some(&d) = chars.get(i) {
+                        out.push(d);
+                        i += 1;
+                        match d {
+                            '\\' => {
+                                if let Some(&e) = chars.get(i) {
+                                    out.push(e);
+                                    i += 1;
+                                }
+                            }
+                            '"' => break,
+                            _ => {}
+                        }
+                    }
+                }
+                // A quote only opens a char literal for `'x'`/`'\n'` shapes, so
+                // lifetimes such as `&'a str` stay ordinary text.
+                '\'' if is_char_literal(&chars, i) => {
+                    out.push('\'');
+                    i += 1;
+                    while let Some(&d) = chars.get(i) {
+                        out.push(d);
+                        i += 1;
+                        match d {
+                            '\\' => {
+                                if let Some(&e) = chars.get(i) {
+                                    out.push(e);
+                                    i += 1;
+                                }
+                            }
+                            '\'' => break,
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+
+    fn is_char_literal(chars: &[char], i: usize) -> bool {
+        match chars.get(i + 1) {
+            Some('\\') => true,
+            Some(_) => chars.get(i + 2) == Some(&'\''),
+            None => false,
+        }
+    }
+
     #[test]
     fn key_scan_includes_direct_message_lookups() {
         let source = r#"crate::t!("macro"); messages::text("direct");
@@ -199,6 +319,29 @@ mod tests {
                 .into_iter()
                 .map(str::to_owned)
                 .collect()
+        );
+    }
+
+    #[test]
+    fn key_scan_ignores_commented_out_lookups() {
+        let source = r##"crate::t!("real");
+            // messages::text("line_comment")
+            /* messages::text("block_comment") */
+            /* nested /* messages::text("nested_comment") */ tail */
+            let url = "https://example.com"; // crate::t!("trailing_comment")
+            let script = "#!/bin/sh\ntouch '{}'"; // crate::t!("after_string")
+            result.push('…'); KeyCode::Char(':') '\n' '\x1b'
+            let lifetime: &'a str = ""; // crate::t!("after_lifetime")
+            let raw = r#"messages::text("raw_content")"#;
+        "##;
+        // Commented-out lookups never register; string content (including the
+        // raw string, which keeps today's heuristic scanning) still does.
+        assert_eq!(
+            literal_keys(&strip_comments(source)),
+            ["raw_content", "real"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>()
         );
     }
 
@@ -220,7 +363,7 @@ mod tests {
                     continue;
                 }
                 let source = std::fs::read_to_string(path).unwrap();
-                used.extend(literal_keys(&source));
+                used.extend(literal_keys(&strip_comments(&source)));
             }
         }
         assert_eq!(en.keys().cloned().collect::<BTreeSet<_>>(), used);
