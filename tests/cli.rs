@@ -770,6 +770,42 @@ fn completions_and_manual_are_generated_without_preparing_data() {
 }
 
 #[test]
+fn completions_ignore_the_ambient_language() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("uncreated");
+    for shell in ["bash", "zsh", "fish"] {
+        let english = radio(&data).args(["completions", shell]).output().unwrap();
+        let chinese_host = radio(&data)
+            .env("LANG", "zh_CN.UTF-8")
+            .env("LC_ALL", "zh_CN.UTF-8")
+            .env("RADIO_LANG", "zh-CN")
+            .args(["completions", shell])
+            .output()
+            .unwrap();
+        assert!(english.status.success());
+        assert!(chinese_host.status.success());
+        assert_eq!(english.stdout, chinese_host.stdout, "{shell}");
+    }
+}
+
+#[test]
+fn release_script_pins_english_generated_files() {
+    let script = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/package-release.sh"),
+    )
+    .unwrap();
+    // Generated release files must not follow the packaging host language.
+    assert!(
+        script.contains(r#""$release_binary" --lang en man"#),
+        "{script}"
+    );
+    assert!(
+        script.contains(r#""$release_binary" --lang en completions "$release_shell""#),
+        "{script}"
+    );
+}
+
+#[test]
 fn doctor_missing_dependencies_return_one_error_envelope_with_exit_three() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("doctor.toml");

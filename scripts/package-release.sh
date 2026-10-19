@@ -20,7 +20,7 @@ cp "$release_binary" "$release_dir/radio"
 git archive HEAD README.md README.zh-CN.md LICENSE CHANGELOG.md config.example.toml \
     docs/tui.md docs/json-contract.md docs/validation.md | tar -x -C "$release_dir"
 for release_shell in bash zsh fish; do
-    "$release_binary" completions "$release_shell" > "$release_dir/completions/radio.$release_shell"
+    "$release_binary" --lang en completions "$release_shell" > "$release_dir/completions/radio.$release_shell"
 done
 mv "$release_dir/completions/radio.zsh" "$release_dir/completions/_radio"
 "$release_binary" --lang en man > "$release_dir/man/radio.1"

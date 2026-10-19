@@ -28,6 +28,8 @@
   survives; other control characters remain filtered.
 - Ignore commented-out message lookups when validating catalog keys, covering
   nested block comments and comment-like text inside strings and raw strings.
+- Generate release shell completions in English as well as the manual, with
+  tests guarding the packaging script and locale-invariant completions.
 
 ## 0.3.1 — 2026-10-19
 
