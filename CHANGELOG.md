@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Stop playback from failing when the mpv IPC socket path exceeds the
+  100-byte Unix socket limit: use a shorter socket name under the runtime
+  directory and fall back to the system temp directory with the full UUID
+  for deep paths. The default macOS per-user application-support directory
+  came close enough that ordinary user names could trip this on every start;
+  rejections now include the offending path.
 - Preserve one-shot ICY song-title updates with a bounded 512 KiB back buffer;
   keep its memory budget separate from the forward cache.
 - Repair ICY titles whose UTF-8 bytes were re-encoded as Latin-1, when the

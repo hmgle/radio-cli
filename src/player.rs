@@ -9,7 +9,7 @@ use std::{
     fs,
     io::{Read, Write},
     os::unix::net::UnixStream,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         Arc,
@@ -53,6 +53,25 @@ fn metadata_title(metadata: &Value) -> String {
     crate::clean_text(title)
 }
 
+/// `sockaddr_un.sun_path` holds 104 bytes on macOS (108 on Linux) including
+/// the terminating NUL; stay at the lowest common denominator. The default
+/// per-user data directory (`~/Library/Application Support` on macOS) plus
+/// the socket name could exceed it, so prefer a short name under the runtime
+/// directory and fall back to the system temp directory with the full UUID
+/// (unguessable in shared temp dirs) when the runtime directory runs deep.
+/// Session uniqueness comes from the random suffix; the application allows a
+/// single media session per data directory anyway.
+const SOCKET_PATH_LIMIT: usize = 100;
+
+fn ipc_socket_path(runtime_dir: &Path) -> PathBuf {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let primary = runtime_dir.join(format!("mpv-{}.sock", &id[..12]));
+    if primary.as_os_str().len() <= SOCKET_PATH_LIMIT {
+        return primary;
+    }
+    std::env::temp_dir().join(format!("mpv-{id}.sock"))
+}
+
 impl Player {
     pub fn start(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
         validate_url(url)?;
@@ -71,11 +90,14 @@ impl Player {
     }
 
     fn start_input(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
-        let socket = config
-            .runtime_dir
-            .join(format!("mpv-{}.sock", uuid::Uuid::new_v4().simple()));
-        if socket.as_os_str().len() > 100 {
-            bail!(DomainError::new(ErrorCode::RuntimePathTooLong));
+        let socket = ipc_socket_path(&config.runtime_dir);
+        if socket.as_os_str().len() > SOCKET_PATH_LIMIT {
+            // The runtime directory and the system temp directory are both
+            // too deep; surface the path so the JSON report shows the culprit.
+            bail!(
+                DomainError::new(ErrorCode::RuntimePathTooLong)
+                    .with("path", socket.display().to_string())
+            );
         }
         let mut command = Command::new(&config.settings.mpv);
         command
@@ -225,6 +247,32 @@ impl Drop for Player {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = fs::remove_file(&self.socket);
+    }
+}
+
+#[cfg(test)]
+mod socket_path_tests {
+    use super::{SOCKET_PATH_LIMIT, ipc_socket_path};
+    use std::path::Path;
+
+    #[test]
+    fn prefers_runtime_dir_with_a_short_name() {
+        let dir = Path::new("/tmp/radio-test-run");
+        let path = ipc_socket_path(dir);
+        assert!(path.starts_with(dir));
+        assert!(path.as_os_str().len() <= SOCKET_PATH_LIMIT);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("mpv-") && name.ends_with(".sock"));
+    }
+
+    #[test]
+    fn falls_back_to_temp_dir_for_deep_runtime_dirs() {
+        let deep = std::env::temp_dir().join("a".repeat(160));
+        let path = ipc_socket_path(&deep);
+        // The function only guarantees the primary path fits; a fallback path
+        // that is still too long is rejected by the caller's length check.
+        assert!(path.starts_with(std::env::temp_dir()));
+        assert!(!path.starts_with(&deep));
     }
 }
 

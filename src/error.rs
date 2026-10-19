@@ -143,4 +143,11 @@ mod tests {
         }
         assert_eq!(exit_code(&anyhow::anyhow!("I/O")), 1);
     }
+
+    #[test]
+    fn runtime_path_too_long_reports_the_offending_path() {
+        let error = DomainError::new(ErrorCode::RuntimePathTooLong)
+            .with("path", "/deep/dir/run/mpv-abc.sock");
+        assert!(error.to_string().contains("/deep/dir/run/mpv-abc.sock"));
+    }
 }
