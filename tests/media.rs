@@ -222,6 +222,153 @@ fn hls_aac_is_saved_as_native_aac() {
 }
 
 #[test]
+fn recording_reconnects_after_truncated_live_aac_responses() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let bytes = support::fixture("aac", "adts");
+    // Cover both missing startup parameters and a drop after recording began.
+    for (first_bytes, seconds) in [(32, 2), (bytes.len(), 6)] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let audio = bytes.clone();
+        let server = Server::new(move |_, stream| {
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                // Icecast-style live response: no length and a premature close.
+                stream
+                    .write_all(b"HTTP/1.0 200 OK\r\nContent-Type: audio/aac\r\n\r\n")
+                    .unwrap();
+                let _ = stream.write_all(&audio[..first_bytes]);
+            } else {
+                response(stream, 200, "audio/aac", &audio);
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let config = support::config(dir.path());
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let station = sample(&server.url);
+        store.upsert(&station).unwrap();
+        // The real startup probe uses a separate connection, so a successful
+        // probe cannot guarantee that the recording connection stays healthy.
+        let mut recorder = Recorder::start_with_info(
+            &config,
+            &store,
+            &station,
+            &server.url,
+            &config.recording_dir,
+            Some(Duration::from_secs(seconds)),
+            serde_json::json!({"streams":[{"codec_name":"aac"}]}),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !recorder.poll().unwrap() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(20));
+        }
+        let record = recorder.finish(&config, &store, None).unwrap();
+        assert_eq!(record.status, "complete", "{record:?}");
+        assert!(record.media_duration_ms.unwrap() >= seconds * 1000 - 100);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[test]
+fn recording_reconnects_are_bounded_and_keep_failure_diagnostics() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let bytes = support::fixture("aac", "adts");
+    let requests = Arc::new(AtomicUsize::new(0));
+    let count = requests.clone();
+    let server = Server::new(move |_, stream| {
+        if count.fetch_add(1, Ordering::SeqCst) == 0 {
+            stream
+                .write_all(b"HTTP/1.0 200 OK\r\nContent-Type: audio/aac\r\n\r\n")
+                .unwrap();
+            let _ = stream.write_all(&bytes);
+        } else {
+            response(stream, 503, "text/plain", b"unavailable");
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = sample(&server.url);
+    store.upsert(&station).unwrap();
+    let mut recorder = Recorder::start_with_info(
+        &config,
+        &store,
+        &station,
+        &server.url,
+        &config.recording_dir,
+        Some(Duration::from_secs(30)),
+        serde_json::json!({"streams":[{"codec_name":"aac"}]}),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !recorder.poll().unwrap() {
+        assert!(Instant::now() < deadline, "reconnects must be bounded");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let record = recorder.finish(&config, &store, None).unwrap();
+    assert_ne!(record.status, "complete", "{record:?}");
+    assert!(record.path.ends_with(".part"));
+    assert!(record.size_bytes > 0);
+    let error = record.error.unwrap();
+    assert!(error.contains("Stream ends prematurely"), "{error}");
+    assert!(error.contains("503"), "{error}");
+    assert!((2..=4).contains(&requests.load(Ordering::SeqCst)));
+}
+
+#[test]
+fn recording_failure_keeps_recent_multiline_diagnostics_with_equals_signs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = sample("https://example.com/live");
+    store.upsert(&station).unwrap();
+    let backend = dir.path().join("noisy-ffmpeg");
+    fs::write(
+        &backend,
+        format!(
+            "#!/bin/sh\ncat <<'RADIO_TEST_STDERR' >&2\nobsolete warning\n{}\nout_time_us=0\nprogress=end\n\u{1b}sample_rate=0: 最后的错误\nCould not write header\nRADIO_TEST_STDERR\nexit 1\n",
+            "重复诊断\n".repeat(2000)
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&backend, fs::Permissions::from_mode(0o700)).unwrap();
+    config.settings.ffmpeg = backend.to_string_lossy().into();
+    let mut recorder = Recorder::start_with_info(
+        &config,
+        &store,
+        &station,
+        station.primary_url(),
+        &config.recording_dir,
+        None,
+        serde_json::json!({"streams":[{"codec_name":"aac"}]}),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !recorder.poll().unwrap() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let record = recorder.finish(&config, &store, None).unwrap();
+    assert_eq!(record.status, "failed");
+    let error = record.error.as_deref().unwrap();
+    assert!(error.len() <= 8192 + 128);
+    assert!(!error.contains("obsolete warning"));
+    assert!(!error.contains("out_time_us="));
+    assert!(!error.contains("progress="));
+    assert!(!error.contains('\u{1b}'));
+    assert!(error.contains("sample_rate=0: 最后的错误\nCould not write header"));
+    let sidecar: serde_json::Value =
+        serde_json::from_slice(&fs::read(format!("{}.json", record.path)).unwrap()).unwrap();
+    assert_eq!(sidecar["error"], error);
+    assert_eq!(store.recording(&record.id).unwrap().error, record.error);
+}
+
+#[test]
 fn early_stream_eof_is_not_reported_as_complete() {
     let bytes = support::fixture("libmp3lame", "mp3");
     let server = Server::new(move |_, s| response(s, 200, "audio/mpeg", &bytes));

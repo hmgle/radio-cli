@@ -147,6 +147,7 @@ A single data directory allows only one playback / recording / TUI session; othe
 - Each recording has a JSON sidecar with the station, actually requested address, timestamps, codec, media duration, and completion status. The final CDN address after a source-side redirect may not be visible.
 - A unique `.part` file is written first; the final file is produced after a normal stop. Interruptions / failures keep the `.part` file and its status, and unfinished records are recovered when a media session starts next. Use `recordings list` to inspect results; media duration may be an estimate.
 - Switching stations in the TUI ends the current recording first; the new station requires pressing `r` again. Pausing playback does not pause recording. A live source ending early is not treated as a complete recording.
+- Truncated HTTP/ICY connections retry with bounded backoff. Reconnection can leave gaps in live audio; exhausted retries retain the partial file and failure diagnostics. Finite sources are not replayed to fill the requested duration.
 - `--duration` accepts seconds, `s`, `m`, and `h`, from 1 second to 365 days. Cut points follow audio packet boundaries; exact song boundaries cannot be guaranteed.
 - Listening and recording use at most two concurrent upstream connections; the codec-probing connection is closed before the recording connection starts. One HLS media task may request multiple segments.
 - Files stay local only; please comply with station terms and applicable personal-recording rules.

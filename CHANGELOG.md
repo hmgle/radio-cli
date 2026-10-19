@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Retry truncated HTTP/ICY recording connections with bounded backoff, including
+  disconnects before AAC startup parameters are available. Preserve finite-source
+  EOF behavior and partial files when retries fail.
+- Retain the latest 8 KiB of recording diagnostics with line breaks, including
+  messages containing equals signs and errors accompanying premature stream EOF.
+
 ## 0.3.1 — 2026-10-19
 
 Post-release review fixes tracked in #83.

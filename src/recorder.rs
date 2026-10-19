@@ -38,6 +38,42 @@ pub struct Recorder {
     stop_requested: bool,
 }
 
+const ERROR_TAIL_BYTES: usize = 8192;
+
+fn recording_progress(line: &str) -> bool {
+    line.split_once('=').is_some_and(|(key, _)| {
+        matches!(
+            key,
+            "frame"
+                | "fps"
+                | "bitrate"
+                | "total_size"
+                | "out_time_us"
+                | "out_time_ms"
+                | "out_time"
+                | "dup_frames"
+                | "drop_frames"
+                | "speed"
+                | "progress"
+        )
+    })
+}
+
+fn append_error_tail(text: &mut String, line: &str) {
+    // Keep readable diagnostic lines without allowing terminal control codes.
+    text.extend(
+        line.chars()
+            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t'),
+    );
+    let mut start = text.len().saturating_sub(ERROR_TAIL_BYTES);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    if start > 0 {
+        text.drain(..start);
+    }
+}
+
 pub fn probe(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Value> {
     probe_with_timeout(
         config,
@@ -312,6 +348,16 @@ impl Recorder {
             "-nostats",
             "-rw_timeout",
             "12000000",
+            // Retry truncated HTTP/ICY streams, including non-seekable ones.
+            // Exponential backoff stops when the next delay exceeds 2s;
+            // these options also work with older FFmpeg versions. Do not use
+            // reconnect_at_eof: a finite resource must not loop to fill -t.
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_delay_max",
+            "2",
             "-analyzeduration",
             "1000000",
             "-probesize",
@@ -362,11 +408,9 @@ impl Recorder {
                     if let Ok(value) = value.parse::<u64>() {
                         latest.fetch_max(value / 1000, Ordering::Relaxed);
                     }
-                } else if !line.contains('=') {
+                } else if !recording_progress(line.trim()) {
                     let mut text = target.lock().unwrap();
-                    if text.len() < 8192 {
-                        text.push_str(&line);
-                    }
+                    append_error_tail(&mut text, &line);
                 }
             }
         });
@@ -532,9 +576,18 @@ impl Recorder {
             }
         } else {
             let errors = self.errors.lock().unwrap();
-            if self.record.error.is_none() {
-                self.record.error = Some(crate::clean_text(reason.unwrap_or(&errors)));
-            }
+            let summary = self
+                .record
+                .error
+                .as_deref()
+                .or(reason)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("FFmpeg: {status}"));
+            self.record.error = Some(if errors.trim().is_empty() {
+                summary
+            } else {
+                format!("{summary}\n{}", errors.trim())
+            });
         }
         if self.record.status != "complete" {
             store.save_recording(&self.record)?;
