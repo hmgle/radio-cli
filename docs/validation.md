@@ -80,7 +80,7 @@ commit produces the same archive hash. The internal roadmap is not archived.
 
 ## 0.3.1 / review follow-up — 2026-10-19
 
-- 117 tests pass with real mpv/FFmpeg, including two successive stream outages,
+- 118 tests pass with real mpv/FFmpeg, including two successive stream outages,
   real ffprobe bitrate preflight for a custom station with bitrate=0, active
   recording playback guards, coalesced refreshes and lazy backup reads.
 - Strict all-target/all-feature Clippy, formatting, Rust 1.88 and a fresh RustSec
@@ -98,8 +98,7 @@ single 20.57 ms baseline versus 26.26/21.65 ms release observations. Being below
 
 Repeated the unchanged 50,000-station release benchmark on the same host/toolchain
 (Rust 1.97.1, Linux 6.12.85+deb13-amd64). Compared the immediate pre-#55 commit
-`1dea93b` with follow-up runtime code `4bcf9e9`; release preparation changes only
-version/documentation. Each process creates the same synthetic catalog shape,
+`1dea93b` with follow-up runtime code `4bcf9e9`; subsequent changes affect only recording text, version and documentation. Each process creates the same synthetic catalog shape,
 then measures 100 queries across five query classes. Discarded one warm-up run
 per binary and alternated AB/BA order over ten pairs, without concurrent builds.
 UUIDs and host scheduling are not fixed; this is a host observation, not an

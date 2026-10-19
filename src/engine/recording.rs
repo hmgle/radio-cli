@@ -228,8 +228,7 @@ impl RecordingController {
             }
         };
         session.status.recording_path = record.path;
-        session.status.message =
-            format!("录音 {}: {}", record.status, session.status.recording_path);
+        session.status.message = crate::t!("recording_result", "status" => record.status, "path" => session.status.recording_path);
         if record.status != "complete" {
             session
                 .status

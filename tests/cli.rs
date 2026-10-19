@@ -751,3 +751,36 @@ fn operation_messages_follow_the_selected_cli_language() {
         assert!(String::from_utf8_lossy(&output.stdout).contains(expected));
     }
 }
+
+#[test]
+fn completed_recording_summaries_follow_cli_language() {
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server =
+        support::Server::new(move |_, stream| support::response(stream, 200, "audio/mpeg", &bytes));
+    for (language, expected) in [("en", "Recording complete:"), ("zh-CN", "录音 complete:")] {
+        let dir = tempfile::tempdir().unwrap();
+        let add = radio(dir.path())
+            .args(["--json", "station", "add", "Summary", &server.url])
+            .output()
+            .unwrap();
+        assert!(add.status.success());
+        let station: Station = serde_json::from_slice(&add.stdout).unwrap();
+        let output = radio(dir.path())
+            .args([
+                "--lang",
+                language,
+                "record",
+                &station.stationuuid,
+                "--duration",
+                "1s",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains(expected));
+    }
+}
