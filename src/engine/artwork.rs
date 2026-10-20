@@ -83,7 +83,12 @@ impl Controller {
     }
 
     pub fn update(&mut self, config: &Config, request: Option<Request>) {
-        if self.key.as_ref().map(|key| &key.request) != request.as_ref() {
+        let demanded = request.is_some();
+        if !demanded {
+            if let Some((_, task)) = &mut self.task {
+                task.cancel();
+            }
+        } else if self.key.as_ref().map(|key| &key.request) != request.as_ref() {
             self.cancel();
             self.key = request.map(|request| Key {
                 generation: self.generation,
@@ -118,7 +123,8 @@ impl Controller {
             }
             self.task = None;
         }
-        if self.task.is_none()
+        if demanded
+            && self.task.is_none()
             && !self.unsupported
             && Instant::now() >= self.due
             && let Some(key) = self.key.clone()
@@ -452,6 +458,33 @@ mod tests {
         controller.update(&config, None);
         finish(&mut controller, &config, Some(first));
         assert!(controller.cover.is_some());
+    }
+
+    #[test]
+    fn temporary_demand_changes_retain_cover_and_probe_schedule() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let requests = hits.clone();
+        let server = Server::new(move |_, stream| {
+            requests.fetch_add(1, Ordering::Relaxed);
+            icy(stream, &body("Track", "http://localhost/cover.png"));
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_support::config(dir.path());
+        let mut controller = Controller::default();
+        let selected = request(&server.url, "Track");
+        finish(&mut controller, &config, Some(selected.clone()));
+        let cover = controller.cover.clone();
+        let due = controller.due;
+        for _ in 0..5 {
+            controller.update(&config, None);
+            assert_eq!(controller.cover, cover);
+            controller.update(&config, Some(selected.clone()));
+            assert_eq!(controller.due, due);
+            assert!(controller.task.is_none());
+        }
+        assert_eq!(hits.load(Ordering::Relaxed), 1);
+        controller.cancel();
+        assert!(controller.cover.is_none());
     }
 
     #[test]
