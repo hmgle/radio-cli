@@ -72,7 +72,8 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     });
     let result = (|| -> Result<()> {
         let _screen = Screen::enter(mouse)?;
-        let mut artwork = artwork::Controller::new(artwork_config, theme);
+        let mut pending = std::collections::VecDeque::new();
+        let mut artwork = artwork::Controller::new(artwork_config, theme, &mut pending);
         let writer = output::TerminalWriter::new(io::stdout(), theme == crate::config::Theme::Mono);
         let mut terminal = Terminal::new(CrosstermBackend::new(writer))?;
         execute!(
@@ -118,10 +119,15 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             if handle.is_finished() {
                 break;
             }
-            if !event::poll(Duration::from_millis(100))? {
-                continue;
-            }
-            match event::read()? {
+            let event = if let Some(event) = pending.pop_front() {
+                event
+            } else {
+                if !event::poll(Duration::from_millis(100))? {
+                    continue;
+                }
+                event::read()?
+            };
+            match event {
                 Event::Resize(width, height) => {
                     app.update_size(width, height);
                     dirty = true;

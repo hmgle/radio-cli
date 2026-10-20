@@ -126,11 +126,15 @@ impl Controller {
     }
 
     /// Called once with raw mode enabled, before crossterm reads any events.
-    pub fn new(config: Config, theme: Theme) -> Option<Self> {
+    pub fn new(
+        config: Config,
+        theme: Theme,
+        pending: &mut std::collections::VecDeque<crossterm::event::Event>,
+    ) -> Option<Self> {
         if config.settings.artwork == ArtworkMode::Off || theme == Theme::Mono {
             return None;
         }
-        let picker = super::capabilities::picker();
+        let picker = super::capabilities::picker(pending);
         Some(Self {
             config,
             picker,
@@ -324,9 +328,9 @@ mod tests {
     #[test]
     fn disabled_and_monochrome_modes_do_not_query_terminal_or_spawn_workers() {
         let (_dir, mut config, _, _) = fixture();
-        assert!(Controller::new(config.clone(), Theme::Default).is_none());
+        assert!(Controller::new(config.clone(), Theme::Default, &mut Default::default()).is_none());
         config.settings.artwork = ArtworkMode::Track;
-        assert!(Controller::new(config, Theme::Mono).is_none());
+        assert!(Controller::new(config, Theme::Mono, &mut Default::default()).is_none());
     }
 
     #[test]

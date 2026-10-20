@@ -188,6 +188,25 @@ fn artwork_capability_timeout_keeps_real_terminal_input_and_exit_working() {
 }
 
 #[test]
+fn artwork_probe_preserves_commands_sent_before_the_first_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let path = dir.path().join("early-input.toml");
+    fs::write(&path, "artwork = 'track'\ntheme = 'default'\n").unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&path));
+    // A query is emitted after raw mode starts and before the first frame.
+    tui.wait_output(|output| output.windows(4).any(|bytes| bytes == b"\x1b[5n"));
+    tui.send(":station add '启动输入台标' http://localhost/early\r");
+    tui.wait(|| store.count().unwrap() == 1);
+    assert_eq!(
+        store.search(&Filter::default()).unwrap()[0].name,
+        "启动输入台标"
+    );
+    tui.quit();
+}
+
+#[test]
 fn double_click_station_row_starts_playback_in_real_terminal() {
     let dir = tempfile::tempdir().unwrap();
     let config = support::config(dir.path());
