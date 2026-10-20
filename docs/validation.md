@@ -1,5 +1,39 @@
 # 验证记录
 
+## 0.6.1 release candidate — 2026-10-20
+
+- Linux all-target/all-feature tests: 215 passed, zero failures; the separate
+  catalog benchmark is excluded from that count. Formatting and strict
+  all-target/all-feature Clippy pass with the locked dependencies.
+- The explicit release benchmark passes with 50,000 synthetic stations and
+  search P95 28.64 ms, below the 100 ms budget. This is one local observation,
+  not a comparative performance claim.
+- Chinese territory localization covers display, filtering, search and JSON
+  compatibility. Details, the filter popup and its candidates render CLDR names
+  while storage, `--json`/`--json-v2` output and `--country` keep upstream codes;
+  a cross-language CLI test asserts both catalogs stay byte-identical.
+- Search resolves Chinese names to territory codes at query time, so existing
+  catalogs need no resync or migration. Two-character queries match territory
+  names as substrings; single-character queries match station text only, since
+  one character is shared by too many territories (`岛` appears in 32 names).
+  Missing and unrecognized codes fall back to the upstream catalog name, then
+  the code, then unknown, so no catalog metadata is dropped from details.
+- The catalog source notice follows the active interface language; the English
+  translation is covered by a test that also asserts the Chinese text is absent
+  from the English panel.
+- Existing 80×24, 100×24 and 160×48 layout snapshots were reviewed and needed no
+  change: every snapshot station uses a recognized code and keeps its CLDR name.
+- `bash -n scripts/package-release.sh` passes and `radio --version` reports
+  `radio 0.6.1`.
+- Release archives still require the final GitHub CI gates for Linux, native
+  macOS Apple Silicon and Intel, Rust 1.88 and RustSec auditing, plus the musl
+  packaging and extracted-archive smoke checks. Those jobs were not run for this
+  candidate. Native package checks do not imply Developer ID signing, notarization
+  or physical listening.
+
+验证日期：2026-10-20。环境：Debian Linux x86_64，内核 6.12.113+deb13-amd64，
+Intel Core i5-8365U（8 个逻辑 CPU），Rust 1.97.1。
+
 ## 0.6.0 release candidate — 2026-10-20
 
 - Linux all-target/all-feature tests: 209 passed, zero failures; the separate

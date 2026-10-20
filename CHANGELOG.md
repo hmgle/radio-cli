@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.6.1 — 2026-10-20
+
+- Display country/region names in Chinese in the TUI using a pinned Unicode
+  CLDR 48 name table keyed by the upstream `countrycode`. Details, the filter
+  popup and its candidates show localized names while storage, JSON output and
+  `--country` keep the upstream codes, so existing catalogs need no resync.
+- Match Chinese country/region names in search without a database migration.
+  Queries of two or more characters resolve to territory codes at query time;
+  single-character queries keep matching station text only, because one
+  character is shared by too many territories.
+- Fall back to the upstream catalog name, then the code, then unknown when a
+  country code is missing or absent from the CLDR table, so details no longer
+  discard usable catalog metadata.
+- Render the catalog source notice in the active interface language instead of
+  always in Chinese, and include the Unicode data license in release archives.
+- Label the `state` field as state/province/area and clarify third-party
+  catalog provenance and local caching in the guides.
+
+### Compatibility
+
+- Existing configuration and schema-v2 databases remain supported. Upstream
+  `country` and `countrycode` values are preserved in local storage and JSON
+  output; `--country` and `countries` keep using upstream codes. Geographic
+  names and codes serve station search and display only. The CLDR name table is
+  covered by the Unicode License V3 and is regenerable with
+  `uv run scripts/update_territories.py`.
+
 ## 0.6.0 — 2026-10-20
 
 - Add optional station logos and current-track covers in the TUI details panel

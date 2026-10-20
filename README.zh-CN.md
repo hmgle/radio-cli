@@ -56,8 +56,8 @@ macOS 先通过 Homebrew 安装媒体工具，再下载匹配架构的归档和 
 ```sh
 brew install mpv ffmpeg
 grep 'aarch64-apple-darwin.tar.gz$' SHA256SUMS | shasum -a 256 -c -
-tar -xzf radio-cli-v0.6.0-aarch64-apple-darwin.tar.gz
-cd radio-cli-v0.6.0-aarch64-apple-darwin
+tar -xzf radio-cli-v0.6.1-aarch64-apple-darwin.tar.gz
+cd radio-cli-v0.6.1-aarch64-apple-darwin
 ./radio doctor
 ./radio sync
 ./radio tui
