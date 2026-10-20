@@ -582,7 +582,7 @@ mod tests {
                     .unwrap();
                 assert!(name.len() + ".json.tmp".len() <= 255);
                 if title.starts_with("Björk") {
-                    assert!(name.contains("-Station-Björk中文-"));
+                    assert!(name.contains("-Station-Björk_中文-"));
                 }
                 if title.is_empty() {
                     assert!(name.contains("-Station-"));

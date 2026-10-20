@@ -59,6 +59,15 @@ fn filename_component(text: &str, max_chars: usize, max_bytes: usize) -> String 
     result
 }
 
+fn track_filename_component(text: &str, max_bytes: usize) -> String {
+    let words: Vec<_> = text
+        .split_whitespace()
+        .map(|word| filename_component(word, 40, max_bytes))
+        .filter(|word| !word.is_empty())
+        .collect();
+    filename_component(&words.join("_"), 40, max_bytes)
+}
+
 const ERROR_TAIL_BYTES: usize = 8192;
 
 fn recording_progress(line: &str) -> bool {
@@ -413,7 +422,7 @@ impl Recorder {
         // Leave byte room for timestamps, suffixes, .part and .json.tmp even
         // when station and track names contain multibyte Unicode characters.
         let name = filename_component(&station.name, 60, 180);
-        let track_name = filename_component(track.as_deref().unwrap_or(""), 40, 200 - name.len());
+        let track_name = track_filename_component(track.as_deref().unwrap_or(""), 200 - name.len());
         let label = if track_name.is_empty() {
             name
         } else {
