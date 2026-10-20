@@ -7,13 +7,18 @@ use crate::{
     config::{ArtworkMode, Config, Theme},
     model::Station,
 };
-use ratatui::layout::{Rect, Size};
+use ratatui::{
+    Frame,
+    buffer::CellDiffOption,
+    layout::{Rect, Size},
+};
 use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
 const SIZE: Size = Size::new(12, 6);
 
 #[derive(Clone, PartialEq, Eq)]
@@ -22,6 +27,7 @@ pub(super) struct Target {
     url: String,
     track_generation: Option<u64>,
     fallback: Option<String>,
+    size: Size,
 }
 
 #[derive(Default)]
@@ -42,21 +48,53 @@ pub(super) fn station<'a>(app: &App, view: &'a View) -> Option<&'a Station> {
     }
 }
 
-pub(super) fn area(app: &App, screen: Rect) -> Option<Rect> {
+pub(super) fn area(app: &App, view: &View, screen: Rect) -> Option<Rect> {
     let rect = app.rects[Focus::Details.index()];
-    (app.theme != Theme::Mono
-        && screen.width >= 100
-        && screen.height >= 24
-        && rect.width >= 26
-        && rect.height >= 13
-        && !app.help
-        && app.filter_edit.is_none()
-        && app.confirmation.is_none())
-    .then(|| Rect::new(rect.x + 1, rect.y + 1, SIZE.width, SIZE.height))
+    if app.theme == Theme::Mono
+        || screen.width < 100
+        || screen.height < 24
+        || rect.width < 26
+        || app.help
+        || app.filter_edit.is_some()
+        || app.confirmation.is_some()
+    {
+        return None;
+    }
+    let station = station(app, view)?;
+    let text = super::render::station_details(station, view);
+    let lines = super::render::wrapped_lines(&text, rect.width.saturating_sub(2)).len();
+    let top = u16::try_from(lines).ok()?.saturating_add(2);
+    let height = rect.height.saturating_sub(top + 1);
+    // Keep text in the same cells whether artwork is loading, missing or changing.
+    // Short panels retain all their space for scrolling station details.
+    (height >= 4).then(|| {
+        Rect::new(
+            rect.x + 1,
+            rect.y + top,
+            rect.width.saturating_sub(2).min(120),
+            height.min(60),
+        )
+    })
+}
+
+pub(super) fn render(frame: &mut Frame, image: &Protocol, rect: Rect) {
+    frame.render_widget(ratatui_image::Image::new(image), rect);
+    // ratatui-image 10 embeds entire graphics escape sequences in one cell.
+    // Their apparent Unicode width otherwise makes Ratatui's diff skip later
+    // rows, including the remaining Kitty placeholders. Keep this compatibility
+    // fix while using the image crate version that supports Rust 1.88.
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            if cell.symbol().contains('\x1b') {
+                cell.set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
+            }
+        }
+    }
 }
 
 fn target(app: &App, view: &View, screen: Rect) -> Option<Target> {
-    area(app, screen)?;
+    let size = area(app, view, screen)?.as_size();
     let station = station(app, view)?;
     if let Some(cover) = &view.track_artwork
         && cover.request.stationuuid == station.stationuuid
@@ -76,6 +114,7 @@ fn target(app: &App, view: &View, screen: Rect) -> Option<Target> {
         )
     {
         return Some(Target {
+            size,
             identity: station.stationuuid.clone(),
             url: cover.url.clone(),
             track_generation: Some(cover.generation),
@@ -84,6 +123,7 @@ fn target(app: &App, view: &View, screen: Rect) -> Option<Target> {
         });
     }
     (!station.custom && !station.favicon.is_empty()).then(|| Target {
+        size,
         identity: station.stationuuid.clone(),
         url: station.favicon.clone(),
         track_generation: None,
@@ -96,7 +136,7 @@ pub(super) fn image<'a>(
     view: &View,
     screen: Rect,
 ) -> Option<(&'a Arc<Protocol>, Rect)> {
-    let rect = area(app, screen)?;
+    let rect = area(app, view, screen)?;
     (app.artwork.target == target(app, view, screen))
         .then_some(app.artwork.protocol.as_ref().map(|image| (image, rect)))
         .flatten()
@@ -112,7 +152,7 @@ pub(super) struct Controller {
 
 impl Controller {
     pub fn demand(&self, app: &App, view: &View, screen: Rect) -> Option<String> {
-        if self.config.settings.artwork != ArtworkMode::Track || area(app, screen).is_none() {
+        if self.config.settings.artwork != ArtworkMode::Track || area(app, view, screen).is_none() {
             return None;
         }
         let station = station(app, view)?;
@@ -186,7 +226,7 @@ impl Controller {
                         fetch(&config, &request.identity, &fallback).await?
                     }
                 };
-                Ok(picker.new_protocol(image, SIZE.into(), Resize::Scale(None))?)
+                Ok(picker.new_protocol(image, request.size.into(), Resize::Scale(None))?)
             }) {
                 Ok(task) => self.task = Some((key, task)),
                 Err(_) => self.retry = Instant::now() + Duration::from_secs(30),
@@ -229,8 +269,8 @@ mod tests {
     #[test]
     fn logo_rendering_respects_selection_inspection_theme_size_and_popups() {
         let (_dir, _, mut app, mut view) = fixture();
-        let screen = Rect::new(0, 0, 100, 24);
-        draw(&mut app, &view, 100, 24);
+        let screen = Rect::new(0, 0, 160, 60);
+        draw(&mut app, &view, 160, 60);
         app.artwork.target = target(&app, &view, screen);
         let protocol = Picker::halfblocks()
             .new_protocol(
@@ -244,8 +284,8 @@ mod tests {
             )
             .unwrap();
         app.artwork.protocol = Some(Arc::new(protocol));
-        let terminal = draw(&mut app, &view, 100, 24);
-        let rect = area(&app, screen).unwrap();
+        let terminal = draw(&mut app, &view, 160, 60);
+        let rect = area(&app, &view, screen).unwrap();
         assert!((rect.y..rect.bottom()).any(|y| {
             (rect.x..rect.right()).any(|x| {
                 terminal.backend().buffer()[(x, y)].fg == ratatui::style::Color::Rgb(210, 20, 50)
@@ -262,7 +302,8 @@ mod tests {
         draw(&mut app, &view, 80, 24);
         assert!(image(&app, &view, Rect::new(0, 0, 80, 24)).is_none());
         draw(&mut app, &view, 160, 48);
-        assert!(image(&app, &view, Rect::new(0, 0, 160, 48)).is_some());
+        assert!(target(&app, &view, Rect::new(0, 0, 160, 48)).is_some());
+        draw(&mut app, &view, 160, 60);
         app.inspect_info = true;
         app.info_request = 8;
         view.inspected_request = 7;
@@ -275,6 +316,37 @@ mod tests {
         app.inspect_info = false;
         Arc::make_mut(&mut view.rows)[0].custom = true;
         assert!(image(&app, &view, screen).is_none());
+    }
+
+    #[test]
+    fn images_use_remaining_details_space_without_moving_text() {
+        let (_dir, _, mut app, view) = fixture();
+        let screen = Rect::new(0, 0, 160, 60);
+        let before = draw(&mut app, &view, 160, 60).backend().buffer().clone();
+        let rect = area(&app, &view, screen).unwrap();
+        assert!(rect.width > 12 && rect.height > 6);
+        app.artwork.target = target(&app, &view, screen);
+        app.artwork.protocol = Some(Arc::new(
+            Picker::halfblocks()
+                .new_protocol(
+                    ::image::DynamicImage::new_rgb8(256, 256),
+                    rect,
+                    Resize::Scale(None),
+                )
+                .unwrap(),
+        ));
+        let during = draw(&mut app, &view, 160, 60).backend().buffer().clone();
+        let details = app.rects[Focus::Details.index()];
+        for y in details.y..rect.y {
+            for x in details.x..details.right() {
+                assert_eq!(before[(x, y)], during[(x, y)]);
+            }
+        }
+        app.artwork.protocol = None;
+        let after = draw(&mut app, &view, 160, 60).backend().buffer().clone();
+        assert_eq!(before, after);
+        draw(&mut app, &view, 100, 24);
+        assert!(area(&app, &view, Rect::new(0, 0, 100, 24)).is_none());
     }
 
     #[test]
@@ -295,6 +367,8 @@ mod tests {
                     Resize::Fit(None),
                 )
                 .unwrap();
+            let expected_rows = protocol.area().height;
+            let expected_columns = protocol.area().width;
             let mut bytes = Vec::new();
             {
                 let writer = super::super::output::TerminalWriter::new(&mut bytes, false);
@@ -306,12 +380,18 @@ mod tests {
                 )
                 .unwrap();
                 terminal
+                    .draw(|frame| super::render(frame, &protocol, Rect::new(0, 0, 12, 6)))
+                    .unwrap();
+                terminal
                     .draw(|frame| {
                         frame.render_widget(
-                            ratatui_image::Image::new(&protocol),
-                            Rect::new(0, 0, 12, 6),
+                            ratatui::widgets::Paragraph::new("image hidden"),
+                            frame.area(),
                         )
                     })
+                    .unwrap();
+                terminal
+                    .draw(|frame| super::render(frame, &protocol, Rect::new(0, 0, 12, 6)))
                     .unwrap();
             }
             let text = String::from_utf8_lossy(&bytes);
@@ -322,6 +402,13 @@ mod tests {
                 ProtocolType::Halfblocks => unreachable!(),
             };
             assert!(text.contains(marker), "missing {kind:?} output");
+            if kind == ProtocolType::Kitty {
+                assert_eq!(
+                    text.matches('\u{10eeee}').count(),
+                    usize::from(expected_rows * expected_columns) * 2,
+                    "all Kitty rows must survive buffer diffing and reappearance"
+                );
+            }
         }
     }
 
@@ -364,8 +451,8 @@ mod tests {
             task: None,
             retry: Instant::now(),
         };
-        let screen = Rect::new(0, 0, 100, 24);
-        draw(&mut app, &view, 100, 24);
+        let screen = Rect::new(0, 0, 160, 60);
+        draw(&mut app, &view, 160, 60);
         controller.update(&mut app, &view, screen);
         ready.recv_timeout(Duration::from_secs(2)).unwrap();
         Arc::make_mut(&mut view.rows)[0].favicon = format!("{}/new", server.url);
@@ -398,7 +485,7 @@ mod tests {
                 test_support::response(stream, 200, "image/png", bytes.get_ref());
             }
         });
-        let screen = Rect::new(0, 0, 100, 24);
+        let screen = Rect::new(0, 0, 160, 60);
         Arc::make_mut(&mut view.rows)[0].favicon = format!("{}/logo", server.url);
         view.status.station = Some(view.rows[0].clone());
         view.status.playback_state = PlaybackState::Playing;
@@ -421,7 +508,7 @@ mod tests {
             task: None,
             retry: Instant::now(),
         };
-        draw(&mut app, &view, 100, 24);
+        draw(&mut app, &view, 160, 60);
         assert_eq!(
             target(&app, &view, screen).unwrap().track_generation,
             Some(1)

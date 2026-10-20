@@ -29,10 +29,18 @@ impl Tui {
         api: &str,
         config: Option<&std::path::Path>,
     ) -> Self {
+        Self::start_with_height(dir, api, config, 30)
+    }
+    fn start_with_height(
+        dir: &std::path::Path,
+        api: &str,
+        config: Option<&std::path::Path>,
+        height: u16,
+    ) -> Self {
         let (master, slave, original) = unsafe {
             let (mut master, mut slave) = (0, 0);
             let mut size = libc::winsize {
-                ws_row: 30,
+                ws_row: height,
                 ws_col: 120,
                 ws_xpixel: 0,
                 ws_ypixel: 0,
@@ -174,7 +182,7 @@ fn artwork_capability_timeout_keeps_real_terminal_input_and_exit_working() {
         .unwrap();
     let path = dir.path().join("artwork.toml");
     fs::write(&path, "artwork = 'station'\ntheme = 'default'\n").unwrap();
-    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&path));
+    let mut tui = Tui::start_with_height(dir.path(), "http://127.0.0.1:1", Some(&path), 60);
     // This PTY never replies to terminal queries. Once fallback has drawn the
     // interface, no query reader may compete for these input bytes.
     tui.wait_output(|output| {

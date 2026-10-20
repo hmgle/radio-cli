@@ -264,8 +264,12 @@ the current track's ICY cover in the TUI details panel (default: `"off"`).
 Logos come from the catalog's `favicon`, independently of
 the audio stream; run `radio sync` after upgrading to populate existing rows.
 Images use Kitty, Sixel or iTerm2 protocols when supported, with Unicode half
-blocks as fallback; tmux always uses half blocks. Monochrome themes and screens
-smaller than 100×24 keep text-only details. Downloads are limited to 256 KiB
+blocks as fallback; tmux always uses half blocks. Images fill the available area
+below station details without moving text when covers change. Monochrome themes,
+screens smaller than 100×24, and panels with insufficient space below the text
+keep text-only details. Some Sixel terminals (including xterm) may lose an image
+when a popup or text overwrites it; closing and reopening the details can help.
+Downloads are limited to 256 KiB
 JPEG/PNG images, decoded with size limits, and cached under `artwork/` in the
 data directory (128 entries / 32 MiB). Changed favicon URLs invalidate the cache.
 Track covers require a matching nonempty playback title and a station that

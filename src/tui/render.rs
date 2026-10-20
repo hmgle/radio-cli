@@ -440,66 +440,13 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         } else {
             app.selected(view)
         } {
-            let current = view
-                .status
-                .station
-                .as_ref()
-                .filter(|s| s.stationuuid == station.stationuuid);
-            format!(
-                "{}{}\n国家: {} ({})\n语言: {}\n地区: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
-                value(&station.name),
-                if current.is_some() && view.status.playing() {
-                    " · 正在播放"
-                } else {
-                    " · 列表选中 / 指定电台"
-                },
-                value(&station.country),
-                value(&station.countrycode),
-                value(&station.language),
-                value(&station.state),
-                bitrate(station),
-                codec(station),
-                if station.hls != 0 { "是" } else { "否" },
-                value(&station.tags),
-                if station.favorite { "是" } else { "否" },
-                if station.custom {
-                    "自定义"
-                } else if station.active {
-                    "有效"
-                } else {
-                    "已失效"
-                },
-                station.stationuuid,
-                crate::clean_text(station.primary_url()),
-                if let Some(error) = view.backups_errors.get(&station.stationuuid) {
-                    crate::clean_text(error)
-                } else {
-                    view.backups
-                        .get(&station.stationuuid)
-                        .map(|urls| {
-                            urls.iter()
-                                .map(|u| crate::clean_text(u))
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_default()
-                },
-                if current.is_some() {
-                    format!(
-                        "当前播放请求地址: {}\n",
-                        crate::clean_text(&view.status.source_url)
-                    )
-                } else {
-                    String::new()
-                },
-                value(&station.homepage)
-            )
+            station_details(station, view)
         } else {
             "选择电台查看码率、编码、国家、标签和地址。\n4 查看当前播放电台。".into()
         };
         let image =
             super::artwork::image(app, view, area).map(|(image, rect)| (image.clone(), rect));
-        let mut text_rect = app.rects[Focus::Details.index()];
+        let text_rect = app.rects[Focus::Details.index()];
         let block = panel(
             if area.width < 100 {
                 "[2/3] 详情 · 2 返回 · j/k 滚动"
@@ -509,30 +456,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             .into(),
             active(Focus::Details),
         );
+        frame.render_widget(
+            scroll_text(&text, text_rect, &mut app.details_scroll).block(block),
+            text_rect,
+        );
         if let Some((image, rect)) = image {
-            frame.render_widget(block, text_rect);
-            frame.render_widget(ratatui_image::Image::new(&image), rect);
-            text_rect = Rect::new(
-                text_rect.x + 1,
-                text_rect.y + 8,
-                text_rect.width.saturating_sub(2),
-                text_rect.height.saturating_sub(9),
-            );
-            let geometry = Rect::new(0, 0, text_rect.width + 2, text_rect.height + 2);
-            frame.render_widget(
-                scroll_text(&text, geometry, &mut app.details_scroll),
-                text_rect,
-            );
-        } else {
-            frame.render_widget(
-                scroll_text(
-                    &text,
-                    app.rects[Focus::Details.index()],
-                    &mut app.details_scroll,
-                )
-                .block(block),
-                app.rects[Focus::Details.index()],
-            );
+            super::artwork::render(frame, &image, rect);
         }
     }
     let task = if view.task.is_empty() {
@@ -761,10 +690,67 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     }
 }
 
+pub(super) fn station_details(station: &Station, view: &View) -> String {
+    let current = view
+        .status
+        .station
+        .as_ref()
+        .filter(|s| s.stationuuid == station.stationuuid);
+    format!(
+        "{}{}\n国家: {} ({})\n语言: {}\n地区: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
+        value(&station.name),
+        if current.is_some() && view.status.playing() {
+            " · 正在播放"
+        } else {
+            " · 列表选中 / 指定电台"
+        },
+        value(&station.country),
+        value(&station.countrycode),
+        value(&station.language),
+        value(&station.state),
+        bitrate(station),
+        codec(station),
+        if station.hls != 0 { "是" } else { "否" },
+        value(&station.tags),
+        if station.favorite { "是" } else { "否" },
+        if station.custom {
+            "自定义"
+        } else if station.active {
+            "有效"
+        } else {
+            "已失效"
+        },
+        station.stationuuid,
+        crate::clean_text(station.primary_url()),
+        if let Some(error) = view.backups_errors.get(&station.stationuuid) {
+            crate::clean_text(error)
+        } else {
+            view.backups
+                .get(&station.stationuuid)
+                .map(|urls| {
+                    urls.iter()
+                        .map(|u| crate::clean_text(u))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default()
+        },
+        if current.is_some() {
+            format!(
+                "当前播放请求地址: {}\n",
+                crate::clean_text(&view.status.source_url)
+            )
+        } else {
+            String::new()
+        },
+        value(&station.homepage)
+    )
+}
+
 /// Hard-wrap by terminal cells so long URLs remain readable and scrolling cannot
 /// move beyond the last page. Keep slices on UTF-8 boundaries, including CJK.
-fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> Paragraph<'a> {
-    let width = usize::from(rect.width.saturating_sub(2).max(1));
+pub(super) fn wrapped_lines(text: &str, width: u16) -> Vec<Line<'static>> {
+    let width = usize::from(width.max(1));
     let mut lines = Vec::new();
     for line in text.lines() {
         let line = crate::clean_text(line);
@@ -781,6 +767,11 @@ fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> Paragraph<'a>
         }
         lines.push(Line::from(line[start..].to_owned()));
     }
+    lines
+}
+
+fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> Paragraph<'a> {
+    let lines = wrapped_lines(text, rect.width.saturating_sub(2));
     let visible = usize::from(rect.height.saturating_sub(2));
     let maximum = lines.len().saturating_sub(visible).min(u16::MAX as usize) as u16;
     *scroll = (*scroll).min(maximum);
