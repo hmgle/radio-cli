@@ -1317,18 +1317,17 @@ impl App {
                     }
                 } else if focus == Focus::List {
                     let rect = self.rects[focus.index()];
-                    if event.row > rect.y
-                        && event.row < rect.bottom().saturating_sub(1)
-                        && event.column > rect.x
-                        && event.column < rect.right().saturating_sub(1)
-                    {
+                    if event.row > rect.y && event.row < rect.bottom().saturating_sub(1) {
                         let index = self.list.offset() + usize::from(event.row - rect.y - 1);
                         if index < self.length(view) {
                             self.list.select(Some(index));
                             self.selected_id = self.selection_id(view);
                             self.details_scroll = 0;
                             self.inspect_info = false;
-                            if let Some(station) = self.selected(view) {
+                            if let Some(station) = self.selected(view)
+                                && event.column > rect.x
+                                && event.column < rect.right().saturating_sub(1)
+                            {
                                 let uuid = station.stationuuid.clone();
                                 if previous.is_some_and(|(at, x, y, id, revision)| {
                                     now.saturating_duration_since(at) <= Duration::from_millis(500)

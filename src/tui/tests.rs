@@ -147,6 +147,29 @@ fn input_labels_use_display_cells_and_keep_the_cursor_inside() {
 }
 
 #[test]
+fn list_border_clicks_select_rows_without_starting_playback() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let data = view();
+    let mut app = App::default();
+    app.rects[Focus::List.index()] = ratatui::layout::Rect::new(10, 5, 40, 10);
+    let (sender, receiver) = command::channel(8);
+    let now = Instant::now();
+    for column in [10, 49] {
+        app.list.select(Some(0));
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse_at(click, &data, &sender, now);
+        assert_eq!(app.list.selected(), Some(1));
+        app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[test]
 fn double_click_plays_only_the_same_station_without_intervening_movement() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let data = view();
