@@ -629,7 +629,7 @@ fn mpv_ipc_delivers_one_shot_icy_titles_during_playback() {
             return;
         }
         let mut sent_stage = 0;
-        for chunk in bytes.chunks_exact(1024) {
+        for chunk in bytes.as_chunks::<1024>().0 {
             let current = server_stage.load(Ordering::Relaxed);
             if current == 3 || stream.write_all(chunk).is_err() {
                 return;
