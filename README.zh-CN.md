@@ -4,9 +4,10 @@
 
 Linux 优先的轻量 CLI / TUI 网络收音机。Rust 管理本地目录与交互，SQLite 保存收藏和历史，mpv 播放，FFmpeg 无损录音。无需账号或 API Key。
 
-支持平台为 Linux；Windows 和 macOS 暂不支持，Unix Socket、Linux 子进程监管、
-禁止覆盖的录音发布使用平台专有 API。CI 覆盖 Rust 1.88、stable 全部特性、
-x86_64 musl 静态构建及 RustSec 依赖审计。
+Linux 是主要测试平台。已有 macOS 正常运行反馈，基本 CLI/TUI 操作也纳入支持目标；
+目前尚无 macOS CI，打开录音目录和录音恢复仍有已知限制。代码依赖 Unix API，
+Windows 原生暂不支持。CI 覆盖 Rust 1.88、stable 全部特性、x86_64 musl 静态构建
+及 RustSec 依赖审计。
 
 ## 安装与启动
 

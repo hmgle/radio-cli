@@ -4,10 +4,12 @@
 
 A lightweight, Linux-first terminal radio. Rust manages the local catalog and interaction, SQLite stores favorites and history, mpv plays audio, and FFmpeg records streams losslessly. No account or API key required.
 
-Supported platform: Linux. Windows and macOS are unsupported: Unix sockets,
-Linux process supervision, and non-overwriting recording publication use
-platform-specific APIs. CI covers Rust 1.88, stable with all features, static
-x86_64 musl builds, and RustSec dependency auditing.
+Linux is the primary tested platform. macOS has been reported to work, and
+basic CLI/TUI operation is a support goal; it is not yet covered by CI and
+has known limitations in directory opening and recording recovery. Native
+Windows is not currently supported because the code requires Unix APIs.
+CI covers Rust 1.88, stable with all features, static x86_64 musl builds, and
+RustSec dependency auditing.
 
 Homepage: <https://github.com/hmgle/radio-cli>
 

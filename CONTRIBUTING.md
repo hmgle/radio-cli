@@ -5,9 +5,9 @@ requests are welcome.
 
 ## Ground rules
 
-- radio-cli is **Linux-first**. The code uses Unix APIs unconditionally, so
-  Windows/macOS support is not a goal for now; please don't add
-  platform-specific shims without discussing it first.
+- radio-cli is **Linux-first**, with basic CLI/TUI support on macOS as a goal.
+  Keep shared Unix behavior portable and isolate platform-specific operations.
+  Native Windows support is outside the current scope.
 - The README is the user-facing documentation; design details live in `docs/`
   (currently written in Chinese).
 - Keep pull requests focused. One logical change per PR is easiest to review.
