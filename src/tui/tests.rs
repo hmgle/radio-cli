@@ -76,12 +76,207 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
 }
 
 #[test]
+fn selection_resume_restores_source_and_page_once_without_playback() {
+    use crate::config::ResumeMode;
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.config.settings.resume = ResumeMode::Selection;
+    // Any attempted playback would fail to spawn this binary.
+    engine.config.settings.mpv = "/missing/mpv".into();
+    for i in 0..105 {
+        let mut row = station(&format!("Station {i}"));
+        row.clickcount = i;
+        row.url = "https://example.com/live".into();
+        engine.store.upsert(&row).unwrap();
+        engine.store.favorite(&row.stationuuid, true).unwrap();
+        if i == 1 {
+            engine
+                .store
+                .set_meta("pref_last_station", &row.stationuuid)
+                .unwrap();
+        }
+    }
+    engine.store.set_meta("pref_source", "favorites").unwrap();
+    engine.resume_last_station().unwrap();
+    assert_eq!(
+        engine.status.playback_state,
+        crate::engine::PlaybackState::Idle
+    );
+    assert!(engine.status.station.is_none());
+    let mut app = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    assert_eq!(app.source, Source::Favorites);
+    assert_eq!(app.filter.offset, 100);
+    let mut data = View::new(engine.status.clone());
+    data.filter = app.filter.clone();
+    app.reconcile(&data); // Wait for the first query to finish.
+    data.rows = engine.store.search(&app.filter).unwrap().into();
+    data.rows_revision = 1;
+    app.reconcile(&data);
+    assert_eq!(app.selected(&data).unwrap().name, "Station 1");
+    // The target can disappear between restoration and the first query.
+    // A later revision must not unexpectedly select it when it returns.
+    let mut vanished = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    let mut absent = data.clone();
+    absent.rows = data
+        .rows
+        .iter()
+        .filter(|s| s.name != "Station 1")
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    vanished.reconcile(&absent);
+    let first = vanished.selected(&absent).unwrap().stationuuid.clone();
+    data.rows_revision += 1;
+    vanished.reconcile(&data);
+    assert_eq!(vanished.selected(&data).unwrap().stationuuid, first);
+    let (sender, _) = command::channel(8);
+    app.key(key(KeyCode::Home), &data, &sender);
+    data.rows_revision += 1;
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(0));
+
+    engine
+        .store
+        .set_meta("pref_last_station", "missing")
+        .unwrap();
+    let mut missing = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    assert_eq!(missing.source, Source::Favorites);
+    assert_eq!(missing.filter.offset, 0);
+    data.filter = missing.filter.clone();
+    data.rows = engine.store.search(&missing.filter).unwrap().into();
+    missing.reconcile(&data);
+    assert_eq!(missing.list.selected(), Some(0));
+    let fresh = App::restore(&engine.store, ResumeMode::Disabled).unwrap();
+    assert_eq!(fresh.source, Source::Stations);
+    assert_eq!(fresh.filter.offset, 0);
+
+    // The worker uses the same startup page even if preferences change
+    // between App restoration and worker startup.
+    let initial_filter = app.filter.clone();
+    let expected_filter = initial_filter.clone();
+    engine.config.settings.auto_sync_days = 0;
+    engine.store.set_meta("pref_source", "stations").unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let output = shared.clone();
+    let stop = engine.stop.clone();
+    let flag = stop.clone();
+    let (_sender, receiver) = command::channel(8);
+    let handle = thread::spawn(move || worker::run(engine, receiver, output, flag, initial_filter));
+    wait_for(|| shared.lock().unwrap().rows_revision > 0);
+    assert_eq!(shared.lock().unwrap().filter, expected_filter);
+    stop.store(true, Ordering::Relaxed);
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
 fn input_labels_use_display_cells_and_keep_the_cursor_inside() {
     assert_eq!(render::input_geometry("SEARCH /", 20), (11, 9));
     assert_eq!(render::input_geometry("搜索 /", 20), (13, 7));
     assert_eq!(render::input_geometry("e\u{301}", 20), (18, 2));
     assert_eq!(render::input_geometry("搜索 /", 3), (0, 2));
     assert_eq!(render::input_geometry("搜索 /", 0), (0, 0));
+}
+
+#[test]
+fn list_border_clicks_select_rows_without_starting_playback() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let data = view();
+    let mut app = App::default();
+    app.rects[Focus::List.index()] = ratatui::layout::Rect::new(10, 5, 40, 10);
+    let (sender, receiver) = command::channel(8);
+    let now = Instant::now();
+    for column in [10, 49] {
+        app.list.select(Some(0));
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse_at(click, &data, &sender, now);
+        assert_eq!(app.list.selected(), Some(1));
+        app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[test]
+fn double_click_plays_only_the_same_station_without_intervening_movement() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let data = view();
+    let mut app = App::default();
+    app.rects[Focus::List.index()] = ratatui::layout::Rect::new(10, 5, 40, 10);
+    let (sender, receiver) = command::channel(16);
+    let now = Instant::now();
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 15,
+        row: 7,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse_at(click, &data, &sender, now);
+    assert_eq!(app.list.selected(), Some(1));
+    assert!(receiver.try_recv().is_err());
+    app.mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..click
+        },
+        &data,
+        &sender,
+        now + Duration::from_millis(50),
+    );
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Play(id)) if id == data.rows[1].stationuuid));
+    for intervening in [
+        MouseEventKind::Moved,
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::ScrollDown,
+    ] {
+        app.mouse_at(click, &data, &sender, now);
+        app.mouse_at(
+            MouseEvent {
+                kind: intervening,
+                ..click
+            },
+            &data,
+            &sender,
+            now,
+        );
+        app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+        assert!(receiver.try_recv().is_err());
+        app.mouse_at(
+            MouseEvent {
+                kind: MouseEventKind::Moved,
+                ..click
+            },
+            &data,
+            &sender,
+            now,
+        );
+    }
+    app.mouse_at(click, &data, &sender, now);
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(501));
+    assert!(receiver.try_recv().is_err());
+    app.mouse_enabled = false;
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(510));
+    assert!(receiver.try_recv().is_err());
+    app.mouse_enabled = true;
+    app.help = true;
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(520));
+    assert!(receiver.try_recv().is_err());
+    app.help = false;
+    let mut changed = data.clone();
+    changed.rows_revision += 1;
+    app.mouse_at(click, &data, &sender, now);
+    app.mouse_at(click, &changed, &sender, now + Duration::from_millis(100));
+    assert!(receiver.try_recv().is_err());
+    app.source = Source::Recordings;
+    app.mouse_at(click, &data, &sender, now);
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+    assert!(receiver.try_recv().is_err());
 }
 
 #[test]
@@ -177,9 +372,12 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
             Command::Search(value)
         };
         worker::execute(command, &mut engine, &mut filter, &mut job, &data).unwrap();
-        assert_eq!(Source::restore(&engine.store, true).unwrap(), source);
         assert_eq!(
-            Source::restore(&engine.store, false).unwrap(),
+            Source::restore(&engine.store, crate::config::ResumeMode::Playback).unwrap(),
+            source
+        );
+        assert_eq!(
+            Source::restore(&engine.store, crate::config::ResumeMode::Disabled).unwrap(),
             Source::Stations
         );
     }
@@ -333,7 +531,12 @@ fn expired_catalog_syncs_at_startup_and_can_be_disabled() {
     let worker_view = shared.clone();
     let worker_stop = stop.clone();
     let (_sender, receiver) = command::channel(10);
-    let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle = thread::spawn(move || {
+        worker::run(engine, receiver, worker_view, worker_stop, initial_filter)
+    });
     let deadline = Instant::now() + Duration::from_secs(5);
     while shared
         .lock()
@@ -682,7 +885,12 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
     let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle = thread::spawn(move || {
+        worker::run(engine, receiver, worker_view, worker_stop, initial_filter)
+    });
     sender.send(Command::Sync(false)).unwrap();
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     sender.send(Command::Sync(false)).unwrap();
@@ -1006,7 +1214,11 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
     let (sender, receiver) = command::channel(16);
     let output = shared.clone();
     let worker_stop = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, output, worker_stop));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle =
+        thread::spawn(move || worker::run(engine, receiver, output, worker_stop, initial_filter));
     let wait = |check: &dyn Fn(&View) -> bool, budget: Duration| {
         let deadline = Instant::now() + budget;
         loop {
@@ -1120,7 +1332,10 @@ fn slow_recording_verification_does_not_hold_media_controls_or_shutdown() {
     let (sender, receiver) = command::channel(16);
     let output = shared.clone();
     let flag = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, output, flag));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle = thread::spawn(move || worker::run(engine, receiver, output, flag, initial_filter));
     sender.send(Command::Play(row.stationuuid)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     while !shared.lock().unwrap().status.playing() {

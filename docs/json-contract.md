@@ -21,7 +21,7 @@ Usage failures, including unknown commands, return the error envelope when
 | 3 | Required executable could not be started |
 | 4 | Another media session owns the runtime lock |
 
-Legacy `--json` remains available throughout 0.3.x. Its success shapes are:
+Legacy `--json` remains available in 0.5.0. Its success shapes are:
 
 | Command | Legacy data shape (also the `data` of v2) |
 | --- | --- |
@@ -36,6 +36,7 @@ Legacy `--json` remains available throughout 0.3.x. Its success shapes are:
 | `record` | Array containing the most recent recording |
 | `recordings recover` | `{warnings}` |
 | `recordings remove` | `{id,removed,index_only}` |
+| `devices` | Array of `{name,description}` from the configured mpv |
 | `doctor` | Object with `checks`, `config`, `database` |
 | `play`, `random`, `recordings play/open` | No legacy JSON result; v2 `data:null` |
 
@@ -69,3 +70,13 @@ custom station was removed; `placeholder_kept:true` explicitly indicates that
 an inactive name-only row remains for references or `--keep-references`.
 Malformed equals forms such as `--json-v2=true` are usage errors and also
 receive the v2 error envelope (the option itself is a valueless flag).
+
+Recording objects may include `track`, the title captured when recording was
+requested during playback. It is omitted when unknown, including old records
+and standalone CLI recordings. It remains unchanged when the track changes.
+
+Configured audio-output failures return `audio_device_failed` with a `device`
+parameter (exit 1). Local player startup errors retain their original codes,
+such as `missing_dependency` (exit 3), `player_startup` (exit 1), or
+`normalization_unavailable` (exit 1). These failures end the play request without
+stream fallback or directory refresh; the error code survives normal shutdown.

@@ -55,8 +55,11 @@ impl Source {
             Self::Recordings => "recordings",
         }
     }
-    pub fn restore(store: &crate::store::Store, resume: bool) -> anyhow::Result<Self> {
-        if !resume {
+    pub fn restore(
+        store: &crate::store::Store,
+        resume: crate::config::ResumeMode,
+    ) -> anyhow::Result<Self> {
+        if resume == crate::config::ResumeMode::Disabled {
             return Ok(Self::Stations);
         }
         Ok(match store.meta("pref_source")?.as_deref() {
@@ -65,6 +68,29 @@ impl Source {
             Some("recordings") => Self::Recordings,
             _ => Self::Stations,
         })
+    }
+    pub fn initial_filter(
+        self,
+        store: &crate::store::Store,
+        resume: crate::config::ResumeMode,
+    ) -> anyhow::Result<(Filter, Option<String>)> {
+        let mut filter = Filter {
+            favorites: self == Self::Favorites,
+            history: self == Self::History,
+            recordings: self == Self::Recordings,
+            limit: 100,
+            ..Filter::default()
+        };
+        let mut selected = None;
+        if resume == crate::config::ResumeMode::Selection
+            && self != Self::Recordings
+            && let Some(uuid) = store.meta("pref_last_station")?
+            && let Some(position) = store.station_position(&uuid, &filter)?
+        {
+            filter.offset = position / filter.limit * filter.limit;
+            selected = Some(uuid);
+        }
+        Ok((filter, selected))
     }
     pub const ALL: [Self; 4] = [
         Self::Stations,
@@ -283,6 +309,7 @@ impl Editor {
 }
 
 pub(super) struct App {
+    last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
     jump_progress: usize,
     jump_last: Option<Instant>,
@@ -326,12 +353,14 @@ pub(super) struct App {
     pending_g: bool,
     rows_revision: u64,
     selected_id: Option<String>,
+    restore_selection: Option<String>,
 }
 impl Default for App {
     fn default() -> Self {
         let mut list = ListState::default();
         list.select(Some(0));
         Self {
+            last_click: None,
             jump_binding: "''".into(),
             jump_progress: 0,
             jump_last: None,
@@ -378,10 +407,24 @@ impl Default for App {
             pending_g: false,
             rows_revision: 0,
             selected_id: None,
+            restore_selection: None,
         }
     }
 }
 impl App {
+    pub fn restore(
+        store: &crate::store::Store,
+        resume: crate::config::ResumeMode,
+    ) -> anyhow::Result<Self> {
+        let source = Source::restore(store, resume)?;
+        let (filter, restore_selection) = source.initial_filter(store, resume)?;
+        Ok(Self {
+            source,
+            filter,
+            restore_selection,
+            ..Self::default()
+        })
+    }
     pub fn update_size(&mut self, width: u16, height: u16) {
         self.too_small = width < 40 || height < 16;
     }
@@ -474,6 +517,13 @@ impl App {
         } else {
             Some(self.list.selected().unwrap_or(0).min(len - 1))
         });
+        if view.rows_revision > 0
+            && self.filter == view.filter
+            && let Some(uuid) = self.restore_selection.take()
+            && let Some(index) = view.rows.iter().position(|row| row.stationuuid == uuid)
+        {
+            self.list.select(Some(index));
+        }
         self.selected_id = self.selection_id(view);
     }
     fn selection_id(&self, view: &View) -> Option<String> {
@@ -578,6 +628,7 @@ impl App {
         }
     }
     fn reset_selection(&mut self) {
+        self.restore_selection = None;
         self.jump_selection = None;
         self.list = ListState::default().with_selected(Some(0));
         self.selected_id = None;
@@ -605,6 +656,7 @@ impl App {
         page: Option<crate::cli::Page>,
         sender: &CommandSender,
     ) {
+        self.restore_selection = None;
         self.jump_selection = None;
         self.positions[self.source.index()] = self.list.selected().unwrap_or(0);
         self.source = source;
@@ -858,6 +910,7 @@ impl App {
         false
     }
     pub fn key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
+        self.last_click = None;
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
             || self.too_small && key.code == KeyCode::Char('q')
         {
@@ -1204,14 +1257,41 @@ impl App {
         }
     }
     pub fn mouse(&mut self, event: MouseEvent, view: &View, sender: &CommandSender) {
+        self.mouse_at(event, view, sender, Instant::now());
+    }
+    pub(super) fn mouse_at(
+        &mut self,
+        event: MouseEvent,
+        view: &View,
+        sender: &CommandSender,
+        now: Instant,
+    ) {
         if !self.mouse_enabled
             || self.mode != Mode::Normal
             || self.help
             || self.filter_edit.is_some()
             || self.confirmation.is_some()
         {
+            self.last_click = None;
             return;
         }
+        let previous = match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.last_click.take(),
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self
+                    .last_click
+                    .as_ref()
+                    .is_some_and(|(_, x, y, _, _)| (*x, *y) != (event.column, event.row))
+                {
+                    self.last_click = None;
+                }
+                None
+            }
+            _ => {
+                self.last_click = None;
+                None
+            }
+        };
         let point = ratatui::layout::Position::new(event.column, event.row);
         if self.filter_summary.contains(point)
             && event.kind == MouseEventKind::Down(MouseButton::Left)
@@ -1244,6 +1324,28 @@ impl App {
                             self.selected_id = self.selection_id(view);
                             self.details_scroll = 0;
                             self.inspect_info = false;
+                            if let Some(station) = self.selected(view)
+                                && event.column > rect.x
+                                && event.column < rect.right().saturating_sub(1)
+                            {
+                                let uuid = station.stationuuid.clone();
+                                if previous.is_some_and(|(at, x, y, id, revision)| {
+                                    now.saturating_duration_since(at) <= Duration::from_millis(500)
+                                        && (x, y) == (event.column, event.row)
+                                        && id == uuid
+                                        && revision == view.rows_revision
+                                }) {
+                                    self.send(sender, Command::Play(uuid));
+                                } else {
+                                    self.last_click = Some((
+                                        now,
+                                        event.column,
+                                        event.row,
+                                        uuid,
+                                        view.rows_revision,
+                                    ));
+                                }
+                            }
                         }
                     }
                 }

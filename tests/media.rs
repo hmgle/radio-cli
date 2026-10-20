@@ -30,6 +30,72 @@ fn sample(url: &str) -> Station {
 }
 
 #[test]
+fn direct_url_playback_is_ephemeral_and_failures_leave_no_playing_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into_owned();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine
+        .store
+        .set_meta("pref_last_station", "remembered")
+        .unwrap();
+    engine.play("https://example.com/live").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !engine.status.playing() {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        engine.status.station.as_ref().unwrap().name,
+        "example.com/live"
+    );
+    assert_eq!(engine.store.count().unwrap(), 0);
+    assert_eq!(
+        engine.store.meta("pref_last_station").unwrap().as_deref(),
+        Some("remembered")
+    );
+    let conn = rusqlite::Connection::open(engine.config.data_dir.join("radio.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM history", [], |r| r.get::<_, usize>(0))
+            .unwrap(),
+        0
+    );
+    let error = engine.record_current(None, None).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::EphemeralRecording
+    );
+    engine.stop_playback().unwrap();
+    engine
+        .play(&format!("https://example.com/{}", "long-path-".repeat(20)))
+        .unwrap();
+    let label = &engine.status.station.as_ref().unwrap().name;
+    assert!(label.starts_with("example.com/"));
+    assert_eq!(label.chars().count(), 60);
+    engine.play("https://example.com/fail").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !engine.playback_failed {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!engine.status.playing());
+    assert_eq!(engine.store.count().unwrap(), 0);
+    let error = engine.play("file:///etc/passwd").unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::InvalidUrl
+    );
+}
+
+#[test]
 fn native_formats_are_copied_and_finalized_with_sidecars() {
     for (encoder, format, codec, ext) in [
         ("libmp3lame", "mp3", "mp3", "mp3"),
@@ -40,7 +106,9 @@ fn native_formats_are_copied_and_finalized_with_sidecars() {
         let bytes = support::fixture(encoder, format);
         let server = Server::new(move |_, s| response(s, 200, "application/octet-stream", &bytes));
         let dir = tempfile::tempdir().unwrap();
-        let config = support::config(dir.path());
+        let mut config = support::config(dir.path());
+        config.settings.normalize_loudness = true;
+        config.settings.mpv = "/unused/for-recording/mpv".into();
         let store = Store::open(&dir.path().join("radio.db")).unwrap();
         let station = sample(&server.url);
         store.upsert(&station).unwrap();
@@ -535,10 +603,20 @@ fn mpv_config(dir: &std::path::Path) -> Option<radio_cli::config::Config> {
 
 #[test]
 fn mpv_ipc_reads_icy_titles_and_reaps_child() {
+    exercise_icy_player(false);
+}
+
+#[test]
+fn normalization_preserves_real_mpv_metadata_volume_and_mute() {
+    exercise_icy_player(true);
+}
+
+fn exercise_icy_player(normalize: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let Some(config) = mpv_config(dir.path()) else {
+    let Some(mut config) = mpv_config(dir.path()) else {
         return;
     };
+    config.settings.normalize_loudness = normalize;
     let bytes = support::fixture("libmp3lame", "mp3");
     let server = Server::new(move |request, stream| {
         let icy = request.to_lowercase().contains("icy-metadata: 1");
@@ -605,8 +683,145 @@ fn mpv_ipc_reads_icy_titles_and_reaps_child() {
     }
     player.toggle_pause().unwrap();
     player.volume(-10).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !player
+        .poll()
+        .unwrap()
+        .iter()
+        .any(|event| matches!(event, Event::Volume(70)))
+    {
+        assert!(Instant::now() < deadline, "volume observation missing");
+        thread::sleep(Duration::from_millis(10));
+    }
     drop(player);
     assert_eq!(fs::read_dir(&config.runtime_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn normalization_probes_once_per_executable_even_with_concurrent_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let mut config = support::config(dir.path());
+    config.settings.mpv = mpv.to_string_lossy().into_owned();
+    config.settings.normalize_loudness = true;
+    let stop = Arc::new(AtomicBool::new(false));
+    thread::scope(|scope| {
+        let starts: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| Player::start(&config, "https://example.com/live", &stop).unwrap())
+            })
+            .collect();
+        for start in starts {
+            drop(start.join().unwrap());
+        }
+    });
+    assert_eq!(
+        fs::read_to_string(mpv.with_extension("probes")).unwrap(),
+        "filters\n"
+    );
+    let other_mpv = dir.path().join("other-mpv");
+    fs::copy(&mpv, &other_mpv).unwrap();
+    fs::write(other_mpv.with_extension("no-normalization"), "").unwrap();
+    config.settings.mpv = other_mpv.to_string_lossy().into_owned();
+    for _ in 0..2 {
+        let error = Player::start(&config, "https://example.com/live", &stop)
+            .err()
+            .unwrap();
+        assert_eq!(
+            error
+                .downcast_ref::<radio_cli::error::DomainError>()
+                .unwrap()
+                .code,
+            radio_cli::error::ErrorCode::NormalizationUnavailable
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(other_mpv.with_extension("probes")).unwrap(),
+        "filters\n"
+    );
+}
+
+#[test]
+fn normalization_reports_a_missing_filter_before_starting_playback() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    let mpv = dir.path().join("mpv-no-filter");
+    fs::write(
+        &mpv,
+        "#!/bin/sh\nprintf 'Available audio filters:\\n  lavfi bridge\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&mpv, fs::Permissions::from_mode(0o700)).unwrap();
+    config.settings.mpv = mpv.to_string_lossy().into_owned();
+    config.settings.normalize_loudness = true;
+    let error = Player::start(
+        &config,
+        "https://example.com/live",
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::NormalizationUnavailable
+    );
+    assert!(error.to_string().contains("normalize_loudness = false"));
+    assert_eq!(fs::read_dir(&config.runtime_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn invalid_audio_device_names_the_device_and_device_listing_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut config) = mpv_config(dir.path()) else {
+        return;
+    };
+    // Use a nonexistent backend so no hardware output can be opened.
+    config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+    config.settings.audio_device = Some("radio-test-missing/device".into());
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.play(&server.url).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !engine.playback_failed {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline, "{}", engine.status.message);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        engine.status.message.contains("radio-test-missing/device"),
+        "{}",
+        engine.status.message
+    );
+    assert!(engine.status.message.contains("radio devices"));
+}
+
+#[test]
+fn selected_audio_device_plays_through_real_mpv() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut config) = mpv_config(dir.path()) else {
+        return;
+    };
+    config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+    config.settings.audio_device = Some("null".into());
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+    let mut player =
+        Player::start(&config, &server.url, &Arc::new(AtomicBool::new(false))).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !player
+        .poll()
+        .unwrap()
+        .iter()
+        .any(|event| matches!(event, Event::Playing))
+    {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]

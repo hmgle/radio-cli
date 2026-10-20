@@ -39,6 +39,35 @@ pub struct Recorder {
     stop_requested: bool,
 }
 
+pub struct RecordingMetadata<'a> {
+    pub station: &'a Station,
+    pub track: Option<&'a str>,
+}
+
+fn filename_component(text: &str, max_chars: usize, max_bytes: usize) -> String {
+    let mut result = String::new();
+    for c in text
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .take(max_chars)
+    {
+        if result.len() + c.len_utf8() > max_bytes {
+            break;
+        }
+        result.push(c);
+    }
+    result
+}
+
+fn track_filename_component(text: &str, max_bytes: usize) -> String {
+    let words: Vec<_> = text
+        .split_whitespace()
+        .map(|word| filename_component(word, 40, max_bytes))
+        .filter(|word| !word.is_empty())
+        .collect();
+    filename_component(&words.join("_"), 40, max_bytes)
+}
+
 const ERROR_TAIL_BYTES: usize = 8192;
 
 fn recording_progress(line: &str) -> bool {
@@ -323,6 +352,35 @@ impl Recorder {
         duration: Option<Duration>,
         info: Value,
     ) -> Result<Self> {
+        Self::start_with_metadata(
+            config,
+            store,
+            RecordingMetadata {
+                station,
+                track: None,
+            },
+            url,
+            dir,
+            duration,
+            info,
+        )
+    }
+
+    pub fn start_with_metadata(
+        config: &Config,
+        store: &Store,
+        metadata: RecordingMetadata<'_>,
+        url: &str,
+        dir: &Path,
+        duration: Option<Duration>,
+        info: Value,
+    ) -> Result<Self> {
+        let station = metadata.station;
+        let track = metadata
+            .track
+            .map(crate::clean_text)
+            .map(|title| title.trim().to_owned())
+            .filter(|title| !title.is_empty());
         validate_url(url)?;
         let codec = info["streams"][0]["codec_name"]
             .as_str()
@@ -361,16 +419,19 @@ impl Recorder {
         fs::create_dir_all(&dir)?;
         let dir = fs::canonicalize(dir)?;
         let id = uuid::Uuid::new_v4().to_string();
-        let name: String = station
-            .name
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .take(60)
-            .collect();
+        // Leave byte room for timestamps, suffixes, .part and .json.tmp even
+        // when station and track names contain multibyte Unicode characters.
+        let name = filename_component(&station.name, 60, 180);
+        let track_name = track_filename_component(track.as_deref().unwrap_or(""), 200 - name.len());
+        let label = if track_name.is_empty() {
+            name
+        } else {
+            format!("{name}-{track_name}")
+        };
         let base = format!(
             "{}-{}-{}",
             chrono::Local::now().format("%Y%m%d-%H%M%S"),
-            name,
+            label,
             &id[..8]
         );
         let final_path = dir.join(format!("{base}.{extension}"));
@@ -468,6 +529,7 @@ impl Recorder {
             id,
             stationuuid: station.stationuuid.clone(),
             station_name: station.name.clone(),
+            track,
             source_url_resolved: url.into(),
             started_at: chrono::Utc::now().to_rfc3339(),
             stopped_at: None,
@@ -688,6 +750,16 @@ pub fn parse_duration(value: &str) -> Result<Duration> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn recording_track_is_optional_for_older_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = pending(dir.path());
+        let value = serde_json::to_value(&old).unwrap();
+        assert!(value.get("track").is_none());
+        let decoded: Recording = serde_json::from_value(value).unwrap();
+        assert!(decoded.track.is_none());
+    }
+
     fn pending(dir: &Path) -> Recording {
         let partial = dir.join("test.mp3.part");
         fs::write(&partial, b"verified audio").unwrap();
@@ -695,6 +767,7 @@ mod tests {
             id: uuid::Uuid::new_v4().to_string(),
             stationuuid: uuid::Uuid::new_v4().to_string(),
             station_name: "test".into(),
+            track: None,
             source_url_resolved: "https://example.com/audio".into(),
             started_at: "2026-01-01T00:00:00Z".into(),
             stopped_at: Some("2026-01-01T00:00:01Z".into()),

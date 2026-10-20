@@ -515,7 +515,15 @@ pub(super) fn execute(
         Command::Refresh => request_refresh(view),
         Command::Backups(uuid) => load_backups(&engine.store, &uuid, view),
         Command::Info(uuid, request) => {
-            let result = engine.store.station(&uuid);
+            let result = match engine
+                .status
+                .station
+                .as_ref()
+                .filter(|s| s.stationuuid == uuid)
+            {
+                Some(station) => Ok(station.clone()),
+                None => engine.store.station(&uuid),
+            };
             load_backups(&engine.store, &uuid, view);
             let mut data = view.lock().unwrap();
             data.inspected_request = request;
@@ -546,16 +554,9 @@ pub(super) fn run(
     commands: CommandReceiver,
     view: Arc<Mutex<View>>,
     stop: Arc<AtomicBool>,
+    mut filter: Filter,
 ) -> Result<()> {
     engine.enable_background_media();
-    let source = super::state::Source::restore(&engine.store, engine.config.settings.resume)?;
-    let mut filter = Filter {
-        favorites: source == super::state::Source::Favorites,
-        history: source == super::state::Source::History,
-        recordings: source == super::state::Source::Recordings,
-        limit: 100,
-        ..Filter::default()
-    };
     refresh(&engine, &filter, &view)?;
     if let Err(error) = engine.resume_last_station() {
         view.lock()

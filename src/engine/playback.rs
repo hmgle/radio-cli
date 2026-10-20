@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SourceKind {
+    Catalog,
+    Ephemeral,
+    Local,
+}
+
 pub(super) struct PlaybackController {
     pub(super) generation: u64,
     pub(super) refresh_task: Option<(u64, String, Background<Option<Station>>)>,
@@ -12,8 +19,8 @@ pub(super) struct PlaybackController {
     pub(super) tried: Vec<String>,
     pub(super) refreshed: bool,
     pub(super) confirmed: bool,
-    pub(super) history_recorded: bool,
-    pub(super) local_playback: bool,
+    pub(super) session_started: bool,
+    pub(super) source_kind: SourceKind,
     pub(super) local_recording_id: Option<String>,
     pub(super) reconnect_attempts: usize,
     pub(super) reconnect_due: Option<Instant>,
@@ -21,6 +28,7 @@ pub(super) struct PlaybackController {
     pub(super) started: Instant,
     pub(super) random_filter: Option<Filter>,
     pub(super) random_tried: Vec<String>,
+    pub(super) failure: Option<DomainError>,
 }
 
 impl PlaybackController {
@@ -28,11 +36,33 @@ impl PlaybackController {
         &mut self,
         session: &mut Session,
         recording: &mut RecordingController,
-        uuid: &str,
+        target: &str,
     ) -> Result<()> {
         self.random_filter = None;
         self.random_tried.clear();
-        self.play_station(session, recording, session.store.station(uuid)?)
+        if uuid::Uuid::parse_str(target).is_ok() {
+            return self.play_station(session, recording, session.store.station(target)?);
+        }
+        crate::config::validate_url(target)?;
+        let url = reqwest::Url::parse(target)?;
+        let station = Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: crate::clean_text(&format!("{}{}", url.host_str().unwrap_or(""), url.path()))
+                .chars()
+                .take(60)
+                .collect(),
+            url: target.into(),
+            custom: true,
+            active: true,
+            ..Station::default()
+        };
+        self.play_source(
+            session,
+            recording,
+            station,
+            vec![target.into()],
+            SourceKind::Ephemeral,
+        )
     }
 
     /// TUI-only opt-in restoration; CLI media commands remain explicit.
@@ -41,7 +71,7 @@ impl PlaybackController {
         session: &mut Session,
         recording: &mut RecordingController,
     ) -> Result<()> {
-        if session.config.settings.resume
+        if session.config.settings.resume == crate::config::ResumeMode::Playback
             && let Some(uuid) = session.store.meta("pref_last_station")?
             && let Ok(station) = session.store.station(&uuid)
             && !station
@@ -60,7 +90,7 @@ impl PlaybackController {
         station: Station,
     ) -> Result<()> {
         let candidates = station.stream_candidates(&session.store.backups(&station.stationuuid)?);
-        self.play_source(session, recording, station, candidates, false)
+        self.play_source(session, recording, station, candidates, SourceKind::Catalog)
     }
 
     pub(super) fn play_recording(
@@ -86,7 +116,7 @@ impl PlaybackController {
             recording,
             station,
             vec![path.to_string_lossy().into_owned()],
-            true,
+            SourceKind::Local,
         )?;
         self.local_recording_id = Some(id.into());
         Ok(())
@@ -98,7 +128,7 @@ impl PlaybackController {
         recording: &mut RecordingController,
         station: Station,
         candidates: Vec<String>,
-        local: bool,
+        source_kind: SourceKind,
     ) -> Result<()> {
         self.generation = self.generation.wrapping_add(1);
         self.refresh_task = None;
@@ -108,14 +138,15 @@ impl PlaybackController {
         self.candidates.clear();
         self.refreshed = false;
         self.confirmed = false;
-        self.history_recorded = false;
-        self.local_playback = local;
+        self.session_started = false;
+        self.source_kind = source_kind;
         self.local_recording_id = None;
         self.reconnect_attempts = 0;
         self.reconnect_window.clear();
         self.reconnect_due = None;
         recording.clear_finished(session);
         session.playback_failed = false;
+        self.failure = None;
         session.status.title.clear();
         session.status.muted = false;
         session.status.playback_state = PlaybackState::Idle;
@@ -147,7 +178,7 @@ impl PlaybackController {
     ) -> Result<()> {
         session.config.settings.volume = session.status.volume;
         if session.background_media {
-            let local = self.local_playback;
+            let local = self.source_kind == SourceKind::Local;
             let config = session.config.clone();
             let url = self.url.clone();
             self.player_start = Some((
@@ -162,7 +193,7 @@ impl PlaybackController {
                 })?,
             ));
         } else {
-            self.player = Some(if self.local_playback {
+            self.player = Some(if self.source_kind == SourceKind::Local {
                 Player::start_local(
                     &session.config,
                     std::path::Path::new(&self.url),
@@ -205,7 +236,7 @@ impl PlaybackController {
         }
         // Successful restarts renew the outage budget, but a flapping stream
         // cannot restart indefinitely (at most six retries per minute).
-        if self.history_recorded
+        if self.session_started
             && self.reconnect_attempts < BACKOFF.len()
             && self.reconnect_window.len() < 6
         {
@@ -290,6 +321,24 @@ impl PlaybackController {
         self.exhausted(session, recording, reason)
     }
 
+    fn player_failed(
+        &mut self,
+        session: &mut Session,
+        recording: &mut RecordingController,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        // Local player and device failures cannot be repaired by changing
+        // stations, retrying streams, or refreshing the network directory.
+        let reason = format!("{error:#}");
+        self.failure = error.downcast_ref::<DomainError>().cloned();
+        self.refresh_task = None;
+        self.candidates.clear();
+        self.random_filter = None;
+        self.retire_player(session, recording);
+        recording.stop_recording(session, self, Some(&reason))?;
+        self.exhausted(session, recording, &reason)
+    }
+
     pub(super) fn exhausted(
         &mut self,
         session: &mut Session,
@@ -322,7 +371,7 @@ impl PlaybackController {
         if self.reconnect_due.is_some_and(|due| Instant::now() >= due) {
             self.reconnect_due = None;
             if let Err(error) = self.start_url(session, recording) {
-                self.stream_failed(session, recording, &format!("{error:#}"))?;
+                self.player_failed(session, recording, error)?;
             }
         }
         if let Some(player) = self.player.as_mut() {
@@ -331,6 +380,10 @@ impl PlaybackController {
                 Ok(events) => {
                     for event in events {
                         match event {
+                            Event::Failed(error) => {
+                                self.player_failed(session, recording, error.into())?;
+                                break;
+                            }
                             Event::Playing => {
                                 self.reconnect_attempts = 0;
                                 self.reconnect_due = None;
@@ -339,14 +392,16 @@ impl PlaybackController {
                                 if !self.confirmed {
                                     self.confirmed = true;
                                     if let Some(s) = &session.status.station
-                                        && !self.history_recorded
-                                        && !self.local_playback
+                                        && !self.session_started
+                                        && self.source_kind != SourceKind::Local
                                     {
-                                        session.store.played(&s.stationuuid)?;
-                                        session
-                                            .store
-                                            .set_meta("pref_last_station", &s.stationuuid)?;
-                                        self.history_recorded = true;
+                                        if self.source_kind != SourceKind::Ephemeral {
+                                            session.store.played(&s.stationuuid)?;
+                                            session
+                                                .store
+                                                .set_meta("pref_last_station", &s.stationuuid)?;
+                                        }
+                                        self.session_started = true;
                                         if !s.custom
                                             && self
                                                 .click_task
@@ -383,7 +438,9 @@ impl PlaybackController {
                                 }
                             }
                             Event::End(reason) if reason == "redirect" => {}
-                            Event::End(reason) if self.local_playback && reason == "eof" => {
+                            Event::End(reason)
+                                if self.source_kind == SourceKind::Local && reason == "eof" =>
+                            {
                                 self.stop_playback(session, recording)?;
                                 session.status.message =
                                     crate::t!("playback_local_finished").into();
@@ -526,11 +583,7 @@ impl PlaybackController {
                         self.started = Instant::now();
                     }
                     Err(error) => {
-                        self.stream_failed(
-                            session,
-                            recording,
-                            &crate::t!("playback_start_failed", "reason" => format!("{error:#}")),
-                        )?;
+                        self.player_failed(session, recording, error)?;
                     }
                 }
             }

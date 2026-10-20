@@ -106,6 +106,9 @@ pub struct Recording {
     pub id: String,
     pub stationuuid: String,
     pub station_name: String,
+    /// Track title captured when recording was requested; absent for old records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<String>,
     pub source_url_resolved: String,
     pub started_at: String,
     pub stopped_at: Option<String>,

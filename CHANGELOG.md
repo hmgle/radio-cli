@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-20
+
+- Play HTTP(S) stream URLs directly from the CLI or TUI without saving stations,
+  history, or resume preferences. Temporary streams support inspection; save
+  them as custom stations before recording. Bound display names to 60 characters.
+- Play a station by double-clicking its list row within 500 ms. Preserve
+  single-click selection, including border clicks, and cancel gestures after
+  movement, keyboard input, popups, or row changes.
+- Select an mpv output with `audio_device` and enumerate current devices with
+  `radio devices`, including legacy JSON and versioned JSON responses.
+  Preserve `audio_device_failed` and its device parameter through CLI shutdown.
+- Add opt-in `normalize_loudness` using a short-window mpv dynaudnorm filter.
+  Probe support once per configured executable per process, sharing concurrent
+  probes; keep recordings as unmodified stream copies.
+- Accept `resume = "selection"` to restore the source and last station page
+  without starting audio. Share the startup query with the TUI worker and consume
+  the restore target after the first matching page, even when it is absent.
+- Freeze the known track title when recording is requested and include it in
+  the filename and optional `track` metadata. Collapse track-word whitespace to
+  underscores and bound UTF-8 filename bytes; keep old names when titles are unknown.
+- End local player startup and configured-device failures without retrying
+  stream URLs, random stations, or directory refreshes. This includes transient
+  IPC/socket startup timeouts: retrying playback requires a new play request.
+  Stream connection failures retain candidate fallback and bounded reconnection.
 - Support basic CLI/TUI operation on macOS, with a macOS CI job and source
   installation instructions. Use the native directory opener and make terminal
   tests portable. Linux remains the primary platform and release target;
@@ -20,6 +44,16 @@
 - Repair ICY titles whose UTF-8 bytes were re-encoded as Latin-1, when the
   entire conversion produces valid UTF-8. Apply this before filtering control
   characters; leave ordinary file-title tags unchanged.
+
+### Compatibility
+
+- Existing schema-v2 databases and boolean `resume` settings remain supported;
+  `false` remains the default. `normalize_loudness` defaults to false, and absent
+  or empty `audio_device` preserves mpv automatic output selection.
+- Recording metadata adds an optional `track`; old records remain readable.
+  JSON device listing adds a new command without changing existing success shapes.
+- Prebuilt downloads remain Linux x86_64 musl; macOS is supported from source.
+  External mpv and FFmpeg/ffprobe remain required on both platforms.
 
 ## 0.4.0 — 2026-10-19
 

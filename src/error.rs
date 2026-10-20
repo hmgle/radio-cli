@@ -54,6 +54,9 @@ codes! {
     RecordingSourcesFailed => ("recording_sources_failed", 1),
     RuntimePathTooLong => ("runtime_path_too_long", 1),
     PlayerStartup => ("player_startup", 1),
+    AudioDeviceFailed => ("audio_device_failed", 1),
+    AudioDevicesUnavailable => ("audio_devices_unavailable", 1),
+    NormalizationUnavailable => ("normalization_unavailable", 1),
     PlayerClosed => ("player_closed", 1),
     PlayerMessageTooLarge => ("player_message_too_large", 1),
     PlayerExited => ("player_exited", 1),
@@ -67,6 +70,7 @@ codes! {
     RecordingInUse => ("recording_in_use", 1),
     InsufficientSpace => ("insufficient_space", 1),
     LocalRecording => ("local_recording", 1),
+    EphemeralRecording => ("ephemeral_recording", 1),
 }
 
 #[derive(Debug, Clone)]

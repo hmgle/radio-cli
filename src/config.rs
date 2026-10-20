@@ -15,10 +15,12 @@ pub struct Settings {
     pub theme: Theme,
     pub recording_min_free_mb: u64,
     pub auto_sync_days: u16,
-    pub resume: bool,
+    pub resume: ResumeMode,
     pub language: Option<String>,
     pub api_url: Option<String>,
     pub mpv: String,
+    pub normalize_loudness: bool,
+    pub audio_device: Option<String>,
     pub ffmpeg: String,
     pub ffprobe: String,
     pub connect_timeout_secs: u64,
@@ -37,10 +39,12 @@ impl Default for Settings {
             theme: Theme::Default,
             recording_min_free_mb: 16,
             auto_sync_days: 7,
-            resume: false,
+            resume: ResumeMode::Disabled,
             language: None,
             api_url: None,
             mpv: "mpv".into(),
+            normalize_loudness: false,
+            audio_device: None,
             ffmpeg: "ffmpeg".into(),
             ffprobe: "ffprobe".into(),
             connect_timeout_secs: 5,
@@ -49,6 +53,43 @@ impl Default for Settings {
             probe_timeout_secs: 5,
             volume: 80,
             recording_dir: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ResumeMode {
+    #[default]
+    Disabled,
+    Selection,
+    Playback,
+}
+
+impl Serialize for ResumeMode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Disabled => serializer.serialize_bool(false),
+            Self::Playback => serializer.serialize_bool(true),
+            Self::Selection => serializer.serialize_str("selection"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ResumeMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Value {
+            Boolean(bool),
+            Text(String),
+        }
+        match Value::deserialize(deserializer)? {
+            Value::Boolean(false) => Ok(Self::Disabled),
+            Value::Boolean(true) => Ok(Self::Playback),
+            Value::Text(value) if value == "selection" => Ok(Self::Selection),
+            _ => Err(serde::de::Error::custom(
+                "expected false, true, or \"selection\"",
+            )),
         }
     }
 }
@@ -196,6 +237,10 @@ impl Config {
                 .checked_mul(1024 * 1024)
                 .is_none()
             || settings.volume > 100
+            || settings
+                .audio_device
+                .as_ref()
+                .is_some_and(|value| value.chars().any(char::is_control))
             || settings.connect_timeout_secs == 0
             || settings.request_timeout_secs == 0
             || settings.playback_timeout_secs == 0
@@ -249,6 +294,23 @@ pub fn validate_url(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_accepts_booleans_or_selection_and_round_trips() {
+        for (value, expected) in [
+            ("false", ResumeMode::Disabled),
+            ("true", ResumeMode::Playback),
+            ("\"selection\"", ResumeMode::Selection),
+        ] {
+            let settings: Settings = toml::from_str(&format!("resume = {value}")).unwrap();
+            assert_eq!(settings.resume, expected);
+            let saved = toml::to_string(&settings).unwrap();
+            assert_eq!(toml::from_str::<Settings>(&saved).unwrap().resume, expected);
+        }
+        for value in ["\"select\"", "\"true\"", "1", "[]"] {
+            assert!(toml::from_str::<Settings>(&format!("resume = {value}")).is_err());
+        }
+    }
 
     #[test]
     fn jump_bindings_accept_sequences_and_named_keys_but_reserve_exit() {

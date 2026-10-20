@@ -6,13 +6,14 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     fs,
     io::{Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -24,6 +25,7 @@ pub enum Event {
     Playing,
     Title(String),
     End(String),
+    Failed(DomainError),
     Paused(bool),
     Volume(u8),
     Muted(bool),
@@ -34,6 +36,68 @@ pub struct Player {
     stream: UnixStream,
     socket: PathBuf,
     buffer: Vec<u8>,
+    audio_device: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AudioDevice {
+    pub name: String,
+    pub description: String,
+}
+
+fn parse_audio_devices(output: &str) -> Vec<AudioDevice> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim().strip_prefix('\'')?;
+            let (name, description) = line.rsplit_once("' (")?;
+            Some(AudioDevice {
+                name: name.into(),
+                description: description.strip_suffix(')')?.into(),
+            })
+        })
+        .collect()
+}
+
+pub fn audio_devices(config: &Config, stop: &Arc<AtomicBool>) -> Result<Vec<AudioDevice>> {
+    let output = crate::process::output(
+        Command::new(&config.settings.mpv).args(["--no-config", "--audio-device=help"]),
+        Duration::from_secs(3),
+        stop,
+    )?;
+    let devices = parse_audio_devices(&String::from_utf8_lossy(&output));
+    if devices.is_empty() {
+        bail!(DomainError::new(ErrorCode::AudioDevicesUnavailable));
+    }
+    Ok(devices)
+}
+
+fn supports_normalization(config: &Config, stop: &Arc<AtomicBool>) -> Result<bool> {
+    type Probe = Arc<Mutex<Option<bool>>>;
+    static PROBES: OnceLock<Mutex<HashMap<String, Probe>>> = OnceLock::new();
+    let probe = PROBES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap()
+        .entry(config.settings.mpv.clone())
+        .or_default()
+        .clone();
+    // Serialize only probes for this executable, including concurrent starts.
+    // Failed or cancelled subprocesses remain retryable on the next start.
+    let mut cached = probe.lock().unwrap();
+    if let Some(supported) = *cached {
+        return Ok(supported);
+    }
+    let filters = crate::process::output(
+        Command::new(&config.settings.mpv).args(["--no-config", "--af=help"]),
+        Duration::from_secs(3),
+        stop,
+    )?;
+    let supported = String::from_utf8_lossy(&filters)
+        .lines()
+        .any(|line| line.split_whitespace().next() == Some("dynaudnorm"));
+    *cached = Some(supported);
+    Ok(supported)
 }
 
 fn metadata_title(metadata: &Value) -> String {
@@ -74,6 +138,51 @@ fn ipc_socket_path(runtime_dir: &Path) -> PathBuf {
     std::env::temp_dir().join(format!("mpv-{id}.sock"))
 }
 
+fn playback_command(config: &Config, socket: &Path) -> Command {
+    let mut command = Command::new(&config.settings.mpv);
+    command
+        .args([
+            "--no-config",
+            "--load-scripts=no",
+            "--no-video",
+            "--no-audio-display",
+            "--terminal=no",
+            "--input-default-bindings=no",
+            "--idle=yes",
+            "--keep-open=no",
+            "--cache=yes",
+            "--cache-secs=3",
+            "--demuxer-max-bytes=2097152",
+            // Keep recent packets until playback observes timed ICY metadata.
+            // Disabling the back buffer can lose one-shot title updates.
+            "--demuxer-max-back-bytes=524288",
+            "--demuxer-donate-buffer=no",
+            "--audio-buffer=0.2",
+        ])
+        .arg(format!("--user-agent={USER_AGENT}"))
+        .arg(format!("--volume={}", config.settings.volume))
+        .arg(format!(
+            "--network-timeout={}",
+            config.settings.playback_timeout_secs
+        ))
+        .arg(format!("--input-ipc-server={}", socket.display()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if config.settings.normalize_loudness {
+        command.arg("--af=dynaudnorm=f=150:g=5");
+    }
+    if let Some(device) = config
+        .settings
+        .audio_device
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        command.arg(format!("--audio-device={device}"));
+    }
+    command
+}
+
 impl Player {
     pub fn start(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
         validate_url(url)?;
@@ -98,36 +207,10 @@ impl Player {
             // too deep; surface the path so the JSON report shows the culprit.
             bail!(DomainError::new(ErrorCode::RuntimePathTooLong).with("path", socket.display()));
         }
-        let mut command = Command::new(&config.settings.mpv);
-        command
-            .args([
-                "--no-config",
-                "--load-scripts=no",
-                "--no-video",
-                "--no-audio-display",
-                "--terminal=no",
-                "--input-default-bindings=no",
-                "--idle=yes",
-                "--keep-open=no",
-                "--cache=yes",
-                "--cache-secs=3",
-                "--demuxer-max-bytes=2097152",
-                // Keep recent packets until playback observes timed ICY metadata.
-                // Disabling the back buffer can lose one-shot title updates.
-                "--demuxer-max-back-bytes=524288",
-                "--demuxer-donate-buffer=no",
-                "--audio-buffer=0.2",
-            ])
-            .arg(format!("--user-agent={USER_AGENT}"))
-            .arg(format!("--volume={}", config.settings.volume))
-            .arg(format!(
-                "--network-timeout={}",
-                config.settings.playback_timeout_secs
-            ))
-            .arg(format!("--input-ipc-server={}", socket.display()))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        if config.settings.normalize_loudness && !supports_normalization(config, stop)? {
+            bail!(DomainError::new(ErrorCode::NormalizationUnavailable));
+        }
+        let command = playback_command(config, &socket);
         let mut child = crate::process::spawn_owned(command)
             .context(DomainError::new(ErrorCode::MissingDependency).with("program", "mpv"))?;
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -153,6 +236,7 @@ impl Player {
             stream,
             socket,
             buffer: vec![],
+            audio_device: config.settings.audio_device.clone(),
         };
         for (id, property) in [(1, "metadata"), (2, "pause"), (3, "volume"), (4, "mute")] {
             player.command(json!(["observe_property", id, property]))?;
@@ -181,9 +265,13 @@ impl Player {
     pub fn poll(&mut self) -> Result<Vec<Event>> {
         let mut out = vec![];
         let mut buf = [0u8; 8192];
+        let mut closed = false;
         loop {
             match self.stream.read(&mut buf) {
-                Ok(0) => bail!(DomainError::new(ErrorCode::PlayerClosed)),
+                Ok(0) => {
+                    closed = true;
+                    break;
+                }
                 Ok(n) => self.buffer.extend_from_slice(&buf[..n]),
                 Err(e)
                     if matches!(
@@ -209,9 +297,24 @@ impl Player {
             };
             match value["event"].as_str().unwrap_or("") {
                 "playback-restart" => out.push(Event::Playing),
-                "end-file" => out.push(Event::End(
-                    value["reason"].as_str().unwrap_or("unknown").into(),
-                )),
+                "end-file" => {
+                    if value["file_error"]
+                        .as_str()
+                        .is_some_and(|error| error.contains("audio output"))
+                        && let Some(device) = self
+                            .audio_device
+                            .as_deref()
+                            .filter(|s| !s.trim().is_empty())
+                    {
+                        out.push(Event::Failed(
+                            DomainError::new(ErrorCode::AudioDeviceFailed).with("device", device),
+                        ));
+                        continue;
+                    }
+                    out.push(Event::End(
+                        value["reason"].as_str().unwrap_or("unknown").into(),
+                    ));
+                }
                 "property-change" => match value["name"].as_str().unwrap_or("") {
                     "metadata" => {
                         out.push(Event::Title(metadata_title(&value["data"])));
@@ -226,7 +329,12 @@ impl Player {
                 _ => {}
             }
         }
-        if self.child.try_wait()?.is_some() {
+        // Deliver buffered end-file errors even when mpv closes IPC or exits
+        // immediately afterward; otherwise their structured reason is lost.
+        if out.is_empty() && closed {
+            bail!(DomainError::new(ErrorCode::PlayerClosed));
+        }
+        if out.is_empty() && self.child.try_wait()?.is_some() {
             bail!(DomainError::new(ErrorCode::PlayerExited));
         }
         Ok(out)
@@ -277,8 +385,83 @@ mod socket_path_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::metadata_title;
+    use super::{metadata_title, parse_audio_devices, playback_command};
     use serde_json::json;
+
+    #[test]
+    fn device_names_preserve_backend_syntax_and_optional_arguments() {
+        let parsed = parse_audio_devices(
+            "List of detected audio devices:\n  'auto' (Autoselect device)\n  'alsa/plughw:CARD=USB,DEV=0' (Listener's USB (stereo))\nignored\n",
+        );
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[1].name, "alsa/plughw:CARD=USB,DEV=0");
+        assert_eq!(parsed[1].description, "Listener's USB (stereo)");
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::load(None, Some(dir.path()), None).unwrap();
+        let socket = std::path::Path::new("/tmp/radio.sock");
+        let original: Vec<_> = playback_command(&config, socket)
+            .get_args()
+            .map(|a| a.to_owned())
+            .collect();
+        config.settings.audio_device = Some(String::new());
+        assert_eq!(
+            playback_command(&config, socket)
+                .get_args()
+                .collect::<Vec<_>>(),
+            original
+        );
+        config.settings.audio_device = Some(parsed[1].name.clone());
+        let command = playback_command(&config, socket);
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(&args[..original.len()], original);
+        assert_eq!(
+            args.last().unwrap(),
+            &"--audio-device=alsa/plughw:CARD=USB,DEV=0"
+        );
+    }
+
+    #[test]
+    fn normalization_changes_only_the_opt_in_filter_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::load(None, Some(dir.path()), None).unwrap();
+        let socket = std::path::Path::new("/tmp/radio-test.sock");
+        let command = playback_command(&config, socket);
+        let original: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            original,
+            vec![
+                "--no-config",
+                "--load-scripts=no",
+                "--no-video",
+                "--no-audio-display",
+                "--terminal=no",
+                "--input-default-bindings=no",
+                "--idle=yes",
+                "--keep-open=no",
+                "--cache=yes",
+                "--cache-secs=3",
+                "--demuxer-max-bytes=2097152",
+                "--demuxer-max-back-bytes=524288",
+                "--demuxer-donate-buffer=no",
+                "--audio-buffer=0.2",
+                &format!("--user-agent={}", crate::USER_AGENT),
+                "--volume=80",
+                "--network-timeout=12",
+                "--input-ipc-server=/tmp/radio-test.sock",
+            ]
+        );
+        config.settings.normalize_loudness = true;
+        let command = playback_command(&config, socket);
+        let enabled: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(&enabled[..original.len()], original);
+        assert_eq!(&enabled[original.len()..], ["--af=dynaudnorm=f=150:g=5"]);
+    }
 
     #[test]
     fn icy_titles_repair_latin1_mojibake_before_sanitizing() {

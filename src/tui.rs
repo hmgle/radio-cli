@@ -58,12 +58,15 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         crossterm::style::force_color_output(false);
     }
     let engine = Engine::new(config, stop.clone())?;
-    let source = state::Source::restore(&engine.store, engine.config.settings.resume)?;
+    let mut app = App::restore(&engine.store, engine.config.settings.resume)?;
     let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
     let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
+    let initial_filter = app.filter.clone();
+    let handle = thread::spawn(move || {
+        worker::run(engine, receiver, worker_view, worker_stop, initial_filter)
+    });
     let result = (|| -> Result<()> {
         let _screen = Screen::enter(mouse)?;
         let writer = output::TerminalWriter::new(io::stdout(), theme == crate::config::Theme::Mono);
@@ -72,17 +75,12 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             io::stdout(),
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
         )?;
-        let mut app = App::default();
         app.mouse_enabled = mouse;
         app.jump_binding = jump_binding;
         if let Err(error) = app.editor.load_history(history_path) {
             app.message = format!("历史加载失败: {error}");
         }
         app.theme = theme;
-        app.source = source;
-        app.filter.favorites = source == state::Source::Favorites;
-        app.filter.history = source == state::Source::History;
-        app.filter.recordings = source == state::Source::Recordings;
         let mut revision = 0;
         let mut immediate_revision = 0;
         let mut last_draw = Instant::now();

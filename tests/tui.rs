@@ -22,6 +22,13 @@ struct Tui {
 }
 impl Tui {
     fn start(dir: &std::path::Path, api: &str) -> Self {
+        Self::start_with_config(dir, api, None)
+    }
+    fn start_with_config(
+        dir: &std::path::Path,
+        api: &str,
+        config: Option<&std::path::Path>,
+    ) -> Self {
         let (master, slave, original) = unsafe {
             let (mut master, mut slave) = (0, 0);
             let mut size = libc::winsize {
@@ -49,7 +56,11 @@ impl Tui {
                 original,
             )
         };
-        let child = Command::new(env!("CARGO_BIN_EXE_radio"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_radio"));
+        if let Some(config) = config {
+            command.arg("--config").arg(config);
+        }
+        let child = command
             .arg("--data-dir")
             .arg(dir)
             .args(["--api-url", api, "tui"])
@@ -70,6 +81,9 @@ impl Tui {
         self.master.write_all(text.as_bytes()).unwrap();
     }
     fn wait(&mut self, mut condition: impl FnMut() -> bool) {
+        self.wait_output(|_| condition());
+    }
+    fn wait_output(&mut self, mut condition: impl FnMut(&[u8]) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut output = vec![];
         let mut buffer = [0; 16384];
@@ -80,7 +94,7 @@ impl Tui {
                 }
                 output.extend_from_slice(&buffer[..n]);
             }
-            if condition() {
+            if condition(&output) {
                 return;
             }
             assert!(
@@ -130,6 +144,37 @@ impl Drop for Tui {
         }
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn double_click_station_row_starts_playback_in_real_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let station = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "Mouse station".into(),
+        url: "https://example.com/live".into(),
+        active: true,
+        custom: true,
+        ..Station::default()
+    };
+    store.upsert(&station).unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let config_path = dir.path().join("config.toml");
+    fs::write(
+        &config_path,
+        toml::to_string(&serde_json::json!({"mpv": mpv})).unwrap(),
+    )
+    .unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&config_path));
+    tui.wait_output(|output| output.windows(5).any(|s| s == b"Mouse"));
+    // At 120x30, the first station row is at (19, 6), zero based.
+    tui.send("\x1b[<0;20;7M\x1b[<0;20;7m\x1b[<0;20;7M\x1b[<0;20;7m");
+    tui.wait(|| {
+        store.meta("pref_last_station").unwrap().as_deref() == Some(station.stationuuid.as_str())
+    });
+    tui.quit();
 }
 
 #[test]
@@ -183,5 +228,33 @@ fn command_mode_sync_add_search_favorite_and_quit_work_in_real_terminal() {
     tui.send(":focus details\r");
     tui.send(":help\r");
     tui.send("?");
+    tui.quit();
+}
+
+#[test]
+fn direct_url_command_plays_and_inspects_without_saving_a_station() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let config_path = dir.path().join("config.toml");
+    fs::write(
+        &config_path,
+        toml::to_string(&serde_json::json!({"mpv": mpv})).unwrap(),
+    )
+    .unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&config_path));
+    tui.wait_output(|output| output.windows(6).any(|s| s == b"NORMAL"));
+    tui.send(":play https://example.com/audition\r");
+    let log = mpv.with_extension("commands");
+    tui.wait(|| {
+        fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("/audition")
+    });
+    tui.send(":current\r");
+    tui.wait_output(|output| String::from_utf8_lossy(output).contains("example.com/audition"));
+    assert_eq!(store.count().unwrap(), 0);
+    assert!(store.meta("pref_last_station").unwrap().is_none());
     tui.quit();
 }

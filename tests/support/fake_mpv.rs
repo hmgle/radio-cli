@@ -3,6 +3,17 @@ use std::{fs::{self, OpenOptions}, io::{BufRead, BufReader, Write}, os::unix::ne
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     if args.iter().any(|s| s == "--version") { println!("fake mpv"); return; }
+    if args.iter().any(|s| s == "--af=help") {
+        let exe = std::env::current_exe().unwrap();
+        let mut log = OpenOptions::new().create(true).append(true).open(exe.with_extension("probes")).unwrap();
+        writeln!(log, "filters").unwrap();
+        if !exe.with_extension("no-normalization").exists() { println!("  dynaudnorm : Dynamic Audio Normalizer"); }
+        return;
+    }
+    if args.iter().any(|s| s == "--audio-device=help") {
+        println!("List of detected audio devices:\n  'auto' (Autoselect device)\n  'test/headphones' (Test headphones)");
+        return;
+    }
     let socket = args.iter().find_map(|s| s.strip_prefix("--input-ipc-server=")).unwrap();
     let path = std::env::current_exe().unwrap().with_extension("commands");
     let mut log = OpenOptions::new().create(true).append(true).open(path).unwrap();
@@ -16,7 +27,11 @@ fn main() {
         writeln!(log,"{line}").unwrap(); log.flush().unwrap();
         if line.contains("\"quit\"") { break; }
         let event = if line.contains("\"loadfile\"") {
-            if line.contains("/fail") { "{\"event\":\"end-file\",\"reason\":\"error\"}".to_owned() }
+            if args.iter().any(|s| s == "--audio-device=test/fail") {
+                writeln!(stream, "{{\"event\":\"end-file\",\"reason\":\"error\",\"file_error\":\"audio output initialization failed\"}}").unwrap();
+                break;
+            }
+            else if line.contains("/fail") { "{\"event\":\"end-file\",\"reason\":\"error\"}".to_owned() }
             else { "{\"event\":\"playback-restart\"}".to_owned() }
         } else if line.contains("\"cycle\",\"pause\"") {
             paused = !paused;

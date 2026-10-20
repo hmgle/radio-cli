@@ -70,6 +70,7 @@ radio search --tag 'public radio' --limit 100 --offset 100
 radio --json search jazz
 radio info <UUID>
 radio play <UUID>
+radio play https://example.com/live.mp3
 radio random --country CN
 radio favorites add <UUID>
 radio favorites list
@@ -88,6 +89,10 @@ Use `--json-v2` for atomic success/error envelopes and stable error codes; legac
 Recordings support `recordings play ID`, `recordings remove ID [--index-only]`,
 and `recordings open`; TUI Enter / D / o / e provide playback, confirmed deletion,
 directory opening and expanded errors. Disk checks reserve 16 MiB by default.
+
+`play` also accepts an HTTP(S) stream URL; TUI `:play URL` does the same.
+Direct URLs are temporary: they are never added to the catalog or history,
+and do not replace the saved last station. Add a station first to record it.
 
 Stations are identified by their full Radio Browser UUID; custom stations get a local UUID. Favorites, recently played entries, and custom addresses are never overwritten by a catalog sync. A favorite that has disappeared from the catalog can still be played. History keeps the last 1,000 successful playbacks; the interface aggregates it by station to show recent listening.
 
@@ -115,7 +120,7 @@ TUI keys:
 | `?` | Open help or current failure details |
 | `q` / `Ctrl-C` | Finalize recordings and quit |
 
-The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and the wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
+The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and select rows; double-click a station row to play it. The wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
 
 Inside the TUI, `:sync` runs a background sync, `:sync-cancel` cancels the task, `:current` shows full details of the current station, and `:record --duration 30m` schedules a timed recording of the current station. Commands support quoting, Tab completion, and history; see the [TUI guide](docs/tui.md) for more commands and interaction design (in Chinese).
 
@@ -139,10 +144,31 @@ times per outage, after 1, 3, and 7 seconds. Successful playback renews this
 budget; a rolling limit of six retries per minute bounds flapping streams. A reconnect keeps the same station and URL
 and does not duplicate history or click reports. Stop, switching stations,
 and exit cancel pending retries. Exhausted retries use the normal fallback
-chain; initial connection failures retain their existing fallback behavior.
+chain; stream connection failures before playback also use candidate URLs.
+Local player startup failures, including missing executables, IPC/socket
+startup timeouts, unavailable normalization filters, and configured audio
+device failures, end the current play request without trying other URLs,
+random stations, or a directory refresh. Retry playback after resolving the
+local problem; a transient player startup failure also requires a new request.
+
+Use `radio devices` (or `radio --json devices`) to list mpv audio outputs.
+Set `audio_device = "NAME"` to choose one; empty or absent uses automatic
+selection. Names depend on mpv's audio backend and the local machine, and
+may change when hardware is reconnected.
+
+Set `normalize_loudness = true` for optional adaptive playback level control.
+It uses mpv's `dynaudnorm` with a short window (`f=150:g=5`), adds some
+buffering, and leaves recording stream copies untouched. It is off by default;
+a missing filter reports how to disable it or install a compatible mpv.
+Filter support is checked once per configured mpv executable per process;
+`radio devices` always enumerates the current outputs.
 
 Runtime volume is remembered in SQLite. Set `resume = true` to restore the
 last successfully played station and TUI source on startup (default: false).
+Use `resume = "selection"` to restore the source and select the last station
+without starting audio, including its page when it is in that source. An
+unavailable station falls back to the first row; the recordings source has
+no station selection to restore. `false` opens all stations without playback.
 The handwritten config file is never rewritten. Invalid saved volume values
 fall back to the validated config setting; unavailable last stations are skipped.
 
@@ -194,6 +220,11 @@ A single data directory allows only one playback / recording / TUI session; othe
 
 - MP3 → `.mp3`; AAC (including common HLS AAC) → `.aac`; Vorbis → `.ogg`; Opus → `.opus`. The actual audio track is probed; the catalog's codec field is not trusted blindly.
 - Stream copy is used: no re-encoding, no quality loss. Recording an unsupported codec fails with a clear error.
+- Recordings started during playback include the track title known when recording
+  was requested in the filename and metadata. Later track changes never rename
+  the file. Unknown titles (including standalone CLI recording) keep the previous
+  naming format. Filename components are sanitized and bounded by bytes;
+  whitespace between track words becomes underscores.
 - Each recording has a JSON sidecar with the station, actually requested address, timestamps, codec, media duration, and completion status. The final CDN address after a source-side redirect may not be visible.
 - A unique `.part` file is written first; the final file is produced after a normal stop. Interruptions / failures keep the `.part` file and its status, and unfinished records are recovered when a media session starts next. Use `recordings list` to inspect results; media duration may be an estimate.
 - Final files never overwrite existing files. On macOS, publication requires a filesystem that supports hard links; an interrupted publication can be retried with `recordings recover`.

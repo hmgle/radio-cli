@@ -122,6 +122,86 @@ fn cli_roundtrip_and_invalid_inputs() {
 }
 
 #[test]
+fn direct_play_rejects_invalid_urls_with_the_domain_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = radio(dir.path())
+        .args(["--json-v2", "play", "file:///etc/passwd"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "invalid_url");
+}
+
+#[test]
+fn playback_device_failure_preserves_the_json_error_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let config = dir.path().join("config.toml");
+    fs::write(
+        &config,
+        toml::to_string(&serde_json::json!({
+            "mpv": mpv, "audio_device": "test/fail"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = radio(dir.path())
+        .arg("--config")
+        .arg(&config)
+        .args(["--json-v2", "play", "https://example.com/live"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "audio_device_failed");
+    assert_eq!(value["error"]["params"]["device"], "test/fail");
+}
+
+#[test]
+fn devices_lists_the_configured_mpv_outputs_in_text_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let config = dir.path().join("config.toml");
+    fs::write(
+        &config,
+        toml::to_string(&serde_json::json!({"mpv": mpv})).unwrap(),
+    )
+    .unwrap();
+    for flag in ["--json", "--json-v2"] {
+        let output = radio(dir.path())
+            .arg("--config")
+            .arg(&config)
+            .args([flag, "devices"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let devices = if flag == "--json-v2" {
+            assert_eq!(value["ok"], true);
+            &value["data"]
+        } else {
+            &value
+        };
+        assert_eq!(devices[0]["name"], "auto");
+        assert_eq!(devices[1]["description"], "Test headphones");
+    }
+    let output = radio(dir.path())
+        .arg("--config")
+        .arg(&config)
+        .arg("devices")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("test/headphones\tTest headphones"));
+    assert!(!mpv.with_extension("commands").exists());
+}
+
+#[test]
 fn bad_config_is_reported_without_panicking() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("bad.toml");
