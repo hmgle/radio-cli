@@ -96,3 +96,4 @@ audio_device_failed = "音频设备 '{device}' 初始化失败；请运行 radio
 audio_devices_unavailable = "mpv 未返回音频设备；请确认配置的 mpv 支持 --audio-device=help"
 
 artwork_handoff_timeout = "等待封面连接关闭超时，请重试播放或录音"
+catalog_source_notice = "默认电台目录来自 Radio Browser；数据来源说明见 README。"

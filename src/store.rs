@@ -262,8 +262,19 @@ impl Store {
         }
         let query = filter.query.trim();
         if !query.is_empty() {
-            clauses.push("instr(s.search,?)>0".into());
+            // Resolve localized names at query time so existing catalogs do not
+            // need a resync or a rewrite of their original station metadata.
+            let codes: Vec<_> = crate::territories::matching_codes(query).collect();
+            if codes.is_empty() {
+                clauses.push("instr(s.search,?)>0".into());
+            } else {
+                let placeholders = vec!["?"; codes.len()].join(",");
+                clauses.push(format!(
+                    "(instr(s.search,?)>0 OR s.country IN ({placeholders}))"
+                ));
+            }
             args.push(query.to_lowercase().into());
+            args.extend(codes.into_iter().map(|code| Value::from(code.to_owned())));
         }
         if let Some(country) = &filter.country {
             clauses.push("s.country=?".into());

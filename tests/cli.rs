@@ -16,6 +16,51 @@ fn radio(dir: &std::path::Path) -> Command {
 }
 
 #[test]
+fn localized_territory_search_keeps_original_json_in_both_languages() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let station = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "Catalog station".into(),
+        country: "Taiwan, Republic Of China".into(),
+        countrycode: "TW".into(),
+        active: true,
+        ..Station::default()
+    };
+    store.upsert(&station).unwrap();
+    for language in ["en", "zh-CN"] {
+        for json in ["--json", "--json-v2"] {
+            let output = radio(dir.path())
+                .args([
+                    "--lang",
+                    language,
+                    json,
+                    "search",
+                    "台湾",
+                    "--country",
+                    "TW",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let rows = if json == "--json-v2" {
+                &value["data"]
+            } else {
+                &value
+            };
+            assert_eq!(rows.as_array().unwrap().len(), 1);
+            assert_eq!(rows[0]["country"], station.country);
+            assert_eq!(rows[0]["countrycode"], station.countrycode);
+        }
+    }
+}
+
+#[test]
 fn recordings_open_creates_the_directory_and_passes_it_to_the_platform_opener() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();

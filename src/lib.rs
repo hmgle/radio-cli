@@ -11,6 +11,7 @@ pub mod process;
 pub mod recorder;
 pub mod service;
 pub mod store;
+mod territories;
 pub mod tui;
 
 pub const USER_AGENT: &str = concat!("radio-cli/", env!("CARGO_PKG_VERSION"));

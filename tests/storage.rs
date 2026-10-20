@@ -112,6 +112,90 @@ fn unicode_filters_literals_and_pagination() {
 }
 
 #[test]
+fn chinese_territory_queries_preserve_upstream_metadata_and_code_filters() {
+    let (_dir, store) = db();
+    let mut taiwan = station("Catalog station");
+    taiwan.country = "Taiwan, Republic Of China".into();
+    taiwan.countrycode = "TW".into();
+    store.upsert(&taiwan).unwrap();
+    for code in ["CN", "HK", "MO", "FR", "CD", "CG"] {
+        let mut row = station("Other station");
+        row.countrycode = code.into();
+        store.upsert(&row).unwrap();
+    }
+
+    for query in ["台湾", " 台湾 ", "Republic Of China"] {
+        let filter = Filter {
+            query: query.into(),
+            limit: 100,
+            ..Filter::default()
+        };
+        let rows = store.search(&filter).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].stationuuid, taiwan.stationuuid);
+        assert_eq!(rows[0].country, taiwan.country);
+        assert_eq!(rows[0].countrycode, "TW");
+        assert_eq!(store.search_count(&filter).unwrap(), 1);
+        assert_eq!(
+            store
+                .station_position(&taiwan.stationuuid, &filter)
+                .unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            store.random(&filter, &[]).unwrap().unwrap().stationuuid,
+            taiwan.stationuuid
+        );
+        assert!(
+            store
+                .random(&filter, &[taiwan.stationuuid.clone()])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .search(&Filter {
+                    country: Some("CN".into()),
+                    ..filter
+                })
+                .unwrap()
+                .is_empty()
+        );
+    }
+    for (query, expected) in [("中国", 3), ("刚果", 2), ("法国", 1)] {
+        let filter = Filter {
+            query: query.into(),
+            limit: 100,
+            ..Filter::default()
+        };
+        assert_eq!(store.search(&filter).unwrap().len(), expected);
+        assert_eq!(store.search_count(&filter).unwrap(), expected);
+    }
+    let mut literal = station("台湾音乐");
+    literal.countrycode = "FR".into();
+    store.upsert(&literal).unwrap();
+    assert_eq!(
+        store
+            .search_count(&Filter {
+                query: "台湾".into(),
+                ..Filter::default()
+            })
+            .unwrap(),
+        2
+    );
+    let stored = store.station(&taiwan.stationuuid).unwrap();
+    assert_eq!(
+        serde_json::to_value(stored).unwrap()["country"],
+        taiwan.country
+    );
+    let facets = store
+        .facets(radio_cli::model::FacetKind::Country, "T")
+        .unwrap();
+    assert_eq!(facets.len(), 1);
+    assert_eq!(facets[0].value, "TW");
+}
+
+#[test]
 fn sync_is_atomic_and_preserves_local_state() {
     let (_dir, mut store) = db();
     let first = station("旧台");

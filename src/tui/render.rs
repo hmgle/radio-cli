@@ -442,7 +442,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         } {
             station_details(station, view)
         } else {
-            "选择电台查看码率、编码、国家、标签和地址。\n4 查看当前播放电台。".into()
+            "选择电台查看码率、编码、国家/地区、标签和地址。\n4 查看当前播放电台。".into()
         };
         let image =
             super::artwork::image(app, view, area).map(|(image, rect)| (image.clone(), rect));
@@ -561,7 +561,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             crate::clean_text(&format!(
                 "/{}  {} {} {} ≥{}k",
                 crate::clean_text(&app.filter.query),
-                app.filter.country.as_deref().unwrap_or("全部国家"),
+                app.filter.country.as_deref().unwrap_or("全部国家/地区"),
                 app.filter.language.as_deref().unwrap_or("全部语言"),
                 app.filter.tag.as_deref().unwrap_or("全部标签"),
                 app.filter.min_bitrate
@@ -592,7 +592,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     if let Some((selected, values)) = &app.filter_edit {
         let rect = popup(area, 72, 18);
         frame.render_widget(Clear, rect);
-        let names = ["国家代码", "语言", "标签", "最低码率"];
+        let names = ["国家/地区代码", "语言", "标签", "最低码率"];
+        let label_width = format!("› {}: ", names[*selected]).width() as u16;
+        let input_width = rect.width.saturating_sub(2 + label_width);
         let mut text = names
             .iter()
             .enumerate()
@@ -605,7 +607,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                             input_window(
                                 &values[i],
                                 app.filter_input.cursor.min(values[i].len()),
-                                rect.width.saturating_sub(16),
+                                input_width,
                             )
                             .0
                         } else {
@@ -649,18 +651,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                         } else {
                             " "
                         },
-                        crate::clean_text(&facet.value),
+                        crate::clean_text(&if *selected == 0 {
+                            crate::territories::display_zh(&facet.value)
+                        } else {
+                            facet.value.clone()
+                        }),
                         facet.count
                     ))
                 },
             ));
         }
         frame.render_widget(Paragraph::new(text).block(panel("筛选".into(), true)), rect);
-        let label_width = format!("› {}: ", names[*selected]).width() as u16;
         let (_, cursor) = input_window(
             &values[*selected],
             app.filter_input.cursor.min(values[*selected].len()),
-            rect.width.saturating_sub(16),
+            input_width,
         );
         frame.set_cursor_position((
             rect.x + 1 + label_width + cursor,
@@ -673,11 +678,18 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         frame.render_widget(
             scroll_text(
                 &app.help_content.clone().unwrap_or_else(|| {
+                    let help = format!(
+                        "{HELP}\n{}",
+                        crate::messages::text_in(
+                            crate::messages::Locale::ZhCn,
+                            "catalog_source_notice"
+                        )
+                    );
                     if app.jump_binding.is_empty() {
-                        return HELP.into();
+                        return help;
                     }
                     format!(
-                        "{HELP}\n{}  定位当前播放电台（可在 keybindings.jump_to_playing 配置）",
+                        "{help}\n{}  定位当前播放电台（可在 keybindings.jump_to_playing 配置）",
                         app.jump_binding
                     )
                 }),
@@ -697,15 +709,14 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
         .as_ref()
         .filter(|s| s.stationuuid == station.stationuuid);
     format!(
-        "{}{}\n国家: {} ({})\n语言: {}\n地区: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
+        "{}{}\n国家/地区: {}\n语言: {}\n州/省/区域: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
         value(&station.name),
         if current.is_some() && view.status.playing() {
             " · 正在播放"
         } else {
             " · 列表选中 / 指定电台"
         },
-        value(&station.country),
-        value(&station.countrycode),
+        value(&crate::territories::display_zh(&station.countrycode)),
         value(&station.language),
         value(&station.state),
         bitrate(station),

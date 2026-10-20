@@ -76,6 +76,66 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
 }
 
 #[test]
+fn station_details_localize_territory_codes_without_changing_catalog_values() {
+    let data = view();
+    for (code, original, expected) in [
+        ("TW", "Taiwan, Republic Of China", "台湾 (TW)"),
+        ("HK", "Hong Kong", "中国香港特别行政区 (HK)"),
+        ("MO", "Macao", "中国澳门特别行政区 (MO)"),
+        ("FR", "France", "法国 (FR)"),
+        (" us ", "United States", "美国 (US)"),
+        ("QZ", "Unrecognized upstream name", "QZ"),
+        ("", "Missing upstream code", "未知"),
+    ] {
+        let mut row = station("Catalog station");
+        row.country = original.into();
+        row.countrycode = code.into();
+        row.state = "Catalog subdivision".into();
+        let details = render::station_details(&row, &data);
+        assert!(details.contains(&format!("\n国家/地区: {expected}\n")));
+        assert!(details.contains("\n州/省/区域: Catalog subdivision\n"));
+        assert!(!details.contains(original));
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["country"], original);
+        assert_eq!(json["countrycode"], code);
+    }
+}
+
+#[test]
+fn territory_filter_displays_names_but_selects_original_codes() {
+    let mut data = view();
+    Arc::make_mut(&mut data.facets)[0] = vec![crate::model::Facet {
+        value: "TW".into(),
+        count: 3,
+    }];
+    let mut app = App::default();
+    let (sender, receiver) = command::channel(8);
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let rendered = text(&terminal);
+    assert!(rendered.contains("国家/地区代码"));
+    assert!(rendered.contains("台湾 (TW) (3)"));
+    app.key(key(KeyCode::Down), &data, &sender);
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert_eq!(app.filter.country.as_deref(), Some("TW"));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Search(filter))
+        if filter.country.as_deref() == Some("TW")));
+
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    for _ in 0..100 {
+        app.key(key(KeyCode::Char('x')), &data, &sender);
+    }
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let cursor = terminal.get_cursor_position().unwrap();
+    assert!(cursor.x < 75, "filter input cursor escaped its popup");
+}
+
+#[test]
 fn selection_resume_restores_source_and_page_once_without_playback() {
     use crate::config::ResumeMode;
     let dir = tempfile::tempdir().unwrap();
@@ -411,7 +471,7 @@ fn filter_popup_selects_local_candidates_with_the_keyboard() {
     terminal
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
-    assert!(text(&terminal).contains("FR (3)"));
+    assert!(text(&terminal).contains("法国 (FR) (3)"));
     app.key(key(KeyCode::Enter), &data, &sender);
     assert_eq!(app.filter.country.as_deref(), Some("FR"));
     assert!(

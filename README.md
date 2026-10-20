@@ -103,7 +103,7 @@ radio record <UUID> --duration 30m --output-dir ./recordings
 radio recordings list
 ```
 
-Name, country, language, and tag searches run locally; country code, language, and tag filters use full values (languages also accept the codes provided by the catalog, e.g. `zh`). The minimum-bitrate filter excludes records with unknown bitrate. `random` samples across the entire matching catalog and is not limited by search pagination. `info` always outputs JSON; query commands accept `--json`. Runtime status and diagnostics go to stderr.
+Name, country/region, language, and tag searches run locally; searches also match Chinese country/region names. Country/region code, language, and tag filters use full values (languages also accept the codes provided by the catalog, e.g. `zh`). The minimum-bitrate filter excludes records with unknown bitrate. `random` samples across the entire matching catalog and is not limited by search pagination. `info` always outputs JSON; query commands accept `--json`. Runtime status and diagnostics go to stderr.
 
 Use `--json-v2` for atomic success/error envelopes and stable error codes; legacy
 `--json` shapes remain unchanged. See the [JSON contract](docs/json-contract.md).
@@ -134,18 +134,36 @@ TUI keys:
 | `r` | Start / stop recording the current station |
 | `+`, `-` | Volume |
 | `/` | Incremental search; Enter confirms, Esc restores the previous search |
-| `F` | Country, language, tag, and minimum-bitrate filters |
+| `F` | Country/region code, language, tag, and minimum-bitrate filters |
 | `[` / `]` | Stations / favorites / recent / recordings categories |
 | `gg` / `G` | First / last item in the list |
 | `PgUp` / `PgDn` | Page through the station list |
 | `?` | Open help or current failure details |
 | `q` / `Ctrl-C` | Finalize recordings and quit |
 
-The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and select rows; double-click a station row to play it. The wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
+The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and select rows; double-click a station row to play it. The wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country/region, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
 
 Inside the TUI, `:sync` runs a background sync, `:sync-cancel` cancels the task, `:current` shows full details of the current station, and `:record --duration 30m` schedules a timed recording of the current station. Commands support quoting, Tab completion, and history; see the [TUI guide](docs/tui.md) for more commands and interaction design (in Chinese).
 
 ## Configuration & Data
+
+The default station catalog is fetched from the third-party
+[Radio Browser API](https://api.radio-browser.info/) and cached in the user's
+local SQLite database. The source repository and release archives do not bundle
+a station catalog database. Catalog metadata comes from the upstream service;
+a custom `api_url` selects a different directory service.
+
+The Chinese TUI displays country/region names using a pinned
+[Unicode CLDR 48](https://github.com/unicode-org/cldr/tree/release-48) Chinese name
+table keyed by the upstream `countrycode`. Unrecognized codes display as codes;
+missing codes display as unknown. The `state` field is labeled state/province/area.
+Upstream `country` and `countrycode` values are preserved in local storage and
+JSON output. The `--country` option and `countries` command remain compatible;
+code filters continue to use upstream codes. Geographic names and codes serve
+only station search and display and do not express the project's position on
+political status or sovereignty. The CLDR name table is covered by the
+[Unicode License V3](locales/LICENSE.unicode); regenerate it from the pinned
+upstream revision with `uv run scripts/update_territories.py`.
 
 Select the CLI error and list language with `--lang en` or `--lang zh-CN`.
 Precedence is `--lang`, `RADIO_LANG`, config `language`, then `LC_ALL`/`LANG`;

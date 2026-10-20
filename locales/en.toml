@@ -96,3 +96,4 @@ audio_device_failed = "Audio output initialization failed for device '{device}';
 audio_devices_unavailable = "mpv returned no audio devices; check that the configured mpv supports --audio-device=help"
 
 artwork_handoff_timeout = "Artwork connection cleanup timed out; retry playback or recording"
+catalog_source_notice = "The default station catalog comes from Radio Browser; see the README for data sources."
