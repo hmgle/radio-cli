@@ -119,6 +119,8 @@ impl Controller {
                     }
                     Err(_) => {}
                 }
+                // A probe cancelled by demand withdrawal also starts the next
+                // interval, damping repeated pause or popup toggles.
                 self.due = Instant::now() + INTERVAL;
             }
             self.task = None;
@@ -485,6 +487,61 @@ mod tests {
         assert_eq!(hits.load(Ordering::Relaxed), 1);
         controller.cancel();
         assert!(controller.cover.is_none());
+    }
+
+    #[test]
+    fn withdrawing_demand_cancels_an_inflight_probe_and_delays_retry() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let requests = hits.clone();
+        let (opened, ready) = mpsc::channel();
+        let (closed, released) = mpsc::channel();
+        let server = Server::new(move |_, stream| {
+            if requests.fetch_add(1, Ordering::Relaxed) == 0 {
+                icy(stream, &body("Track", "http://localhost/cover.png"));
+            } else {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nicy-metaint: 4\r\n\r\n")
+                    .unwrap();
+                opened.send(()).unwrap();
+                let mut byte = [0];
+                let result = stream.read(&mut byte);
+                if matches!(result, Ok(0))
+                    || result.is_err_and(|error| {
+                        matches!(
+                            error.kind(),
+                            std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                        )
+                    })
+                {
+                    closed.send(()).unwrap();
+                }
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_support::config(dir.path());
+        let selected = request(&server.url, "Track");
+        let mut controller = Controller::default();
+        finish(&mut controller, &config, Some(selected.clone()));
+        assert!(controller.cover.is_some());
+        let cover = controller.cover.clone();
+        let key = controller.key.clone();
+        controller.due = Instant::now();
+        controller.update(&config, Some(selected.clone()));
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let cancelled_at = Instant::now();
+        controller.update(&config, None);
+        released.recv_timeout(Duration::from_secs(1)).unwrap();
+        finish(&mut controller, &config, None);
+        assert_eq!(controller.cover, cover);
+        assert_eq!(controller.key, key);
+        assert!(controller.due >= cancelled_at + INTERVAL);
+        assert!(controller.due <= Instant::now() + INTERVAL);
+        let due = controller.due;
+        controller.update(&config, Some(selected));
+        assert_eq!(controller.due, due);
+        assert!(controller.task.is_none());
+        assert_eq!(hits.load(Ordering::Relaxed), 2);
     }
 
     #[test]
