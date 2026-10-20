@@ -90,6 +90,14 @@ fn query(
             break;
         }
         received += 1;
+        // Esc is also the prefix of terminal replies and Alt keys. A second
+        // Esc starts a fresh sequence: retain the first as a standalone key.
+        // Without a following byte, a bare Esc remains ambiguous until timeout.
+        if sequence == b"\x1b" && byte[0] == b'\x1b' {
+            replay(&sequence, pending);
+            sequence.clear();
+            parser = Parser::new();
+        }
         sequence.push(byte[0]);
         if response_prefix(&sequence) {
             let responses = parser.push(char::from(byte[0]));
@@ -179,7 +187,11 @@ fn iterm2(program: &str, lc_terminal: &str) -> bool {
 }
 
 fn response_prefix(bytes: &[u8]) -> bool {
-    if b"\x1b_Gi=31;".starts_with(bytes) || bytes.starts_with(b"\x1b_Gi=31;") {
+    // Frame every APC through its terminator, including Kitty replies with an
+    // unexpected ID. Only replies matching our query enable graphics; unknown
+    // reports are ignored whole and may leave detection using half blocks.
+    // A key interleaved inside a report cannot be distinguished from its payload.
+    if b"\x1b_".starts_with(bytes) || bytes.starts_with(b"\x1b_") {
         return true;
     }
     for prefix in [b"\x1b[?".as_slice(), b"\x1b[6;", b"\x1b[0n"] {
@@ -270,7 +282,9 @@ fn replay(bytes: &[u8], pending: &mut VecDeque<Event>) {
     }
     // Mouse, paste, focus and unrecognized terminal reports are whole control
     // sequences. Their payload must never become normal-mode shortcut keys.
-    if bytes.starts_with(b"\x1b[") || bytes.starts_with(b"\x1bO") {
+    // During startup, paste wrappers are ignored and text is replayed as keys:
+    // pasted newlines become Enter rather than part of an atomic Paste event.
+    if bytes.starts_with(b"\x1b[") || bytes.starts_with(b"\x1bO") || bytes.starts_with(b"\x1b_") {
         return;
     }
     if let Some(tail) = bytes.strip_prefix(b"\x1b")
@@ -462,6 +476,66 @@ mod tests {
         let mut key = [0];
         input.read_exact(&mut key).unwrap();
         assert_eq!(&key, b"q");
+    }
+
+    #[test]
+    fn escape_before_a_terminal_reply_remains_a_separate_key() {
+        for (reply, expected) in [
+            ("\x1b_Gi=31;OK\x1b\\", ProtocolType::Kitty),
+            ("\x1b[?1;4c", ProtocolType::Sixel),
+        ] {
+            let (mut input, mut terminal) = UnixStream::pair().unwrap();
+            terminal
+                .write_all(format!("\x1b{reply}\x1b[6;16;8t\x1b[0n").as_bytes())
+                .unwrap();
+            let mut pending = VecDeque::new();
+            let picker = query(
+                &mut input,
+                &mut std::fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/null")
+                    .unwrap(),
+                Duration::from_millis(50),
+                false,
+                &mut pending,
+            )
+            .unwrap();
+            assert_eq!(picker.protocol_type(), expected);
+            assert_eq!(
+                pending,
+                [Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))]
+            );
+        }
+    }
+
+    #[test]
+    fn unrecognized_graphics_replies_do_not_become_keys() {
+        for reply in ["\x1b_Gi=32;OK\x1b\\", "\x1b_Gi=31;ERROR\x1b\\"] {
+            let (mut input, mut terminal) = UnixStream::pair().unwrap();
+            terminal
+                .write_all(format!("{reply}q\x1b[6;16;8t\x1b[0n").as_bytes())
+                .unwrap();
+            let mut pending = VecDeque::new();
+            let picker = query(
+                &mut input,
+                &mut std::fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/null")
+                    .unwrap(),
+                Duration::from_millis(50),
+                false,
+                &mut pending,
+            )
+            .unwrap();
+            assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
+            assert_eq!(
+                pending,
+                [Event::Key(KeyEvent::new(
+                    KeyCode::Char('q'),
+                    KeyModifiers::NONE
+                ))]
+            );
+        }
     }
 
     #[test]
