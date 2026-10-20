@@ -54,6 +54,7 @@ codes! {
     RecordingSourcesFailed => ("recording_sources_failed", 1),
     RuntimePathTooLong => ("runtime_path_too_long", 1),
     PlayerStartup => ("player_startup", 1),
+    NormalizationUnavailable => ("normalization_unavailable", 1),
     PlayerClosed => ("player_closed", 1),
     PlayerMessageTooLarge => ("player_message_too_large", 1),
     PlayerExited => ("player_exited", 1),

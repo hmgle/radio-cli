@@ -146,6 +146,11 @@ and does not duplicate history or click reports. Stop, switching stations,
 and exit cancel pending retries. Exhausted retries use the normal fallback
 chain; initial connection failures retain their existing fallback behavior.
 
+Set `normalize_loudness = true` for optional adaptive playback level control.
+It uses mpv's `dynaudnorm` with a short window (`f=150:g=5`), adds some
+buffering, and leaves recording stream copies untouched. It is off by default;
+a missing filter reports how to disable it or install a compatible mpv.
+
 Runtime volume is remembered in SQLite. Set `resume = true` to restore the
 last successfully played station and TUI source on startup (default: false).
 Use `resume = "selection"` to restore the source and select the last station

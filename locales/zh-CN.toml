@@ -92,3 +92,4 @@ jump_unavailable = "当前电台不在本地可浏览目录中；可用 :current
 jump_loading = "正在定位当前播放电台…"
 jump_not_playing = "当前没有正在播放的电台"
 ephemeral_recording = "请先用 station add 保存此流地址，再开始录音"
+normalization_unavailable = "此 mpv 不支持 dynaudnorm；请安装包含该滤镜的 mpv，或设置 normalize_loudness = false"

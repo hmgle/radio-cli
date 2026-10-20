@@ -74,6 +74,43 @@ fn ipc_socket_path(runtime_dir: &Path) -> PathBuf {
     std::env::temp_dir().join(format!("mpv-{id}.sock"))
 }
 
+fn playback_command(config: &Config, socket: &Path) -> Command {
+    let mut command = Command::new(&config.settings.mpv);
+    command
+        .args([
+            "--no-config",
+            "--load-scripts=no",
+            "--no-video",
+            "--no-audio-display",
+            "--terminal=no",
+            "--input-default-bindings=no",
+            "--idle=yes",
+            "--keep-open=no",
+            "--cache=yes",
+            "--cache-secs=3",
+            "--demuxer-max-bytes=2097152",
+            // Keep recent packets until playback observes timed ICY metadata.
+            // Disabling the back buffer can lose one-shot title updates.
+            "--demuxer-max-back-bytes=524288",
+            "--demuxer-donate-buffer=no",
+            "--audio-buffer=0.2",
+        ])
+        .arg(format!("--user-agent={USER_AGENT}"))
+        .arg(format!("--volume={}", config.settings.volume))
+        .arg(format!(
+            "--network-timeout={}",
+            config.settings.playback_timeout_secs
+        ))
+        .arg(format!("--input-ipc-server={}", socket.display()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if config.settings.normalize_loudness {
+        command.arg("--af=dynaudnorm=f=150:g=5");
+    }
+    command
+}
+
 impl Player {
     pub fn start(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
         validate_url(url)?;
@@ -98,36 +135,20 @@ impl Player {
             // too deep; surface the path so the JSON report shows the culprit.
             bail!(DomainError::new(ErrorCode::RuntimePathTooLong).with("path", socket.display()));
         }
-        let mut command = Command::new(&config.settings.mpv);
-        command
-            .args([
-                "--no-config",
-                "--load-scripts=no",
-                "--no-video",
-                "--no-audio-display",
-                "--terminal=no",
-                "--input-default-bindings=no",
-                "--idle=yes",
-                "--keep-open=no",
-                "--cache=yes",
-                "--cache-secs=3",
-                "--demuxer-max-bytes=2097152",
-                // Keep recent packets until playback observes timed ICY metadata.
-                // Disabling the back buffer can lose one-shot title updates.
-                "--demuxer-max-back-bytes=524288",
-                "--demuxer-donate-buffer=no",
-                "--audio-buffer=0.2",
-            ])
-            .arg(format!("--user-agent={USER_AGENT}"))
-            .arg(format!("--volume={}", config.settings.volume))
-            .arg(format!(
-                "--network-timeout={}",
-                config.settings.playback_timeout_secs
-            ))
-            .arg(format!("--input-ipc-server={}", socket.display()))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        if config.settings.normalize_loudness {
+            let filters = crate::process::output(
+                Command::new(&config.settings.mpv).args(["--no-config", "--af=help"]),
+                Duration::from_secs(3),
+                stop,
+            )?;
+            if !String::from_utf8_lossy(&filters)
+                .lines()
+                .any(|line| line.split_whitespace().next() == Some("dynaudnorm"))
+            {
+                bail!(DomainError::new(ErrorCode::NormalizationUnavailable));
+            }
+        }
+        let command = playback_command(config, &socket);
         let mut child = crate::process::spawn_owned(command)
             .context(DomainError::new(ErrorCode::MissingDependency).with("program", "mpv"))?;
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -277,8 +298,51 @@ mod socket_path_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::metadata_title;
+    use super::{metadata_title, playback_command};
     use serde_json::json;
+
+    #[test]
+    fn normalization_changes_only_the_opt_in_filter_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::load(None, Some(dir.path()), None).unwrap();
+        let socket = std::path::Path::new("/tmp/radio-test.sock");
+        let command = playback_command(&config, socket);
+        let original: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            original,
+            vec![
+                "--no-config",
+                "--load-scripts=no",
+                "--no-video",
+                "--no-audio-display",
+                "--terminal=no",
+                "--input-default-bindings=no",
+                "--idle=yes",
+                "--keep-open=no",
+                "--cache=yes",
+                "--cache-secs=3",
+                "--demuxer-max-bytes=2097152",
+                "--demuxer-max-back-bytes=524288",
+                "--demuxer-donate-buffer=no",
+                "--audio-buffer=0.2",
+                &format!("--user-agent={}", crate::USER_AGENT),
+                "--volume=80",
+                "--network-timeout=12",
+                "--input-ipc-server=/tmp/radio-test.sock",
+            ]
+        );
+        config.settings.normalize_loudness = true;
+        let command = playback_command(&config, socket);
+        let enabled: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(&enabled[..original.len()], original);
+        assert_eq!(&enabled[original.len()..], ["--af=dynaudnorm=f=150:g=5"]);
+    }
 
     #[test]
     fn icy_titles_repair_latin1_mojibake_before_sanitizing() {

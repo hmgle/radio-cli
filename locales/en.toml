@@ -92,3 +92,4 @@ jump_unavailable = "The current station is unavailable in the local catalog; use
 jump_loading = "Locating the current station…"
 jump_not_playing = "No station is currently playing"
 ephemeral_recording = "Add this stream with station add before recording it"
+normalization_unavailable = "This mpv build lacks dynaudnorm; install an mpv build with the filter or set normalize_loudness = false"

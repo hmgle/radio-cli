@@ -100,7 +100,9 @@ fn native_formats_are_copied_and_finalized_with_sidecars() {
         let bytes = support::fixture(encoder, format);
         let server = Server::new(move |_, s| response(s, 200, "application/octet-stream", &bytes));
         let dir = tempfile::tempdir().unwrap();
-        let config = support::config(dir.path());
+        let mut config = support::config(dir.path());
+        config.settings.normalize_loudness = true;
+        config.settings.mpv = "/unused/for-recording/mpv".into();
         let store = Store::open(&dir.path().join("radio.db")).unwrap();
         let station = sample(&server.url);
         store.upsert(&station).unwrap();
@@ -595,10 +597,20 @@ fn mpv_config(dir: &std::path::Path) -> Option<radio_cli::config::Config> {
 
 #[test]
 fn mpv_ipc_reads_icy_titles_and_reaps_child() {
+    exercise_icy_player(false);
+}
+
+#[test]
+fn normalization_preserves_real_mpv_metadata_volume_and_mute() {
+    exercise_icy_player(true);
+}
+
+fn exercise_icy_player(normalize: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let Some(config) = mpv_config(dir.path()) else {
+    let Some(mut config) = mpv_config(dir.path()) else {
         return;
     };
+    config.settings.normalize_loudness = normalize;
     let bytes = support::fixture("libmp3lame", "mp3");
     let server = Server::new(move |request, stream| {
         let icy = request.to_lowercase().contains("icy-metadata: 1");
@@ -665,7 +677,49 @@ fn mpv_ipc_reads_icy_titles_and_reaps_child() {
     }
     player.toggle_pause().unwrap();
     player.volume(-10).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !player
+        .poll()
+        .unwrap()
+        .iter()
+        .any(|event| matches!(event, Event::Volume(70)))
+    {
+        assert!(Instant::now() < deadline, "volume observation missing");
+        thread::sleep(Duration::from_millis(10));
+    }
     drop(player);
+    assert_eq!(fs::read_dir(&config.runtime_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn normalization_reports_a_missing_filter_before_starting_playback() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    let mpv = dir.path().join("mpv-no-filter");
+    fs::write(
+        &mpv,
+        "#!/bin/sh\nprintf 'Available audio filters:\\n  lavfi bridge\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&mpv, fs::Permissions::from_mode(0o700)).unwrap();
+    config.settings.mpv = mpv.to_string_lossy().into_owned();
+    config.settings.normalize_loudness = true;
+    let error = Player::start(
+        &config,
+        "https://example.com/live",
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::NormalizationUnavailable
+    );
+    assert!(error.to_string().contains("normalize_loudness = false"));
     assert_eq!(fs::read_dir(&config.runtime_dir).unwrap().count(), 0);
 }
 

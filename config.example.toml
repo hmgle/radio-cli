@@ -3,6 +3,9 @@ mpv = "mpv"
 ffmpeg = "ffmpeg"
 ffprobe = "ffprobe"
 volume = 80
+# Playback-only adaptive level control; recordings remain stream copies.
+# Uses dynaudnorm with a short window (f=150:g=5); adds some buffering.
+normalize_loudness = false
 # false: fresh start; true: restore source and play the last station.
 # "selection": restore source and station selection without starting audio.
 # Volume is always remembered.
