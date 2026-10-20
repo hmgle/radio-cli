@@ -16,6 +16,50 @@ fn radio(dir: &std::path::Path) -> Command {
 }
 
 #[test]
+fn recordings_open_creates_the_directory_and_passes_it_to_the_platform_opener() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let recordings = dir.path().join("recordings with spaces");
+    let config = dir.path().join("config.toml");
+    fs::write(
+        &config,
+        toml::to_string(&serde_json::json!({"recording_dir": recordings})).unwrap(),
+    )
+    .unwrap();
+    let bin = dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let opener = bin.join(if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    });
+    fs::write(
+        &opener,
+        "#!/bin/sh\n[ -d \"$1\" ] || exit 1\nprintf '%s\\n' \"$#\" \"$1\" > \"$RADIO_TEST_OPEN_LOG\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&opener, fs::Permissions::from_mode(0o700)).unwrap();
+    let log = dir.path().join("open.log");
+    let output = radio(&dir.path().join("data"))
+        .arg("--config")
+        .arg(&config)
+        .args(["recordings", "open"])
+        .env("PATH", &bin)
+        .env("RADIO_TEST_OPEN_LOG", &log)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(log).unwrap(),
+        format!("1\n{}\n", recordings.display())
+    );
+}
+
+#[test]
 fn cli_roundtrip_and_invalid_inputs() {
     let dir = tempfile::tempdir().unwrap();
     let add = radio(dir.path())

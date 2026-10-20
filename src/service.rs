@@ -73,8 +73,13 @@ pub fn open_recordings(
     stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
     crate::process::output(
-        std::process::Command::new("xdg-open").arg(dir),
+        std::process::Command::new(opener).arg(dir),
         std::time::Duration::from_secs(5),
         stop,
     )?;
