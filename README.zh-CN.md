@@ -26,9 +26,17 @@ Linux 是主要支持平台。macOS 支持基本 CLI/TUI 操作：目录管理�
 
 ## 安装与启动
 
-需要 Rust 1.88+、mpv、FFmpeg（含 ffprobe）。SQLite 已编入程序，不要求安装 SQLite 命令行工具。
+需要 mpv、FFmpeg（含 ffprobe）；从源码构建还需要 Rust 1.88+。
+SQLite 已编入程序，不要求安装 SQLite 命令行工具。
 
-[发布页面](https://github.com/hmgle/radio-cli/releases)提供 Linux x86_64 预编译程序和校验和。使用静态程序无需 Rust 工具链，仍需单独安装 mpv 和 FFmpeg。升级兼容性变化见[更新日志](CHANGELOG.md)。
+[发布页面](https://github.com/hmgle/radio-cli/releases)提供预编译程序和统一的 `SHA256SUMS`。
+使用预编译包无需 Rust 工具链，仍需单独安装 mpv 和 FFmpeg。升级兼容性变化见[更新日志](CHANGELOG.md)。
+
+| 平台 | 归档目标 | 支持状态 |
+| --- | --- | --- |
+| Linux x86_64 | `x86_64-unknown-linux-musl` | 主要支持；静态链接 |
+| macOS Apple Silicon | `aarch64-apple-darwin` | 实验性 |
+| macOS Intel | `x86_64-apple-darwin` | 实验性 |
 
 ```sh
 # Debian / Ubuntu
@@ -42,15 +50,24 @@ cargo build --release --locked
 cargo install --path . --locked
 ```
 
-macOS 可通过 Homebrew 安装 Rust 1.88+ 和媒体工具，再从源码安装（发布下载为 Linux 程序）：
+macOS 先通过 Homebrew 安装媒体工具，再下载匹配架构的归档和 `SHA256SUMS`，
+校验后解压。以 Apple Silicon 为例：
 
 ```sh
-brew install rust mpv ffmpeg # 已有合适的 Rust 工具链时可省略 rust
-cargo install --path . --locked
-radio doctor
-radio sync
-radio tui
+brew install mpv ffmpeg
+grep 'aarch64-apple-darwin.tar.gz$' SHA256SUMS | shasum -a 256 -c -
+tar -xzf radio-cli-v0.6.0-aarch64-apple-darwin.tar.gz
+cd radio-cli-v0.6.0-aarch64-apple-darwin
+./radio doctor
+./radio sync
+./radio tui
 ```
+
+Intel Mac 请替换为 `x86_64-apple-darwin`。macOS 包未经 Developer ID 签名或公证。
+若 Gatekeeper 阻止运行你信任的下载文件，校验通过后，可对解压出的程序执行
+`xattr -d com.apple.quarantine ./radio` 再重试；另见
+[Apple 关于打开下载软件的说明](https://support.apple.com/en-us/102445)。
+也可安装 Rust 1.88+，在源码目录运行 `cargo install --path . --locked`。
 
 直接运行 `radio` 会在交互终端打开 TUI；重定向输出时显示帮助。没有目录时，TUI 和 `random` 先获取热门 1,000 台；完整目录通过 `sync` 获取。同步失败保留之前的目录。
 

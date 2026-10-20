@@ -32,9 +32,20 @@ a short clip.
 
 ## Installation & Quick Start
 
-Requires Rust 1.88+, mpv, and FFmpeg (including ffprobe). SQLite is compiled into the binary, so no SQLite command-line tools are needed.
+Requires mpv and FFmpeg (including ffprobe); building from source also requires
+Rust 1.88+. SQLite is compiled into the binary, so no SQLite command-line tools
+are needed.
 
-Prebuilt Linux x86_64 binaries and checksums are available on the [releases page](https://github.com/hmgle/radio-cli/releases). The static binary needs no Rust toolchain; install mpv and FFmpeg separately. See the [changelog](CHANGELOG.md) for upgrade compatibility notes.
+Prebuilt binaries and a combined `SHA256SUMS` are available on the
+[releases page](https://github.com/hmgle/radio-cli/releases). These need no Rust
+toolchain; install mpv and FFmpeg separately. See the [changelog](CHANGELOG.md)
+for upgrade compatibility notes.
+
+| Platform | Archive target | Status |
+| --- | --- | --- |
+| Linux x86_64 | `x86_64-unknown-linux-musl` | Primary; statically linked |
+| macOS Apple Silicon | `aarch64-apple-darwin` | Experimental |
+| macOS Intel | `x86_64-apple-darwin` | Experimental |
 
 ```sh
 # Debian / Ubuntu
@@ -48,16 +59,26 @@ cargo build --release --locked
 cargo install --path . --locked
 ```
 
-On macOS, install Rust 1.88+ and the media tools with Homebrew, then build
-from source (the release downloads are Linux binaries):
+On macOS, install the media tools with Homebrew, download the archive matching
+your Mac and `SHA256SUMS`, and verify it before extracting. For Apple Silicon:
 
 ```sh
-brew install rust mpv ffmpeg # omit rust if a suitable toolchain is installed
-cargo install --path . --locked
-radio doctor
-radio sync
-radio tui
+brew install mpv ffmpeg
+grep 'aarch64-apple-darwin.tar.gz$' SHA256SUMS | shasum -a 256 -c -
+tar -xzf radio-cli-v0.6.0-aarch64-apple-darwin.tar.gz
+cd radio-cli-v0.6.0-aarch64-apple-darwin
+./radio doctor
+./radio sync
+./radio tui
 ```
+
+For Intel Macs, substitute `x86_64-apple-darwin`. The macOS packages are not
+Developer ID-signed or notarized. If Gatekeeper blocks a download you trust,
+after verifying its checksum, remove quarantine from the extracted binary with
+`xattr -d com.apple.quarantine ./radio`, then retry. See
+[Apple's guidance](https://support.apple.com/en-us/102445) on opening downloaded
+software. To build from source instead, install Rust 1.88+ and run
+`cargo install --path . --locked` from a checkout.
 
 Running `radio` directly opens the TUI in an interactive terminal; when output is redirected it prints help instead. With no catalog present, the TUI and `random` first fetch the top 1,000 stations; the full catalog is fetched with `sync`. A failed sync keeps the previous catalog.
 

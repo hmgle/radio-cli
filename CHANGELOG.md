@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-20
+
+- Add optional station logos and current-track covers in the TUI details panel
+  through `artwork = "logo"` or `artwork = "track"`; the default remains `"off"`.
+  Use Kitty, Sixel or iTerm2 graphics when detected and Unicode half blocks as
+  fallback. tmux uses half blocks; monochrome and small layouts remain text-only.
+- Center artwork in the space below station details without moving the text.
+  Fix clipped graphics in Kitty/Ghostty and use a larger half-block area in tmux.
+  Encode outside the render loop and preserve startup keys during capability
+  detection, including keys arriving before terminal replies.
+- Fetch station logos from catalog `favicon` URLs independently of audio.
+  Bound JPEG/PNG downloads and decoding, reuse a bounded disk cache, and prune
+  stale temporary files. Sync existing catalogs to populate favicon fields.
+- Read track covers from validated ICY `StreamUrl` metadata with track/station
+  association checks and logo fallback. Keep the two-upstream-audio-connection
+  budget during playback and recording, cancel probes promptly, and bound
+  connection handoffs before starting playback or recording. HLS and stations
+  without usable image metadata retain the logo or text details.
+- Add experimental native macOS Apple Silicon and Intel release archives,
+  alongside the primary static Linux x86_64 musl build. Validate both macOS
+  architectures in CI, smoke-test extracted packages, include `BUILDINFO`, shell
+  completions and the manual, and provide a combined `SHA256SUMS`.
+- Isolate pseudo-terminal tests from user configuration.
+
+### Compatibility
+
+- Existing configuration and schema-v2 databases remain supported. Artwork is
+  opt-in and existing station rows need `radio sync` to obtain catalog logos.
+  Track probing only runs for the visible, playing station when recording does
+  not use the second audio connection; it may count as a listener upstream.
+- External mpv and FFmpeg/ffprobe remain required on every platform. macOS
+  downloads are not Developer ID-signed or notarized; see the READMEs for
+  checksum verification and quarantine handling. Linux remains the primary
+  platform; abrupt media-child cleanup is still not guaranteed on macOS.
+
 ## 0.5.0 — 2026-10-20
 
 - Play HTTP(S) stream URLs directly from the CLI or TUI without saving stations,
