@@ -226,7 +226,10 @@ impl Controller {
                         fetch(&config, &request.identity, &fallback).await?
                     }
                 };
-                Ok(picker.new_protocol(image, request.size.into(), Resize::Scale(None))?)
+                tokio::task::spawn_blocking(move || {
+                    Ok(picker.new_protocol(image, request.size.into(), Resize::Scale(None))?)
+                })
+                .await?
             }) {
                 Ok(task) => self.task = Some((key, task)),
                 Err(_) => self.retry = Instant::now() + Duration::from_secs(30),

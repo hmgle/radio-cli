@@ -23,7 +23,8 @@ const CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const CACHE_ENTRIES: usize = 128;
 
 /// Cancellation drops the entire HTTP future. Completion is published only
-/// after that future, its response and its runtime have been destroyed.
+/// after that future and its HTTP response have been destroyed. Blocking
+/// DNS or cache work may finish independently after runtime shutdown.
 pub(crate) struct Task<T> {
     cancel: Option<oneshot::Sender<()>>,
     finished: Arc<AtomicBool>,
@@ -55,13 +56,17 @@ impl<T: Send + 'static> Task<T> {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()?;
-                    runtime.block_on(async {
+                    let result = runtime.block_on(async {
                         tokio::select! {
                             biased;
                             _ = cancelled => bail!("artwork cancelled"),
                             result = work() => result,
                         }
-                    })
+                    });
+                    // Dropped futures cannot open another connection. Do not
+                    // wait for uncancellable blocking DNS or disk operations.
+                    runtime.shutdown_background();
+                    result
                 })();
                 drop(completion);
                 let _ = sender.send(result);
@@ -227,10 +232,18 @@ fn save(path: &Path, image: &DynamicImage) -> Result<()> {
 pub(crate) async fn fetch(config: &Config, identity: &str, url: &str) -> Result<DynamicImage> {
     crate::config::validate_url(url)?;
     let path = cache_path(config, identity, url);
-    if let Ok(image) = cached(&path) {
+    let cache = path.clone();
+    if let Some(image) = tokio::task::spawn_blocking(move || match cached(&cache) {
+        Ok(image) => Some(image),
+        Err(_) => {
+            let _ = fs::remove_file(cache);
+            None
+        }
+    })
+    .await?
+    {
         return Ok(image);
     }
-    let _ = fs::remove_file(&path);
     let mut response = client(config)?.get(url).send().await?.error_for_status()?;
     let content_type = response
         .headers()
@@ -251,10 +264,13 @@ pub(crate) async fn fetch(config: &Config, identity: &str, url: &str) -> Result<
         bytes.extend_from_slice(&chunk);
     }
     drop(response);
-    let image = decode(&bytes)?;
-    // Cache failures must not hide an otherwise valid image.
-    let _ = save(&path, &image);
-    Ok(image)
+    tokio::task::spawn_blocking(move || {
+        let image = decode(&bytes)?;
+        // Cache failures must not hide an otherwise valid image.
+        let _ = save(&path, &image);
+        Ok(image)
+    })
+    .await?
 }
 
 #[cfg(test)]
@@ -401,6 +417,30 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(task.finished());
+    }
+
+    #[test]
+    fn cancellation_does_not_wait_for_blocking_work() {
+        let (started, ready) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let mut task = Task::start(move || async move {
+            tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                gate.recv().unwrap();
+            })
+            .await?;
+            Ok(())
+        })
+        .unwrap();
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        task.cancel();
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while !task.finished() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let finished = task.finished();
+        release.send(()).unwrap();
+        assert!(finished, "cancellation must not wait for a blocking task");
     }
 
     #[test]
