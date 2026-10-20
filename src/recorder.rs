@@ -135,10 +135,10 @@ pub fn sidecar(record: &Recording) -> Result<()> {
     Ok(())
 }
 
-// Rename without replacement works on filesystems without hard links too.
+// Linux can publish without requiring hard-link support from the filesystem.
 fn publish(partial: &Path, final_path: &Path) -> Result<()> {
     #[cfg(target_os = "linux")]
-    {
+    let publication = {
         use std::{ffi::CString, os::unix::ffi::OsStrExt};
         let from = CString::new(partial.as_os_str().as_bytes())?;
         let to = CString::new(final_path.as_os_str().as_bytes())?;
@@ -153,15 +153,38 @@ fn publish(partial: &Path, final_path: &Path) -> Result<()> {
                 libc::RENAME_NOREPLACE,
             )
         };
-        if result != 0 {
-            return Err(std::io::Error::last_os_error().into());
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
         }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let publication = fs::hard_link(partial, final_path);
+
+    if let Err(error) = publication {
+        if error.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(error.into());
+        }
+        use std::os::unix::fs::MetadataExt;
+        let source = fs::symlink_metadata(partial)?;
+        let target = fs::symlink_metadata(final_path)?;
+        // A crash between linking and unlinking leaves two names for the same
+        // file. Resume only that case; equal contents or a symlink are not proof
+        // that the existing destination belongs to this recording.
+        if partial == final_path
+            || !source.is_file()
+            || !target.is_file()
+            || source.dev() != target.dev()
+            || source.ino() != target.ino()
+        {
+            return Err(error.into());
+        }
+        fs::remove_file(partial)?;
+        return Ok(());
     }
     #[cfg(not(target_os = "linux"))]
-    {
-        fs::hard_link(partial, final_path)?;
-        fs::remove_file(partial)?;
-    }
+    fs::remove_file(partial)?;
     Ok(())
 }
 
@@ -720,7 +743,7 @@ mod tests {
 
     #[test]
     fn recovery_repairs_each_publication_boundary_idempotently() {
-        for phase in 0..4 {
+        for phase in 0..5 {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::open(&dir.path().join("radio.db")).unwrap();
             let mut r = pending(dir.path());
@@ -728,19 +751,22 @@ mod tests {
             store.save_recording(&r).unwrap();
             sidecar(&r).unwrap();
             if phase >= 1 {
+                fs::hard_link(&r.path, r.final_path.as_ref().unwrap()).unwrap();
+            }
+            if phase >= 2 {
                 publish(
                     Path::new(&r.path),
                     Path::new(r.final_path.as_ref().unwrap()),
                 )
                 .unwrap();
             }
-            if phase >= 2 {
+            if phase >= 3 {
                 let mut complete = r.clone();
                 complete.path = complete.final_path.clone().unwrap();
                 complete.status = "complete".into();
                 sidecar(&complete).unwrap();
             }
-            if phase == 3 {
+            if phase == 4 {
                 // A blocked DB write after publication must leave recoverable intent.
                 let lock = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
                 lock.execute_batch("BEGIN IMMEDIATE").unwrap();
@@ -856,5 +882,25 @@ mod tests {
         fs::remove_file(r.final_path.as_ref().unwrap()).unwrap();
         recover(&store).unwrap();
         assert_eq!(store.recordings(1).unwrap()[0].status, "complete");
+    }
+
+    #[test]
+    fn publication_rejects_matching_contents_and_symlink_destinations() {
+        use std::os::unix::fs::symlink;
+        for symlink_target in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(&dir.path().join("radio.db")).unwrap();
+            let mut r = pending(dir.path());
+            let final_path = PathBuf::from(r.final_path.as_ref().unwrap());
+            if symlink_target {
+                symlink(&r.path, &final_path).unwrap();
+            } else {
+                fs::copy(&r.path, &final_path).unwrap();
+            }
+            assert!(complete_finalization(&store, &mut r).is_err());
+            assert_eq!(fs::read(&r.path).unwrap(), b"verified audio");
+            assert_eq!(fs::read(final_path).unwrap(), b"verified audio");
+            assert_eq!(r.status, "finalizing");
+        }
     }
 }
