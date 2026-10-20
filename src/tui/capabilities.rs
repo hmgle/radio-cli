@@ -21,7 +21,7 @@ pub(super) fn picker(pending: &mut VecDeque<Event>) -> Picker {
     query(
         &mut io::stdin().lock(),
         &mut io::stdout().lock(),
-        Duration::from_millis(200),
+        Duration::from_millis(100),
         iterm,
         pending,
     )
@@ -116,14 +116,14 @@ fn query(
                 sequence.clear();
             }
         } else {
-            // Stop probing at the first key. Decode only the bytes already
-            // consumed; normal input continues through crossterm afterwards.
+            // Keep collecting replies after early keys: a delayed Kitty reply
+            // would otherwise become ordinary characters in crossterm. Replay
+            // user input in order once DSR arrives or the deadline expires.
             if !key_complete(&sequence) {
                 continue;
             }
             replay(&sequence, pending);
             sequence.clear();
-            break;
         }
     }
     if !sequence.is_empty() {
@@ -264,6 +264,11 @@ fn replay(bytes: &[u8], pending: &mut VecDeque<Event>) {
         pending.push_back(Event::Key(key));
         return;
     }
+    // Mouse, paste, focus and unrecognized terminal reports are whole control
+    // sequences. Their payload must never become normal-mode shortcut keys.
+    if bytes.starts_with(b"\x1b[") || bytes.starts_with(b"\x1bO") {
+        return;
+    }
     if let Some(tail) = bytes.strip_prefix(b"\x1b")
         && let Ok(text) = std::str::from_utf8(tail)
         && text.chars().count() == 1
@@ -324,10 +329,10 @@ mod tests {
 
     #[test]
     fn early_keys_and_bytes_after_status_are_preserved() {
-        for (prefix, keys, expected) in [
-            ("", ":sync\r", Some(':')),
-            ("\x1b[6;16;8t", "台标\r", Some('台')),
-            ("\x1b[0n", ":sync\r", None),
+        for (prefix, keys, consumed) in [
+            ("", ":sync\r", true),
+            ("\x1b[6;16;8t", "台标\r", true),
+            ("\x1b[0n", ":sync\r", false),
         ] {
             let (mut input, mut terminal) = UnixStream::pair().unwrap();
             terminal
@@ -345,23 +350,114 @@ mod tests {
                 &mut pending,
             )
             .unwrap();
-            let consumed = if let Some(ch) = expected {
+            let consumed = if consumed {
+                for ch in keys.trim_end_matches('\r').chars() {
+                    assert_eq!(
+                        pending.pop_front(),
+                        Some(Event::Key(KeyEvent::new(
+                            KeyCode::Char(ch),
+                            KeyModifiers::NONE
+                        )))
+                    );
+                }
                 assert_eq!(
                     pending.pop_front(),
                     Some(Event::Key(KeyEvent::new(
-                        KeyCode::Char(ch),
+                        KeyCode::Enter,
                         KeyModifiers::NONE
                     )))
                 );
-                ch.len_utf8()
+                keys.len()
             } else {
                 0
             };
+
             assert!(pending.is_empty());
             let mut remaining = vec![0; keys.len() - consumed];
             input.read_exact(&mut remaining).unwrap();
             assert_eq!(remaining, keys.as_bytes()[consumed..]);
         }
+    }
+
+    #[test]
+    fn unknown_control_sequences_do_not_become_shortcuts() {
+        let (mut input, mut terminal) = UnixStream::pair().unwrap();
+        terminal
+            .write_all(b"\x1b[<0;20;7M\x1b[200~\x1b[201~\x1b[I\x1b[O\x1bOXq\x1b[0n")
+            .unwrap();
+        let mut pending = VecDeque::new();
+        query(
+            &mut input,
+            &mut std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/null")
+                .unwrap(),
+            Duration::from_millis(50),
+            false,
+            &mut pending,
+        )
+        .unwrap();
+        assert_eq!(
+            pending,
+            [Event::Key(KeyEvent::new(
+                KeyCode::Char('q'),
+                KeyModifiers::NONE
+            ))]
+        );
+        // An incomplete unknown sequence is ignored at the deadline too.
+        pending.clear();
+        replay(b"\x1b[<0;", &mut pending);
+        replay(b"\x1b", &mut pending);
+        assert_eq!(
+            pending,
+            [Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))]
+        );
+    }
+
+    #[test]
+    fn delayed_terminal_replies_after_keys_are_consumed_until_status() {
+        let (mut input, mut terminal) = UnixStream::pair().unwrap();
+        input
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        terminal.write_all(b":s").unwrap();
+        let replies = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            terminal
+                .write_all(b"\x1b_Gi=31;OK\x1b\\ync\r\x1b[6;16;8t\x1b[0nq")
+                .unwrap();
+        });
+        let mut pending = VecDeque::new();
+        let picker = query(
+            &mut input,
+            &mut std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/null")
+                .unwrap(),
+            Duration::from_millis(500),
+            false,
+            &mut pending,
+        )
+        .unwrap();
+        replies.join().unwrap();
+        assert_eq!(picker.protocol_type(), ProtocolType::Kitty);
+        for code in [
+            KeyCode::Char(':'),
+            KeyCode::Char('s'),
+            KeyCode::Char('y'),
+            KeyCode::Char('n'),
+            KeyCode::Char('c'),
+            KeyCode::Enter,
+        ] {
+            assert_eq!(
+                pending.pop_front(),
+                Some(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+            );
+        }
+        assert!(pending.is_empty());
+        let mut key = [0];
+        input.read_exact(&mut key).unwrap();
+        assert_eq!(&key, b"q");
     }
 
     #[test]
