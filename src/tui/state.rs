@@ -55,8 +55,11 @@ impl Source {
             Self::Recordings => "recordings",
         }
     }
-    pub fn restore(store: &crate::store::Store, resume: bool) -> anyhow::Result<Self> {
-        if !resume {
+    pub fn restore(
+        store: &crate::store::Store,
+        resume: crate::config::ResumeMode,
+    ) -> anyhow::Result<Self> {
+        if resume == crate::config::ResumeMode::Disabled {
             return Ok(Self::Stations);
         }
         Ok(match store.meta("pref_source")?.as_deref() {
@@ -65,6 +68,29 @@ impl Source {
             Some("recordings") => Self::Recordings,
             _ => Self::Stations,
         })
+    }
+    pub fn initial_filter(
+        self,
+        store: &crate::store::Store,
+        resume: crate::config::ResumeMode,
+    ) -> anyhow::Result<(Filter, Option<String>)> {
+        let mut filter = Filter {
+            favorites: self == Self::Favorites,
+            history: self == Self::History,
+            recordings: self == Self::Recordings,
+            limit: 100,
+            ..Filter::default()
+        };
+        let mut selected = None;
+        if resume == crate::config::ResumeMode::Selection
+            && self != Self::Recordings
+            && let Some(uuid) = store.meta("pref_last_station")?
+            && let Some(position) = store.station_position(&uuid, &filter)?
+        {
+            filter.offset = position / filter.limit * filter.limit;
+            selected = Some(uuid);
+        }
+        Ok((filter, selected))
     }
     pub const ALL: [Self; 4] = [
         Self::Stations,
@@ -326,6 +352,7 @@ pub(super) struct App {
     pending_g: bool,
     rows_revision: u64,
     selected_id: Option<String>,
+    restore_selection: Option<String>,
 }
 impl Default for App {
     fn default() -> Self {
@@ -378,10 +405,24 @@ impl Default for App {
             pending_g: false,
             rows_revision: 0,
             selected_id: None,
+            restore_selection: None,
         }
     }
 }
 impl App {
+    pub fn restore(
+        store: &crate::store::Store,
+        resume: crate::config::ResumeMode,
+    ) -> anyhow::Result<Self> {
+        let source = Source::restore(store, resume)?;
+        let (filter, restore_selection) = source.initial_filter(store, resume)?;
+        Ok(Self {
+            source,
+            filter,
+            restore_selection,
+            ..Self::default()
+        })
+    }
     pub fn update_size(&mut self, width: u16, height: u16) {
         self.too_small = width < 40 || height < 16;
     }
@@ -474,6 +515,13 @@ impl App {
         } else {
             Some(self.list.selected().unwrap_or(0).min(len - 1))
         });
+        if view.rows_revision > 0
+            && self.filter == view.filter
+            && let Some(uuid) = self.restore_selection.take()
+            && let Some(index) = view.rows.iter().position(|row| row.stationuuid == uuid)
+        {
+            self.list.select(Some(index));
+        }
         self.selected_id = self.selection_id(view);
     }
     fn selection_id(&self, view: &View) -> Option<String> {
@@ -578,6 +626,7 @@ impl App {
         }
     }
     fn reset_selection(&mut self) {
+        self.restore_selection = None;
         self.jump_selection = None;
         self.list = ListState::default().with_selected(Some(0));
         self.selected_id = None;
@@ -605,6 +654,7 @@ impl App {
         page: Option<crate::cli::Page>,
         sender: &CommandSender,
     ) {
+        self.restore_selection = None;
         self.jump_selection = None;
         self.positions[self.source.index()] = self.list.selected().unwrap_or(0);
         self.source = source;

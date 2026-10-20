@@ -41,7 +41,7 @@ impl PlaybackController {
         session: &mut Session,
         recording: &mut RecordingController,
     ) -> Result<()> {
-        if session.config.settings.resume
+        if session.config.settings.resume == crate::config::ResumeMode::Playback
             && let Some(uuid) = session.store.meta("pref_last_station")?
             && let Ok(station) = session.store.station(&uuid)
             && !station

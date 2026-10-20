@@ -130,6 +130,8 @@ TUI 静态文案和部分运行消息仍待迁移。
 
 运行时音量保存在 SQLite；配置 `resume = true` 可在 TUI 启动时恢复上次成功播放的电台和来源，
 默认关闭自动恢复播放。不会修改手写配置文件；无效音量回退配置值，已不可用的上次电台跳过。
+`resume = "selection"` 只恢复来源与上次电台的选择（含所在分页），不启动声音；
+电台不在该来源中时选中首行，录音来源不恢复电台选择。`false` 则打开全部电台且不播放。
 
 `countries`、`languages --prefix zh`、`tags --prefix jazz` 列出本地实际筛选值及电台数。
 搜索支持 `--sort name|bitrate|votes|clickcount|random`，默认按点击数，能与全部筛选组合；

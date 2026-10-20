@@ -3,7 +3,9 @@ mpv = "mpv"
 ffmpeg = "ffmpeg"
 ffprobe = "ffprobe"
 volume = 80
-# Resume the last TUI station and source; volume is always remembered.
+# false: fresh start; true: restore source and play the last station.
+# "selection": restore source and station selection without starting audio.
+# Volume is always remembered.
 resume = false
 # Background-refresh an expired, previously synced catalog at TUI startup.
 # Set to 0 to disable.

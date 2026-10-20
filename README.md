@@ -143,6 +143,10 @@ chain; initial connection failures retain their existing fallback behavior.
 
 Runtime volume is remembered in SQLite. Set `resume = true` to restore the
 last successfully played station and TUI source on startup (default: false).
+Use `resume = "selection"` to restore the source and select the last station
+without starting audio, including its page when it is in that source. An
+unavailable station falls back to the first row; the recordings source has
+no station selection to restore. `false` opens all stations without playback.
 The handwritten config file is never rewritten. Invalid saved volume values
 fall back to the validated config setting; unavailable last stations are skipped.
 

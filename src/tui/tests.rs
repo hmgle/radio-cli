@@ -76,6 +76,68 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
 }
 
 #[test]
+fn selection_resume_restores_source_and_page_once_without_playback() {
+    use crate::config::ResumeMode;
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.config.settings.resume = ResumeMode::Selection;
+    // Any attempted playback would fail to spawn this binary.
+    engine.config.settings.mpv = "/missing/mpv".into();
+    for i in 0..105 {
+        let mut row = station(&format!("Station {i}"));
+        row.clickcount = i;
+        row.url = "https://example.com/live".into();
+        engine.store.upsert(&row).unwrap();
+        engine.store.favorite(&row.stationuuid, true).unwrap();
+        if i == 1 {
+            engine
+                .store
+                .set_meta("pref_last_station", &row.stationuuid)
+                .unwrap();
+        }
+    }
+    engine.store.set_meta("pref_source", "favorites").unwrap();
+    engine.resume_last_station().unwrap();
+    assert_eq!(
+        engine.status.playback_state,
+        crate::engine::PlaybackState::Idle
+    );
+    assert!(engine.status.station.is_none());
+    let mut app = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    assert_eq!(app.source, Source::Favorites);
+    assert_eq!(app.filter.offset, 100);
+    let mut data = View::new(engine.status.clone());
+    data.filter = app.filter.clone();
+    app.reconcile(&data); // Wait for the first query to finish.
+    data.rows = engine.store.search(&app.filter).unwrap().into();
+    data.rows_revision = 1;
+    app.reconcile(&data);
+    assert_eq!(app.selected(&data).unwrap().name, "Station 1");
+    let (sender, _) = command::channel(8);
+    app.key(key(KeyCode::Home), &data, &sender);
+    data.rows_revision += 1;
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(0));
+
+    engine
+        .store
+        .set_meta("pref_last_station", "missing")
+        .unwrap();
+    let mut missing = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    assert_eq!(missing.source, Source::Favorites);
+    assert_eq!(missing.filter.offset, 0);
+    data.filter = missing.filter.clone();
+    data.rows = engine.store.search(&missing.filter).unwrap().into();
+    missing.reconcile(&data);
+    assert_eq!(missing.list.selected(), Some(0));
+    let fresh = App::restore(&engine.store, ResumeMode::Disabled).unwrap();
+    assert_eq!(fresh.source, Source::Stations);
+    assert_eq!(fresh.filter.offset, 0);
+}
+
+#[test]
 fn input_labels_use_display_cells_and_keep_the_cursor_inside() {
     assert_eq!(render::input_geometry("SEARCH /", 20), (11, 9));
     assert_eq!(render::input_geometry("搜索 /", 20), (13, 7));
@@ -177,9 +239,12 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
             Command::Search(value)
         };
         worker::execute(command, &mut engine, &mut filter, &mut job, &data).unwrap();
-        assert_eq!(Source::restore(&engine.store, true).unwrap(), source);
         assert_eq!(
-            Source::restore(&engine.store, false).unwrap(),
+            Source::restore(&engine.store, crate::config::ResumeMode::Playback).unwrap(),
+            source
+        );
+        assert_eq!(
+            Source::restore(&engine.store, crate::config::ResumeMode::Disabled).unwrap(),
             Source::Stations
         );
     }

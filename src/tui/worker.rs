@@ -549,13 +549,7 @@ pub(super) fn run(
 ) -> Result<()> {
     engine.enable_background_media();
     let source = super::state::Source::restore(&engine.store, engine.config.settings.resume)?;
-    let mut filter = Filter {
-        favorites: source == super::state::Source::Favorites,
-        history: source == super::state::Source::History,
-        recordings: source == super::state::Source::Recordings,
-        limit: 100,
-        ..Filter::default()
-    };
+    let (mut filter, _) = source.initial_filter(&engine.store, engine.config.settings.resume)?;
     refresh(&engine, &filter, &view)?;
     if let Err(error) = engine.resume_last_station() {
         view.lock()
