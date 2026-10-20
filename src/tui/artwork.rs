@@ -7,6 +7,7 @@ use crate::{
     config::{ArtworkMode, Config, Theme},
     model::Station,
 };
+use anyhow::Context;
 use ratatui::{
     Frame,
     buffer::CellDiffOption,
@@ -223,7 +224,13 @@ impl Controller {
                         let Some(fallback) = request.fallback else {
                             return Err(error);
                         };
-                        fetch(&config, &request.identity, &fallback).await?
+                        fetch(&config, &request.identity, &fallback)
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "track artwork failed: {error:#}; station logo fallback failed"
+                                )
+                            })?
                     }
                 };
                 tokio::task::spawn_blocking(move || {
