@@ -47,7 +47,10 @@ impl PlaybackController {
         let url = reqwest::Url::parse(target)?;
         let station = Station {
             stationuuid: uuid::Uuid::new_v4().to_string(),
-            name: crate::clean_text(&format!("{}{}", url.host_str().unwrap_or(""), url.path())),
+            name: crate::clean_text(&format!("{}{}", url.host_str().unwrap_or(""), url.path()))
+                .chars()
+                .take(60)
+                .collect(),
             url: target.into(),
             custom: true,
             active: true,

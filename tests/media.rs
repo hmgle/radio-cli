@@ -70,6 +70,12 @@ fn direct_url_playback_is_ephemeral_and_failures_leave_no_playing_state() {
         radio_cli::error::ErrorCode::EphemeralRecording
     );
     engine.stop_playback().unwrap();
+    engine
+        .play(&format!("https://example.com/{}", "long-path-".repeat(20)))
+        .unwrap();
+    let label = &engine.status.station.as_ref().unwrap().name;
+    assert!(label.starts_with("example.com/"));
+    assert_eq!(label.chars().count(), 60);
     engine.play("https://example.com/fail").unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while !engine.playback_failed {
