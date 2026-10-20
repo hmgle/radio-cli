@@ -12,7 +12,8 @@ pub(super) struct PlaybackController {
     pub(super) tried: Vec<String>,
     pub(super) refreshed: bool,
     pub(super) confirmed: bool,
-    pub(super) history_recorded: bool,
+    pub(super) session_started: bool,
+    pub(super) ephemeral_playback: bool,
     pub(super) local_playback: bool,
     pub(super) local_recording_id: Option<String>,
     pub(super) reconnect_attempts: usize,
@@ -28,11 +29,26 @@ impl PlaybackController {
         &mut self,
         session: &mut Session,
         recording: &mut RecordingController,
-        uuid: &str,
+        target: &str,
     ) -> Result<()> {
         self.random_filter = None;
         self.random_tried.clear();
-        self.play_station(session, recording, session.store.station(uuid)?)
+        if uuid::Uuid::parse_str(target).is_ok() {
+            return self.play_station(session, recording, session.store.station(target)?);
+        }
+        crate::config::validate_url(target)?;
+        let url = reqwest::Url::parse(target)?;
+        let station = Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: crate::clean_text(&format!("{}{}", url.host_str().unwrap_or(""), url.path())),
+            url: target.into(),
+            custom: true,
+            active: true,
+            ..Station::default()
+        };
+        let result = self.play_source(session, recording, station, vec![target.into()], false);
+        self.ephemeral_playback = true;
+        result
     }
 
     /// TUI-only opt-in restoration; CLI media commands remain explicit.
@@ -108,7 +124,8 @@ impl PlaybackController {
         self.candidates.clear();
         self.refreshed = false;
         self.confirmed = false;
-        self.history_recorded = false;
+        self.session_started = false;
+        self.ephemeral_playback = false;
         self.local_playback = local;
         self.local_recording_id = None;
         self.reconnect_attempts = 0;
@@ -205,7 +222,7 @@ impl PlaybackController {
         }
         // Successful restarts renew the outage budget, but a flapping stream
         // cannot restart indefinitely (at most six retries per minute).
-        if self.history_recorded
+        if self.session_started
             && self.reconnect_attempts < BACKOFF.len()
             && self.reconnect_window.len() < 6
         {
@@ -339,14 +356,16 @@ impl PlaybackController {
                                 if !self.confirmed {
                                     self.confirmed = true;
                                     if let Some(s) = &session.status.station
-                                        && !self.history_recorded
+                                        && !self.session_started
                                         && !self.local_playback
                                     {
-                                        session.store.played(&s.stationuuid)?;
-                                        session
-                                            .store
-                                            .set_meta("pref_last_station", &s.stationuuid)?;
-                                        self.history_recorded = true;
+                                        if !self.ephemeral_playback {
+                                            session.store.played(&s.stationuuid)?;
+                                            session
+                                                .store
+                                                .set_meta("pref_last_station", &s.stationuuid)?;
+                                        }
+                                        self.session_started = true;
                                         if !s.custom
                                             && self
                                                 .click_task

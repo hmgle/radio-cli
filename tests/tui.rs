@@ -230,3 +230,31 @@ fn command_mode_sync_add_search_favorite_and_quit_work_in_real_terminal() {
     tui.send("?");
     tui.quit();
 }
+
+#[test]
+fn direct_url_command_plays_and_inspects_without_saving_a_station() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let config_path = dir.path().join("config.toml");
+    fs::write(
+        &config_path,
+        toml::to_string(&serde_json::json!({"mpv": mpv})).unwrap(),
+    )
+    .unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&config_path));
+    tui.wait_output(|output| output.windows(6).any(|s| s == b"NORMAL"));
+    tui.send(":play https://example.com/audition\r");
+    let log = mpv.with_extension("commands");
+    tui.wait(|| {
+        fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("/audition")
+    });
+    tui.send(":current\r");
+    tui.wait_output(|output| String::from_utf8_lossy(output).contains("example.com/audition"));
+    assert_eq!(store.count().unwrap(), 0);
+    assert!(store.meta("pref_last_station").unwrap().is_none());
+    tui.quit();
+}

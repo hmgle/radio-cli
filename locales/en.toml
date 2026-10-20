@@ -91,3 +91,4 @@ playback_reconnecting = "Reconnecting · {attempt}/{total} · {delay}s: {reason}
 jump_unavailable = "The current station is unavailable in the local catalog; use :current for details"
 jump_loading = "Locating the current station…"
 jump_not_playing = "No station is currently playing"
+ephemeral_recording = "Add this stream with station add before recording it"

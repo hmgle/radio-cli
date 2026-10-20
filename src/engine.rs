@@ -157,7 +157,8 @@ impl Engine {
                 tried: vec![],
                 refreshed: false,
                 confirmed: false,
-                history_recorded: false,
+                session_started: false,
+                ephemeral_playback: false,
                 local_playback: false,
                 local_recording_id: None,
                 reconnect_attempts: 0,
@@ -448,7 +449,7 @@ mod tests {
             custom: true,
             ..Station::default()
         });
-        engine.playback.history_recorded = true;
+        engine.playback.session_started = true;
         engine.playback.reconnect_window = std::iter::repeat_n(Instant::now(), 6).collect();
         engine
             .playback
@@ -488,7 +489,7 @@ mod tests {
             ..Station::default()
         });
         engine.status.muted = true;
-        engine.playback.history_recorded = true;
+        engine.playback.session_started = true;
         for delay in [1, 3, 7] {
             engine
                 .playback

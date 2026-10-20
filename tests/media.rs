@@ -30,6 +30,66 @@ fn sample(url: &str) -> Station {
 }
 
 #[test]
+fn direct_url_playback_is_ephemeral_and_failures_leave_no_playing_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into_owned();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine
+        .store
+        .set_meta("pref_last_station", "remembered")
+        .unwrap();
+    engine.play("https://example.com/live").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !engine.status.playing() {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        engine.status.station.as_ref().unwrap().name,
+        "example.com/live"
+    );
+    assert_eq!(engine.store.count().unwrap(), 0);
+    assert_eq!(
+        engine.store.meta("pref_last_station").unwrap().as_deref(),
+        Some("remembered")
+    );
+    let conn = rusqlite::Connection::open(engine.config.data_dir.join("radio.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM history", [], |r| r.get::<_, usize>(0))
+            .unwrap(),
+        0
+    );
+    let error = engine.record_current(None, None).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::EphemeralRecording
+    );
+    engine.stop_playback().unwrap();
+    engine.play("https://example.com/fail").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !engine.playback_failed {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!engine.status.playing());
+    assert_eq!(engine.store.count().unwrap(), 0);
+    let error = engine.play("file:///etc/passwd").unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::InvalidUrl
+    );
+}
+
+#[test]
 fn native_formats_are_copied_and_finalized_with_sidecars() {
     for (encoder, format, codec, ext) in [
         ("libmp3lame", "mp3", "mp3", "mp3"),

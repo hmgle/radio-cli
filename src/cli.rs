@@ -186,6 +186,8 @@ pub enum Action {
         uuid: String,
     },
     Play {
+        /// Station UUID or an HTTP(S) stream URL to audition without saving.
+        #[arg(value_name = "UUID|URL")]
         uuid: String,
     },
     Random(Search),

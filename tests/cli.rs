@@ -122,6 +122,18 @@ fn cli_roundtrip_and_invalid_inputs() {
 }
 
 #[test]
+fn direct_play_rejects_invalid_urls_with_the_domain_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = radio(dir.path())
+        .args(["--json-v2", "play", "file:///etc/passwd"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "invalid_url");
+}
+
+#[test]
 fn bad_config_is_reported_without_panicking() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("bad.toml");

@@ -63,6 +63,7 @@ radio search --tag 'public radio' --limit 100 --offset 100
 radio --json search jazz
 radio info <UUID>
 radio play <UUID>
+radio play https://example.com/live.mp3
 radio random --country CN
 radio favorites add <UUID>
 radio favorites list
@@ -110,6 +111,9 @@ TUI 按键：
 焦点面板采用亮青色粗边框、`▶` 标记和编号，底部显示模式与当前面板操作；也支持鼠标点击切换面板、选择行，双击电台行播放，滚轮导航。顶部持续显示当前播放电台、编码、码率、音量和录音状态，详情面板展示国家、语言、标签、UUID、地址等信息。码率与编码标注为目录数据，未知值明确显示未知；不会随列表选择而改变当前播放信息。
 
 在 TUI 内直接执行 `:sync` 后台同步，`:sync-cancel` 取消任务，`:current` 查看当前电台完整详情，`:record --duration 30m` 定时录制当前电台。命令支持引号、Tab 补全和历史；更多命令与操作设计见 [TUI 使用说明](docs/tui.md)。
+
+`play` 和 TUI `:play URL` 也接受 HTTP(S) 流地址。直接试听不会写入目录或播放历史，
+也不会替换上次播放电台；需要录音时请先用 `station add` 保存。
 
 ## 配置与数据
 

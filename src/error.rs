@@ -67,6 +67,7 @@ codes! {
     RecordingInUse => ("recording_in_use", 1),
     InsufficientSpace => ("insufficient_space", 1),
     LocalRecording => ("local_recording", 1),
+    EphemeralRecording => ("ephemeral_recording", 1),
 }
 
 #[derive(Debug, Clone)]

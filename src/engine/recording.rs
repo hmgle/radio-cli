@@ -48,6 +48,9 @@ impl RecordingController {
         if playback.local_playback {
             bail!(DomainError::new(ErrorCode::LocalRecording));
         }
+        if playback.ephemeral_playback {
+            bail!(DomainError::new(ErrorCode::EphemeralRecording));
+        }
         if !session.status.playing() {
             bail!(DomainError::new(ErrorCode::WaitForPlayback));
         }

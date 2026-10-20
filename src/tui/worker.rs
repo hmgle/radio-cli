@@ -515,7 +515,15 @@ pub(super) fn execute(
         Command::Refresh => request_refresh(view),
         Command::Backups(uuid) => load_backups(&engine.store, &uuid, view),
         Command::Info(uuid, request) => {
-            let result = engine.store.station(&uuid);
+            let result = match engine
+                .status
+                .station
+                .as_ref()
+                .filter(|s| s.stationuuid == uuid)
+            {
+                Some(station) => Ok(station.clone()),
+                None => engine.store.station(&uuid),
+            };
             load_backups(&engine.store, &uuid, view);
             let mut data = view.lock().unwrap();
             data.inspected_request = request;

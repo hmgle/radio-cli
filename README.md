@@ -70,6 +70,7 @@ radio search --tag 'public radio' --limit 100 --offset 100
 radio --json search jazz
 radio info <UUID>
 radio play <UUID>
+radio play https://example.com/live.mp3
 radio random --country CN
 radio favorites add <UUID>
 radio favorites list
@@ -88,6 +89,10 @@ Use `--json-v2` for atomic success/error envelopes and stable error codes; legac
 Recordings support `recordings play ID`, `recordings remove ID [--index-only]`,
 and `recordings open`; TUI Enter / D / o / e provide playback, confirmed deletion,
 directory opening and expanded errors. Disk checks reserve 16 MiB by default.
+
+`play` also accepts an HTTP(S) stream URL; TUI `:play URL` does the same.
+Direct URLs are temporary: they are never added to the catalog or history,
+and do not replace the saved last station. Add a station first to record it.
 
 Stations are identified by their full Radio Browser UUID; custom stations get a local UUID. Favorites, recently played entries, and custom addresses are never overwritten by a catalog sync. A favorite that has disappeared from the catalog can still be played. History keeps the last 1,000 successful playbacks; the interface aggregates it by station to show recent listening.
 

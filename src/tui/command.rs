@@ -398,7 +398,7 @@ Home / Ctrl-a 行首；End / Ctrl-e 行尾；Ctrl-u 清空\n\n\
 :refresh                刷新当前列表\n\
 :sync-cancel            取消目录任务，保留旧目录\n\
 :search jazz --country FR --min-bitrate 128\n\
-:play [UUID]            播放选中电台或指定 UUID\n\
+:play [UUID|URL]        播放选中电台、指定 UUID 或直接试听流地址\n\
 :random [搜索筛选参数]   不传参数时沿用当前筛选\n\
 :info [UUID]            在详情面板查看电台\n\
 :current                查看当前播放电台完整详情\n\
