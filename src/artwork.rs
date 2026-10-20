@@ -182,6 +182,15 @@ fn prune(dir: &Path) -> Result<()> {
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
+        if let Some(stem) = name.strip_suffix(".tmp")
+            && uuid::Uuid::parse_str(stem).is_ok()
+            && entry.file_type()?.is_file()
+            && entry.metadata()?.modified()?.elapsed().unwrap_or_default()
+                > Duration::from_secs(86400)
+        {
+            let _ = fs::remove_file(entry.path());
+            continue;
+        }
         if name.len() != 68
             || !name.ends_with(".png")
             || !name.as_bytes()[..64].iter().all(|b| b.is_ascii_hexdigit())
@@ -441,6 +450,27 @@ mod tests {
         let finished = task.finished();
         release.send(()).unwrap();
         assert!(finished, "cancellation must not wait for a blocking task");
+    }
+
+    #[test]
+    fn prune_removes_only_old_owned_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let recent = dir.path().join(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let other = dir.path().join("unrelated.tmp");
+        for path in [&old, &recent, &other] {
+            fs::write(path, b"partial").unwrap();
+        }
+        for path in [&old, &other] {
+            fs::File::open(path)
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH)
+                .unwrap();
+        }
+        prune(dir.path()).unwrap();
+        assert!(!old.exists());
+        assert!(recent.exists());
+        assert!(other.exists());
     }
 
     #[test]
