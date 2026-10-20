@@ -9,6 +9,7 @@ pub(super) struct RecordingController {
 pub(super) struct RecordingProbe {
     generation: u64,
     station: Station,
+    track: String,
     url: String,
     dir: std::path::PathBuf,
     duration: Option<Duration>,
@@ -59,6 +60,7 @@ impl RecordingController {
             .station
             .clone()
             .context(DomainError::new(ErrorCode::NotPlaying))?;
+        let track = session.status.title.clone();
         if session.background_media {
             if self.recorder.is_some()
                 || self.recording_probe.is_some()
@@ -75,6 +77,7 @@ impl RecordingController {
             self.recording_probe = Some(RecordingProbe {
                 generation: playback.generation,
                 station,
+                track,
                 url,
                 dir: dir.unwrap_or(&session.config.recording_dir).into(),
                 duration,
@@ -89,7 +92,10 @@ impl RecordingController {
             self.start_recording(
                 session,
                 playback,
-                station,
+                recorder::RecordingMetadata {
+                    station: &station,
+                    track: Some(&track),
+                },
                 playback.url.clone(),
                 duration,
                 dir,
@@ -173,7 +179,7 @@ impl RecordingController {
         &mut self,
         session: &mut Session,
         playback: &mut PlaybackController,
-        station: Station,
+        metadata: recorder::RecordingMetadata<'_>,
         url: String,
         duration: Option<Duration>,
         dir: Option<&std::path::Path>,
@@ -182,14 +188,15 @@ impl RecordingController {
             bail!(DomainError::new(ErrorCode::RecordingBusy));
         }
         let dir = dir.unwrap_or(&session.config.recording_dir);
-        let recorder = Recorder::start(
+        let info = recorder::probe(&session.config, &url, &session.stop)?;
+        let recorder = Recorder::start_with_metadata(
             &session.config,
             &session.store,
-            &station,
+            metadata,
             &url,
             dir,
             duration,
-            &session.stop,
+            info,
         )?;
         self.attach_recorder(session, playback, recorder);
         Ok(())
@@ -290,10 +297,13 @@ impl RecordingController {
             session.status.recording_state = RecordingState::Idle;
             if probe.generation == playback.generation {
                 match result.and_then(|info| {
-                    Recorder::start_with_info(
+                    Recorder::start_with_metadata(
                         &session.config,
                         &session.store,
-                        &probe.station,
+                        recorder::RecordingMetadata {
+                            station: &probe.station,
+                            track: Some(&probe.track),
+                        },
                         &probe.url,
                         &probe.dir,
                         probe.duration,

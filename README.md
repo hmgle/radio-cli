@@ -213,6 +213,10 @@ A single data directory allows only one playback / recording / TUI session; othe
 
 - MP3 → `.mp3`; AAC (including common HLS AAC) → `.aac`; Vorbis → `.ogg`; Opus → `.opus`. The actual audio track is probed; the catalog's codec field is not trusted blindly.
 - Stream copy is used: no re-encoding, no quality loss. Recording an unsupported codec fails with a clear error.
+- Recordings started during playback include the track title known when recording
+  was requested in the filename and metadata. Later track changes never rename
+  the file. Unknown titles (including standalone CLI recording) keep the previous
+  naming format. Filename components are sanitized and bounded by bytes.
 - Each recording has a JSON sidecar with the station, actually requested address, timestamps, codec, media duration, and completion status. The final CDN address after a source-side redirect may not be visible.
 - A unique `.part` file is written first; the final file is produced after a normal stop. Interruptions / failures keep the `.part` file and its status, and unfinished records are recovered when a media session starts next. Use `recordings list` to inspect results; media duration may be an estimate.
 - Final files never overwrite existing files. On macOS, publication requires a filesystem that supports hard links; an interrupted publication can be retried with `recordings recover`.

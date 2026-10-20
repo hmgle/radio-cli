@@ -70,3 +70,7 @@ custom station was removed; `placeholder_kept:true` explicitly indicates that
 an inactive name-only row remains for references or `--keep-references`.
 Malformed equals forms such as `--json-v2=true` are usage errors and also
 receive the v2 error envelope (the option itself is a valueless flag).
+
+Recording objects may include `track`, the title captured when recording was
+requested during playback. It is omitted when unknown, including old records
+and standalone CLI recordings. It remains unchanged when the track changes.

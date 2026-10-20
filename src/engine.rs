@@ -406,6 +406,90 @@ mod tests {
     use super::*;
 
     #[test]
+    fn recording_track_is_snapshotted_before_probe_and_stays_stable() {
+        use crate::test_support::{Server, config, fixture, response};
+        let bytes = fixture("libmp3lame", "mp3");
+        let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+        for background in [false, true] {
+            for title in [
+                "Björk / 中文\x1b\n".to_owned(),
+                String::new(),
+                "曲".repeat(100),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut engine =
+                    Engine::new(config(dir.path()), Arc::new(AtomicBool::new(false))).unwrap();
+                if background {
+                    engine.enable_background_media();
+                }
+                let station = Station {
+                    stationuuid: uuid::Uuid::new_v4().to_string(),
+                    name: if title.starts_with('曲') {
+                        "台".repeat(60)
+                    } else {
+                        "Station".into()
+                    },
+                    url: server.url.clone(),
+                    custom: true,
+                    active: true,
+                    ..Station::default()
+                };
+                engine.store.upsert(&station).unwrap();
+                engine.status.station = Some(station);
+                engine.status.playback_state = PlaybackState::Playing;
+                engine.status.title = title.clone();
+                engine.playback.url = server.url.clone();
+                engine
+                    .record_current(Some(Duration::from_secs(1)), None)
+                    .unwrap();
+                engine.status.title = "Next track".into();
+                let deadline = Instant::now() + Duration::from_secs(8);
+                while engine.status.recording_path.is_empty() {
+                    engine.tick().unwrap();
+                    assert!(Instant::now() < deadline, "{}", engine.status.message);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let record = engine.store.recordings(1).unwrap().remove(0);
+                let expected = crate::clean_text(&title).trim().to_owned();
+                assert_eq!(
+                    record.track.as_deref(),
+                    (!expected.is_empty()).then_some(expected.as_str())
+                );
+                let final_path = record.final_path.clone().unwrap();
+                let name = std::path::Path::new(&record.path)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                assert!(name.len() + ".json.tmp".len() <= 255);
+                if title.starts_with("Björk") {
+                    assert!(name.contains("-Station-Björk中文-"));
+                }
+                if title.is_empty() {
+                    assert!(name.contains("-Station-"));
+                }
+                while engine.status.recording()
+                    || engine.status.recording_state == RecordingState::Finalizing
+                {
+                    engine.tick().unwrap();
+                    assert!(Instant::now() < deadline, "{}", engine.status.message);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let saved = engine.store.recording(&record.id).unwrap();
+                assert_eq!(saved.status, "complete", "{:?}", saved.error);
+                assert_eq!(saved.path, final_path);
+                assert_eq!(saved.track, record.track);
+                let sidecar: crate::model::Recording =
+                    serde_json::from_slice(&std::fs::read(format!("{}.json", saved.path)).unwrap())
+                        .unwrap();
+                assert_eq!(sidecar.track, saved.track);
+                let reopened = Store::open(&dir.path().join("radio.db")).unwrap();
+                assert_eq!(reopened.recording(&record.id).unwrap().track, saved.track);
+            }
+        }
+    }
+
+    #[test]
     fn changing_station_clears_finished_recording_status() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
