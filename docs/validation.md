@@ -1,5 +1,31 @@
 # 验证记录
 
+## 0.6.0 release candidate — 2026-10-20
+
+- Linux all-target/all-feature tests: 209 passed, zero failures; the separate
+  catalog benchmark is excluded from that count. Formatting, strict Clippy and
+  Rust 1.88 checks pass with the locked dependencies.
+- A native Apple Silicon macOS run passes 202 tests with zero failures. The
+  Linux-only CLI and pseudo-terminal cases are excluded there. HTTP fixtures
+  explicitly clear inherited nonblocking mode on accepted sockets so Darwin
+  tests actually wait for cancellation and connection handoffs.
+- The explicit release benchmark passes with 50,000 synthetic stations and
+  search P95 33.57 ms, below the 100 ms budget. This is one local observation,
+  not a comparative performance claim.
+- Artwork coverage uses local HTTP/ICY fixtures for JPEG/PNG validation,
+  download/decode limits, persistent cache reuse, URL changes, cancellation,
+  track association and the two-upstream-audio-connection budget. Layout tests
+  cover placement below details, centering, monochrome/small-screen fallbacks,
+  and graphics passing through the terminal writer. Startup regressions cover
+  early input, delayed replies, Escape and unknown control reports.
+- Linux x86_64 musl packaging passes architecture/static-linkage checks and
+  version/doctor smoke checks from the extracted archive. The archive includes
+  nonempty guides, English completions, the manual and `BUILDINFO`.
+- Release archives require the final GitHub CI gates for Linux, native macOS
+  Apple Silicon and Intel, Rust 1.88 and RustSec auditing. CI collects all three
+  archives with combined checksums only after those gates pass. Native package
+  checks do not imply Developer ID signing, notarization or physical listening.
+
 ## 0.5.0 release candidate — 2026-10-20
 
 - Linux all-target/all-feature tests: 171 passed, zero failures; the separate
