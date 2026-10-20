@@ -692,6 +692,50 @@ fn exercise_icy_player(normalize: bool) {
 }
 
 #[test]
+fn normalization_probes_once_per_executable_even_with_concurrent_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let mut config = support::config(dir.path());
+    config.settings.mpv = mpv.to_string_lossy().into_owned();
+    config.settings.normalize_loudness = true;
+    let stop = Arc::new(AtomicBool::new(false));
+    thread::scope(|scope| {
+        let starts: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| Player::start(&config, "https://example.com/live", &stop).unwrap())
+            })
+            .collect();
+        for start in starts {
+            drop(start.join().unwrap());
+        }
+    });
+    assert_eq!(
+        fs::read_to_string(mpv.with_extension("probes")).unwrap(),
+        "filters\n"
+    );
+    let other_mpv = dir.path().join("other-mpv");
+    fs::copy(&mpv, &other_mpv).unwrap();
+    fs::write(other_mpv.with_extension("no-normalization"), "").unwrap();
+    config.settings.mpv = other_mpv.to_string_lossy().into_owned();
+    for _ in 0..2 {
+        let error = Player::start(&config, "https://example.com/live", &stop)
+            .err()
+            .unwrap();
+        assert_eq!(
+            error
+                .downcast_ref::<radio_cli::error::DomainError>()
+                .unwrap()
+                .code,
+            radio_cli::error::ErrorCode::NormalizationUnavailable
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(other_mpv.with_extension("probes")).unwrap(),
+        "filters\n"
+    );
+}
+
+#[test]
 fn normalization_reports_a_missing_filter_before_starting_playback() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();

@@ -6,13 +6,14 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     fs,
     io::{Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -69,6 +70,34 @@ pub fn audio_devices(config: &Config, stop: &Arc<AtomicBool>) -> Result<Vec<Audi
         bail!(DomainError::new(ErrorCode::AudioDevicesUnavailable));
     }
     Ok(devices)
+}
+
+fn supports_normalization(config: &Config, stop: &Arc<AtomicBool>) -> Result<bool> {
+    type Probe = Arc<Mutex<Option<bool>>>;
+    static PROBES: OnceLock<Mutex<HashMap<String, Probe>>> = OnceLock::new();
+    let probe = PROBES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap()
+        .entry(config.settings.mpv.clone())
+        .or_default()
+        .clone();
+    // Serialize only probes for this executable, including concurrent starts.
+    // Failed or cancelled subprocesses remain retryable on the next start.
+    let mut cached = probe.lock().unwrap();
+    if let Some(supported) = *cached {
+        return Ok(supported);
+    }
+    let filters = crate::process::output(
+        Command::new(&config.settings.mpv).args(["--no-config", "--af=help"]),
+        Duration::from_secs(3),
+        stop,
+    )?;
+    let supported = String::from_utf8_lossy(&filters)
+        .lines()
+        .any(|line| line.split_whitespace().next() == Some("dynaudnorm"));
+    *cached = Some(supported);
+    Ok(supported)
 }
 
 fn metadata_title(metadata: &Value) -> String {
@@ -178,18 +207,8 @@ impl Player {
             // too deep; surface the path so the JSON report shows the culprit.
             bail!(DomainError::new(ErrorCode::RuntimePathTooLong).with("path", socket.display()));
         }
-        if config.settings.normalize_loudness {
-            let filters = crate::process::output(
-                Command::new(&config.settings.mpv).args(["--no-config", "--af=help"]),
-                Duration::from_secs(3),
-                stop,
-            )?;
-            if !String::from_utf8_lossy(&filters)
-                .lines()
-                .any(|line| line.split_whitespace().next() == Some("dynaudnorm"))
-            {
-                bail!(DomainError::new(ErrorCode::NormalizationUnavailable));
-            }
+        if config.settings.normalize_loudness && !supports_normalization(config, stop)? {
+            bail!(DomainError::new(ErrorCode::NormalizationUnavailable));
         }
         let command = playback_command(config, &socket);
         let mut child = crate::process::spawn_owned(command)

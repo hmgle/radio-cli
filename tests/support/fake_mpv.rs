@@ -3,6 +3,13 @@ use std::{fs::{self, OpenOptions}, io::{BufRead, BufReader, Write}, os::unix::ne
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     if args.iter().any(|s| s == "--version") { println!("fake mpv"); return; }
+    if args.iter().any(|s| s == "--af=help") {
+        let exe = std::env::current_exe().unwrap();
+        let mut log = OpenOptions::new().create(true).append(true).open(exe.with_extension("probes")).unwrap();
+        writeln!(log, "filters").unwrap();
+        if !exe.with_extension("no-normalization").exists() { println!("  dynaudnorm : Dynamic Audio Normalizer"); }
+        return;
+    }
     if args.iter().any(|s| s == "--audio-device=help") {
         println!("List of detected audio devices:\n  'auto' (Autoselect device)\n  'test/headphones' (Test headphones)");
         return;
