@@ -21,7 +21,7 @@ Usage failures, including unknown commands, return the error envelope when
 | 3 | Required executable could not be started |
 | 4 | Another media session owns the runtime lock |
 
-Legacy `--json` remains available throughout 0.3.x. Its success shapes are:
+Legacy `--json` remains available in 0.5.0. Its success shapes are:
 
 | Command | Legacy data shape (also the `data` of v2) |
 | --- | --- |

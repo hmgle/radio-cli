@@ -1,5 +1,35 @@
 # 验证记录
 
+## 0.5.0 release candidate — 2026-10-20
+
+- Linux all-target/all-feature tests: 171 passed, zero failures; the separate
+  catalog benchmark is excluded from that count. Real mpv, FFmpeg/ffprobe, and
+  pseudo-terminal tests use isolated data and local HTTP/ICY/HLS fixtures.
+- Formatting, strict all-target/all-feature Clippy, and Rust 1.88 checks pass.
+- The explicit release benchmark passes with 50,000 synthetic stations and
+  search P95 50.04 ms, below its 100 ms absolute budget. This is a single local
+  observation, not evidence of a comparative performance improvement.
+- Local tools: Rust 1.97.1, mpv 0.40.0, FFmpeg/ffprobe 7.1.5 on Linux x86_64.
+- Device-failure regressions cover synchronous and background playback, an
+  immediately exiting mpv, preserved JSON v2 error codes/parameters, and a
+  catalog station with backups: one loadfile, zero directory requests, no
+  reconnect or random fallback. Background missing dependencies retain their
+  original domain code. Real mpv covers valid and invalid output devices.
+- Normalization tests cover real ICY titles, volume, and mute; concurrent starts
+  share one capability probe, and separate executable paths keep separate
+  cached results. Missing filters fail before playback; recording stays stream copy.
+- TUI tests preserve border single clicks and constrain double-click playback.
+  Selection-only restoration handles paging and missing targets once; the worker
+  receives the same initial filter even if preferences change before it starts.
+  Existing 80×24, 100×24, and 160×48 layout snapshots remain unchanged.
+- Real terminal tests audition a URL without saving it and double-click a
+  station to play. Recording tests freeze the starting title before synchronous
+  or background probing, preserve filenames and metadata through finalization,
+  and cover Unicode byte budgets and older records without a track field.
+- These are Linux observations. The release gate also requires the GitHub CI
+  jobs for Linux, macOS, Rust 1.88, x86_64 musl packaging, and RustSec auditing.
+  Physical speaker listening is not part of automated validation.
+
 验证日期：2026-10-17。环境：Debian Linux x86_64，内核 6.12.85，Intel Core i5-8365U（8 个逻辑 CPU），Rust 1.97.1、FFmpeg 7.1.3、mpv 0.40.0。release 构建开启 thin LTO，二进制约 7.61 MiB。
 
 ## 功能与工程检查
