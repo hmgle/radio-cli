@@ -1,5 +1,11 @@
 # radio-cli
 
+[![CI](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
+[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](Cargo.toml)
+[![Linux and macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#installation--quick-start)
+[![MIT license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 **English** | [简体中文](README.zh-CN.md)
 
 A lightweight, Linux-first terminal radio. Rust manages the local catalog and interaction, SQLite stores favorites and history, mpv plays audio, and FFmpeg records streams losslessly. No account or API key required.
@@ -12,6 +18,17 @@ Linux checks also cover Rust 1.88, static x86_64 musl builds, and RustSec
 dependency auditing.
 
 Homepage: <https://github.com/hmgle/radio-cli>
+
+## Demo
+
+[![Watch radio-cli browse CN stations and play live radio](assets/demo.svg)](https://asciinema.org/a/1269102)
+
+[Watch the 90-second demo on asciinema](https://asciinema.org/a/1269102) —
+Chinese UI and captions, recorded in zsh without audio.
+
+Browse a synced catalog, filter stations by `CN`, search, save favorites,
+control playback, locate the playing station, view history, and record/replay
+a short clip.
 
 ## Installation & Quick Start
 

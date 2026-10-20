@@ -1,5 +1,11 @@
 # radio-cli
 
+[![CI](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml)
+[![最新版本](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
+[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](Cargo.toml)
+[![Linux 与 macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#安装与启动)
+[![MIT 许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 [English](README.md) | **简体中文**
 
 Linux 优先的轻量 CLI / TUI 网络收音机。Rust 管理本地目录与交互，SQLite 保存收藏和历史，mpv 播放，FFmpeg 无损录音。无需账号或 API Key。
@@ -8,6 +14,15 @@ Linux 是主要支持平台。macOS 支持基本 CLI/TUI 操作：目录管理�
 录音及正常退出。代码依赖 Unix API，Windows 原生暂不支持。CI 在 Linux 和 macOS 上
 使用真实 mpv、FFmpeg 测试；Linux 检查还覆盖 Rust 1.88、x86_64 musl 静态构建
 及 RustSec 依赖审计。
+
+## 演示
+
+[![观看 radio-cli 浏览 CN 电台并播放真实广播的演示](assets/demo.svg)](https://asciinema.org/a/1269102)
+
+[在 asciinema 观看 90 秒演示](https://asciinema.org/a/1269102) · 中文界面与字幕 · zsh · 无声音。
+
+展示已同步目录的浏览、CN 地区筛选、搜索与详情、收藏、播放控制、当前电台定位、
+最近播放，以及简短录音与回放。
 
 ## 安装与启动
 
