@@ -85,7 +85,6 @@ playback_local_finished = "本地录音播放结束"
 playback_stopped = "已停止播放"
 playback_stream_ended = "音频流结束 ({reason})"
 playback_timeout = "起播超时"
-playback_start_failed = "播放器启动失败: {reason}"
 playback_reconnecting = "重连中 · {attempt}/{total} · {delay}s: {reason}"
 
 jump_unavailable = "当前电台不在本地可浏览目录中；可用 :current 查看详情"

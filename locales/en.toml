@@ -85,7 +85,6 @@ playback_local_finished = "Local recording playback finished"
 playback_stopped = "Playback stopped"
 playback_stream_ended = "Audio stream ended ({reason})"
 playback_timeout = "Playback start timed out"
-playback_start_failed = "Player start failed: {reason}"
 playback_reconnecting = "Reconnecting · {attempt}/{total} · {delay}s: {reason}"
 
 jump_unavailable = "The current station is unavailable in the local catalog; use :current for details"
