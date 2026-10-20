@@ -12,6 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Allow slower SSH round trips while bounding the first-frame delay on silent
+// terminals. DSR ends the wait early; user keys are queued throughout probing.
+const QUERY_TIMEOUT: Duration = Duration::from_millis(200);
+
 pub(super) fn picker(pending: &mut VecDeque<Event>) -> Picker {
     if std::env::var_os("TMUX").is_some() {
         return Picker::halfblocks();
@@ -21,7 +25,7 @@ pub(super) fn picker(pending: &mut VecDeque<Event>) -> Picker {
     query(
         &mut io::stdin().lock(),
         &mut io::stdout().lock(),
-        Duration::from_millis(100),
+        QUERY_TIMEOUT,
         iterm,
         pending,
     )
