@@ -93,6 +93,18 @@ pub fn config(dir: &std::path::Path) -> radio_cli::config::Config {
     config.prepare().unwrap();
     config
 }
+
+pub fn terminal_local_flags(termios: &libc::termios) -> libc::tcflag_t {
+    // macOS can set PENDIN while restoring canonical input. It describes
+    // pending input to retype, rather than an application terminal setting.
+    let state = if cfg!(target_os = "macos") {
+        libc::PENDIN
+    } else {
+        0
+    };
+    termios.c_lflag & !state
+}
+
 pub fn fixture(codec: &str, format: &str) -> Vec<u8> {
     let result = std::process::Command::new("ffmpeg")
         .args([

@@ -24,7 +24,7 @@ impl Tui {
     fn start(dir: &std::path::Path, api: &str) -> Self {
         let (master, slave, original) = unsafe {
             let (mut master, mut slave) = (0, 0);
-            let size = libc::winsize {
+            let mut size = libc::winsize {
                 ws_row: 30,
                 ws_col: 120,
                 ws_xpixel: 0,
@@ -35,8 +35,8 @@ impl Tui {
                     &mut master,
                     &mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &size
+                    std::ptr::null_mut(),
+                    &raw mut size
                 ),
                 0
             );
@@ -116,7 +116,10 @@ impl Tui {
         unsafe {
             let mut restored = std::mem::zeroed::<libc::termios>();
             assert_eq!(libc::tcgetattr(self.slave.as_raw_fd(), &mut restored), 0);
-            assert_eq!(restored.c_lflag, self.original.c_lflag);
+            assert_eq!(
+                support::terminal_local_flags(&restored),
+                support::terminal_local_flags(&self.original)
+            );
         }
     }
 }

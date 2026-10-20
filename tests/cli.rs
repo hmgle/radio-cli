@@ -413,7 +413,7 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
         let (mut master, slave, before) = unsafe {
             let mut master = 0;
             let mut slave = 0;
-            let size = libc::winsize {
+            let mut size = libc::winsize {
                 ws_row: 24,
                 ws_col: 100,
                 ws_xpixel: 0,
@@ -424,8 +424,8 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
                     &mut master,
                     &mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &size
+                    std::ptr::null_mut(),
+                    &raw mut size
                 ),
                 0
             );
@@ -501,7 +501,8 @@ fn tui_restores_terminal_on_quit_ctrl_c_and_sigterm() {
             let mut after = std::mem::zeroed::<libc::termios>();
             assert_eq!(libc::tcgetattr(slave.as_raw_fd(), &mut after), 0);
             assert_eq!(
-                before.c_lflag, after.c_lflag,
+                support::terminal_local_flags(&before),
+                support::terminal_local_flags(&after),
                 "terminal flags not restored on {mode}"
             );
         }
