@@ -79,6 +79,15 @@ pub(super) fn area(app: &App, view: &View, screen: Rect) -> Option<Rect> {
 }
 
 pub(super) fn render(frame: &mut Frame, image: &Protocol, rect: Rect) {
+    let size = image.area().as_size();
+    let width = size.width.min(rect.width);
+    let height = size.height.min(rect.height);
+    let rect = Rect::new(
+        rect.x + (rect.width - width) / 2,
+        rect.y + (rect.height - height) / 2,
+        width,
+        height,
+    );
     frame.render_widget(ratatui_image::Image::new(image), rect);
     // ratatui-image 10 embeds entire graphics escape sequences in one cell.
     // Their apparent Unicode width otherwise makes Ratatui's diff skip later
@@ -357,6 +366,46 @@ mod tests {
         assert_eq!(before, after);
         draw(&mut app, &view, 100, 24);
         assert!(area(&app, &view, Rect::new(0, 0, 100, 24)).is_none());
+    }
+
+    #[test]
+    fn artwork_is_centered_at_its_encoded_size() {
+        let bounds = Rect::new(3, 2, 30, 12);
+        let picker = Picker::halfblocks();
+        for (width, height) in [(32, 32), (64, 16), (16, 64)] {
+            let protocol = picker
+                .new_protocol(
+                    ::image::DynamicImage::ImageRgb8(::image::RgbImage::from_pixel(
+                        width,
+                        height,
+                        ::image::Rgb([210, 20, 50]),
+                    )),
+                    Rect::new(0, 0, 12, 6),
+                    Resize::Scale(None),
+                )
+                .unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(40, 18)).unwrap();
+            terminal
+                .draw(|frame| super::render(frame, &protocol, bounds))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let colored: Vec<_> = (0..18)
+                .flat_map(|y| (0..40).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    buffer[(x, y)].fg != ratatui::style::Color::Reset
+                        || buffer[(x, y)].bg != ratatui::style::Color::Reset
+                })
+                .collect();
+            assert!(!colored.is_empty());
+            let left = colored.iter().map(|p| p.0).min().unwrap();
+            let right = colored.iter().map(|p| p.0).max().unwrap() + 1;
+            let top = colored.iter().map(|p| p.1).min().unwrap();
+            let bottom = colored.iter().map(|p| p.1).max().unwrap() + 1;
+            assert_eq!(right - left, protocol.area().width);
+            assert_eq!(bottom - top, protocol.area().height);
+            assert!((i32::from(left - bounds.x) - i32::from(bounds.right() - right)).abs() <= 1);
+            assert!((i32::from(top - bounds.y) - i32::from(bounds.bottom() - bottom)).abs() <= 1);
+        }
     }
 
     #[test]
