@@ -8,11 +8,7 @@ use crate::{
     model::Station,
 };
 use ratatui::layout::{Rect, Size};
-use ratatui_image::{
-    Resize,
-    picker::{Picker, cap_parser::QueryStdioOptions},
-    protocol::Protocol,
-};
+use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -24,6 +20,8 @@ const SIZE: Size = Size::new(12, 6);
 pub(super) struct Target {
     identity: String,
     url: String,
+    track_generation: Option<u64>,
+    fallback: Option<String>,
 }
 
 #[derive(Default)]
@@ -60,9 +58,36 @@ pub(super) fn area(app: &App, screen: Rect) -> Option<Rect> {
 fn target(app: &App, view: &View, screen: Rect) -> Option<Target> {
     area(app, screen)?;
     let station = station(app, view)?;
+    if let Some(cover) = &view.track_artwork
+        && cover.request.stationuuid == station.stationuuid
+        && view
+            .status
+            .station
+            .as_ref()
+            .is_some_and(|current| current.stationuuid == station.stationuuid)
+        && cover.request.source_url == view.status.source_url
+        && cover.request.title == view.status.title
+        && view.status.playback_state == crate::engine::PlaybackState::Playing
+        && !matches!(
+            view.status.recording_state,
+            crate::engine::RecordingState::Probing
+                | crate::engine::RecordingState::Recording
+                | crate::engine::RecordingState::Finalizing
+        )
+    {
+        return Some(Target {
+            identity: station.stationuuid.clone(),
+            url: cover.url.clone(),
+            track_generation: Some(cover.generation),
+            fallback: (!station.custom && !station.favicon.is_empty())
+                .then(|| station.favicon.clone()),
+        });
+    }
     (!station.custom && !station.favicon.is_empty()).then(|| Target {
         identity: station.stationuuid.clone(),
         url: station.favicon.clone(),
+        track_generation: None,
+        fallback: None,
     })
 }
 
@@ -86,20 +111,26 @@ pub(super) struct Controller {
 }
 
 impl Controller {
+    pub fn demand(&self, app: &App, view: &View, screen: Rect) -> Option<String> {
+        if self.config.settings.artwork != ArtworkMode::Track || area(app, screen).is_none() {
+            return None;
+        }
+        let station = station(app, view)?;
+        (station.hls == 0
+            && view
+                .status
+                .station
+                .as_ref()
+                .is_some_and(|current| current.stationuuid == station.stationuuid))
+        .then(|| station.stationuuid.clone())
+    }
+
     /// Called once with raw mode enabled, before crossterm reads any events.
     pub fn new(config: Config, theme: Theme) -> Option<Self> {
         if config.settings.artwork == ArtworkMode::Off || theme == Theme::Mono {
             return None;
         }
-        let picker = if std::env::var_os("TMUX").is_some() {
-            Picker::halfblocks()
-        } else {
-            Picker::from_query_stdio_with_options(QueryStdioOptions {
-                timeout: Duration::from_millis(200),
-                ..QueryStdioOptions::default()
-            })
-            .unwrap_or_else(|_| Picker::halfblocks())
-        };
+        let picker = super::capabilities::picker();
         Some(Self {
             config,
             picker,
@@ -142,8 +173,16 @@ impl Controller {
             let picker = self.picker.clone();
             let request = key.clone();
             match Task::start(move || async move {
-                let image = fetch(&config, &request.identity, &request.url).await?;
-                Ok(picker.new_protocol(image, SIZE.into(), Resize::Fit(None))?)
+                let image = match fetch(&config, &request.identity, &request.url).await {
+                    Ok(image) => image,
+                    Err(error) => {
+                        let Some(fallback) = request.fallback else {
+                            return Err(error);
+                        };
+                        fetch(&config, &request.identity, &fallback).await?
+                    }
+                };
+                Ok(picker.new_protocol(image, SIZE.into(), Resize::Scale(None))?)
             }) {
                 Ok(task) => self.task = Some((key, task)),
                 Err(_) => self.retry = Instant::now() + Duration::from_secs(30),
@@ -335,5 +374,82 @@ mod tests {
         }
         assert!(app.artwork.protocol.is_some());
         assert!(image(&app, &view, screen).is_some());
+    }
+
+    #[test]
+    fn track_covers_require_current_playback_and_fall_back_to_the_logo() {
+        use crate::engine::{
+            PlaybackState, RecordingState,
+            artwork::{Request, TrackArtwork},
+        };
+        let (_dir, mut config, mut app, mut view) = fixture();
+        let server = test_support::Server::new(|request, stream| {
+            if request.starts_with("GET /cover ") {
+                test_support::response(stream, 200, "text/html", b"not a cover");
+            } else {
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                ::image::DynamicImage::new_rgb8(24, 24)
+                    .write_to(&mut bytes, ::image::ImageFormat::Png)
+                    .unwrap();
+                test_support::response(stream, 200, "image/png", bytes.get_ref());
+            }
+        });
+        let screen = Rect::new(0, 0, 100, 24);
+        Arc::make_mut(&mut view.rows)[0].favicon = format!("{}/logo", server.url);
+        view.status.station = Some(view.rows[0].clone());
+        view.status.playback_state = PlaybackState::Playing;
+        view.status.source_url = "http://localhost/live".into();
+        view.status.title = "Track".into();
+        view.track_artwork = Some(TrackArtwork {
+            generation: 1,
+            request: Request {
+                stationuuid: view.rows[0].stationuuid.clone(),
+                source_url: view.status.source_url.clone(),
+                title: "Track".into(),
+            },
+            url: format!("{}/cover", server.url),
+        });
+        config.settings.artwork = ArtworkMode::Track;
+        let mut controller = Controller {
+            config,
+            picker: Picker::halfblocks(),
+            desired: None,
+            task: None,
+            retry: Instant::now(),
+        };
+        draw(&mut app, &view, 100, 24);
+        assert_eq!(
+            target(&app, &view, screen).unwrap().track_generation,
+            Some(1)
+        );
+        assert!(controller.demand(&app, &view, screen).is_some());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app.artwork.protocol.is_none() && Instant::now() < deadline {
+            controller.update(&mut app, &view, screen);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            image(&app, &view, screen).is_some(),
+            "invalid cover content must fall back to the valid logo"
+        );
+        view.status.title = "Next track".into();
+        assert!(
+            image(&app, &view, screen).is_none(),
+            "stale art must disappear before another worker result"
+        );
+        assert_eq!(target(&app, &view, screen).unwrap().track_generation, None);
+        view.status.title = "Track".into();
+        for state in [
+            RecordingState::Probing,
+            RecordingState::Recording,
+            RecordingState::Finalizing,
+        ] {
+            view.status.recording_state = state;
+            assert_eq!(target(&app, &view, screen).unwrap().track_generation, None);
+        }
+        view.status.recording_state = RecordingState::Idle;
+        view.status.station.as_mut().unwrap().stationuuid = "another station".into();
+        assert!(controller.demand(&app, &view, screen).is_none());
+        assert_eq!(target(&app, &view, screen).unwrap().track_generation, None);
     }
 }

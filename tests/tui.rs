@@ -65,6 +65,8 @@ impl Tui {
             .arg(dir)
             .args(["--api-url", api, "tui"])
             .env("TERM", "xterm-256color")
+            .env_remove("NO_COLOR")
+            .env_remove("TMUX")
             .stdin(slave.try_clone().unwrap())
             .stdout(slave.try_clone().unwrap())
             .stderr(slave.try_clone().unwrap())
@@ -144,6 +146,41 @@ impl Drop for Tui {
         }
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn artwork_capability_timeout_keeps_real_terminal_input_and_exit_working() {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(32, 32)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let server = Server::new(move |_, stream| response(stream, 200, "image/png", png.get_ref()));
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    store
+        .upsert(&Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "Artwork input".into(),
+            url: "http://localhost/live".into(),
+            favicon: format!("{}/logo.png", server.url),
+            active: true,
+            ..Station::default()
+        })
+        .unwrap();
+    let path = dir.path().join("artwork.toml");
+    fs::write(&path, "artwork = 'station'\ntheme = 'default'\n").unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&path));
+    // This PTY never replies to terminal queries. Once fallback has drawn the
+    // interface, no query reader may compete for these input bytes.
+    tui.wait_output(|output| {
+        String::from_utf8_lossy(output).contains("Artwork input")
+            && output.windows(4).any(|bytes| bytes == b"\x1b[5n")
+    });
+    tui.wait(|| dir.path().join("artwork").is_dir());
+    tui.send(":station add 'Input after artwork probe' http://localhost/new\r");
+    tui.wait(|| store.count().unwrap() == 2);
+    tui.quit();
 }
 
 #[test]

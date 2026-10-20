@@ -1,3 +1,4 @@
+pub(crate) mod artwork;
 mod playback;
 mod recording;
 mod status;
@@ -76,6 +77,7 @@ pub struct Engine {
 
 /// Shared services and published session state owned by the engine.
 pub struct Session {
+    pub(crate) artwork: artwork::Controller,
     pub config: Config,
     pub store: Store,
     pub directory: Directory,
@@ -134,6 +136,7 @@ impl Engine {
         };
         Ok(Self {
             session: Session {
+                artwork: artwork::Controller::default(),
                 config,
                 store,
                 directory,
@@ -170,6 +173,7 @@ impl Engine {
             },
             recording: RecordingController {
                 recording_probe: None,
+                retiring_probes: vec![],
                 finalizing: None,
                 recorder: None,
             },
@@ -227,7 +231,36 @@ impl Engine {
         self.poll_background()?;
         self.playback.tick(&mut self.session, &mut self.recording)?;
         self.recording
-            .recording_tick(&mut self.session, &mut self.playback)
+            .recording_tick(&mut self.session, &mut self.playback)?;
+        self.artwork_tick();
+        Ok(())
+    }
+
+    fn artwork_tick(&mut self) {
+        let request = (self.background_media
+            && self.config.settings.artwork == crate::config::ArtworkMode::Track
+            && self.status.playback_state == PlaybackState::Playing
+            && !matches!(
+                self.status.recording_state,
+                RecordingState::Probing | RecordingState::Recording | RecordingState::Finalizing
+            )
+            && self.playback.source_kind != playback::SourceKind::Local
+            && self.playback.retiring.is_empty()
+            && self.recording.retiring_probes.is_empty()
+            && !self.status.title.is_empty())
+        .then(|| self.status.station.as_ref())
+        .flatten()
+        .filter(|station| {
+            station.hls == 0 && self.artwork.demand.as_deref() == Some(station.stationuuid.as_str())
+        })
+        .filter(|_| crate::config::validate_url(&self.status.source_url).is_ok())
+        .map(|station| artwork::Request {
+            stationuuid: station.stationuuid.clone(),
+            source_url: self.status.source_url.clone(),
+            title: self.status.title.clone(),
+        });
+        let session = &mut self.session;
+        session.artwork.update(&session.config, request);
     }
 
     pub fn pause(&mut self) -> Result<()> {
@@ -374,7 +407,10 @@ impl Engine {
         // Allow normal finalization, then cancel verification if its budget
         // expires. Outstanding HTTP results never need joining.
         let deadline = Instant::now() + Duration::from_secs(6);
-        while (self.recording.finalizing.is_some() || !self.playback.retiring.is_empty())
+        while (self.recording.finalizing.is_some()
+            || !self.playback.retiring.is_empty()
+            || !self.recording.retiring_probes.is_empty()
+            || !self.artwork.quiescent())
             && Instant::now() < deadline
         {
             self.poll_background()?;

@@ -27,6 +27,8 @@ pub(super) struct LocatedStation {
 
 #[derive(Clone)]
 pub(super) struct View {
+    pub artwork_station: Option<String>,
+    pub track_artwork: Option<crate::engine::artwork::TrackArtwork>,
     published: Option<(u64, Arc<View>)>,
     store_revision: Option<(u64, u64)>,
     refresh_requested: bool,
@@ -59,6 +61,8 @@ pub(super) struct View {
 impl View {
     pub fn new(status: Status) -> Self {
         Self {
+            artwork_station: None,
+            track_artwork: None,
             published: None,
             store_revision: None,
             refresh_requested: false,
@@ -656,6 +660,7 @@ pub(super) fn run(
                     Err(error) => data.log(&format!("诊断失败: {error:#}")),
                 }
             }
+            engine.artwork.demand = view.lock().unwrap().artwork_station.clone();
             if let Err(error) = engine.tick() {
                 view.lock().unwrap().log(&format!("错误: {error:#}"));
             }
@@ -667,6 +672,11 @@ pub(super) fn run(
             )?;
             was_recording = engine.status.recording();
             let mut data = view.lock().unwrap();
+            if data.track_artwork != engine.artwork.cover {
+                data.track_artwork = engine.artwork.cover.clone();
+                data.revision += 1;
+                data.immediate_revision += 1;
+            }
             if !data.status.ui_eq(&engine.status) {
                 if !data.status.control_eq(&engine.status) {
                     data.immediate_revision += 1;

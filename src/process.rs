@@ -177,6 +177,10 @@ impl<T: Send + 'static> Background<T> {
             ))),
         }
     }
+
+    pub(crate) fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 impl<T> Drop for Background<T> {
     fn drop(&mut self) {

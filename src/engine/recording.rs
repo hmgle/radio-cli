@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) struct RecordingController {
     pub(super) recording_probe: Option<RecordingProbe>,
+    pub(super) retiring_probes: Vec<Background<serde_json::Value>>,
     pub(super) finalizing: Option<Background<crate::model::Recording>>,
     pub(super) recorder: Option<Recorder>,
 }
@@ -13,7 +14,7 @@ pub(super) struct RecordingProbe {
     url: String,
     dir: std::path::PathBuf,
     duration: Option<Duration>,
-    task: Background<serde_json::Value>,
+    task: Option<Background<serde_json::Value>>,
 }
 
 impl RecordingController {
@@ -65,15 +66,21 @@ impl RecordingController {
             if self.recorder.is_some()
                 || self.recording_probe.is_some()
                 || self.finalizing.is_some()
+                || !self.retiring_probes.is_empty()
             {
                 bail!(DomainError::new(ErrorCode::RecordingBusy));
             }
             let config = session.config.clone();
             let url = playback.url.clone();
             let input = url.clone();
-            let task = Background::start("radio-record-probe", move |cancel| {
-                recorder::probe(&config, &input, &cancel)
-            })?;
+            session.artwork.cancel();
+            let task = if session.artwork.quiescent() {
+                Some(Background::start("radio-record-probe", move |cancel| {
+                    recorder::probe(&config, &input, &cancel)
+                })?)
+            } else {
+                None
+            };
             self.recording_probe = Some(RecordingProbe {
                 generation: playback.generation,
                 station,
@@ -259,7 +266,11 @@ impl RecordingController {
         playback: &mut PlaybackController,
         reason: Option<&str>,
     ) -> Result<()> {
-        if self.recording_probe.take().is_some() {
+        if let Some(probe) = self.recording_probe.take() {
+            if let Some(task) = probe.task {
+                task.cancel();
+                self.retiring_probes.push(task);
+            }
             session.status.message = "录音检测已取消".into();
             session.status.recording_state = RecordingState::Idle;
         }
@@ -288,10 +299,21 @@ impl RecordingController {
         session: &mut Session,
         playback: &mut PlaybackController,
     ) -> Result<()> {
+        self.retiring_probes.retain(|task| task.poll().is_none());
+        if let Some(probe) = self.recording_probe.as_mut()
+            && probe.task.is_none()
+            && session.artwork.quiescent()
+        {
+            let config = session.config.clone();
+            let input = probe.url.clone();
+            probe.task = Some(Background::start("radio-record-probe", move |cancel| {
+                recorder::probe(&config, &input, &cancel)
+            })?);
+        }
         if let Some(result) = self
             .recording_probe
             .as_ref()
-            .and_then(|probe| probe.task.poll())
+            .and_then(|probe| probe.task.as_ref().and_then(Background::poll))
         {
             let probe = self.recording_probe.take().unwrap();
             session.status.recording_state = RecordingState::Idle;

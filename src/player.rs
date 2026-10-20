@@ -104,6 +104,10 @@ fn metadata_title(metadata: &Value) -> String {
     let Some(title) = metadata["icy-title"].as_str() else {
         return crate::clean_text(metadata["title"].as_str().unwrap_or(""));
     };
+    icy_title(title)
+}
+
+pub(crate) fn icy_title(title: &str) -> String {
     // Some ICY sources re-encode UTF-8 as Latin-1. Reverse this only when
     // the entire title maps to bytes that form valid UTF-8. This heuristic
     // deliberately leaves mixed encodings and ordinary file tags alone.

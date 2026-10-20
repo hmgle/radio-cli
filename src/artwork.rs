@@ -30,6 +30,13 @@ pub(crate) struct Task<T> {
     result: Receiver<Result<T>>,
 }
 
+struct Completion(Arc<AtomicBool>);
+impl Drop for Completion {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
 impl<T: Send + 'static> Task<T> {
     pub(crate) fn start<F, Fut>(work: F) -> Result<Self>
     where
@@ -43,6 +50,7 @@ impl<T: Send + 'static> Task<T> {
         std::thread::Builder::new()
             .name("radio-artwork".into())
             .spawn(move || {
+                let completion = Completion(done);
                 let result = (|| {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
@@ -55,7 +63,7 @@ impl<T: Send + 'static> Task<T> {
                         }
                     })
                 })();
-                done.store(true, Ordering::Release);
+                drop(completion);
                 let _ = sender.send(result);
             })?;
         Ok(Self {
@@ -73,6 +81,10 @@ impl<T: Send + 'static> Task<T> {
 
     pub(crate) fn finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn completion(&self) -> Arc<AtomicBool> {
+        self.finished.clone()
     }
 
     pub(crate) fn poll(&self) -> Option<Result<T>> {

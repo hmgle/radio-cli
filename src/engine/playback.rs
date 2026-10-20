@@ -176,6 +176,8 @@ impl PlaybackController {
         session: &mut Session,
         _recording: &mut RecordingController,
     ) -> Result<()> {
+        session.artwork.cancel();
+        let artwork_done = session.artwork.completion();
         session.config.settings.volume = session.status.volume;
         if session.background_media {
             let local = self.source_kind == SourceKind::Local;
@@ -185,6 +187,17 @@ impl PlaybackController {
                 self.generation,
                 session.status.volume,
                 Background::start("radio-player-start", move |cancel| {
+                    // Do not open another audio stream until the old ICY
+                    // probe has actually dropped its response and runtime.
+                    while artwork_done
+                        .as_ref()
+                        .is_some_and(|done| !done.load(std::sync::atomic::Ordering::Acquire))
+                    {
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            bail!(DomainError::new(ErrorCode::Cancelled));
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
                     if local {
                         Player::start_local(&config, std::path::Path::new(&url), &cancel)
                     } else {
@@ -420,7 +433,12 @@ impl PlaybackController {
                                     }
                                 }
                             }
-                            Event::Title(title) => session.status.title = title,
+                            Event::Title(title) => {
+                                if session.status.title != title {
+                                    session.artwork.cancel();
+                                    session.status.title = title;
+                                }
+                            }
                             Event::Paused(paused) => {
                                 if self.confirmed {
                                     session.status.playback_state = if paused {
@@ -515,6 +533,7 @@ impl PlaybackController {
         session: &mut Session,
         _recording: &mut RecordingController,
     ) {
+        session.artwork.cancel();
         if let Some((_, _, task)) = self.player_start.take() {
             // A completed task may already contain a Player. Drop it away
             // from controls so its child reaping cannot block cancellation.

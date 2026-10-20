@@ -259,14 +259,25 @@ Generate shell integration with `radio completions bash|zsh|fish`. For example,
 zsh and fish completions plus `man/radio.1`.
 
 Configure `theme = "default"|"mono"|"light"`; nonempty `NO_COLOR` forces mono.
-Set `artwork = "station"` for optional station logos in the TUI details panel
-(default: `"off"`). Logos come from the catalog's `favicon`, independently of
+Set `artwork = "station"` for optional station logos, or `"track"` to prefer
+the current track's ICY cover in the TUI details panel (default: `"off"`).
+Logos come from the catalog's `favicon`, independently of
 the audio stream; run `radio sync` after upgrading to populate existing rows.
 Images use Kitty, Sixel or iTerm2 protocols when supported, with Unicode half
 blocks as fallback; tmux always uses half blocks. Monochrome themes and screens
 smaller than 100×24 keep text-only details. Downloads are limited to 256 KiB
 JPEG/PNG images, decoded with size limits, and cached under `artwork/` in the
 data directory (128 entries / 32 MiB). Changed favicon URLs invalidate the cache.
+Track covers require a matching nonempty playback title and a station that
+publishes an image URL in ICY `StreamUrl`; unavailable covers fall back to the
+station logo or text. Probing only runs while the displayed station is playing,
+at 25-second intervals, and can count as another listener. It stops on pause,
+stop, station changes and exit; HLS and local recording playback are excluded.
+Recording takes priority: its codec probe waits for the ICY connection to close,
+and covers fall back to logos throughout probing, recording and finalization.
+Listening and recording retain the two-audio-upstream-connection budget;
+catalog and image HTTP requests are separate. Track associations are never
+persisted, even when the downloaded image file is reused from the cache.
 At 80×24, details open with `3` and the idle task area collapses.
 Use `mouse = false` or `:set mouse false` for native text selection.
 Command history retains 100 entries across sessions. `:help record` shows command

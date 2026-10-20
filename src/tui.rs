@@ -1,4 +1,5 @@
 mod artwork;
+mod capabilities;
 mod command;
 mod output;
 mod render;
@@ -93,11 +94,9 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             app.reconcile(&snapshot);
             if let Some(artwork) = &mut artwork {
                 let size = terminal.size()?;
-                dirty |= artwork.update(
-                    &mut app,
-                    &snapshot,
-                    ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                );
+                let screen = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+                view.lock().unwrap().artwork_station = artwork.demand(&app, &snapshot, screen);
+                dirty |= artwork.update(&mut app, &snapshot, screen);
             }
             app.request_selected_backups(&snapshot, &sender);
             app.request_facets(&sender);
@@ -153,6 +152,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                 _ => {}
             }
         }
+        drop(artwork);
         stop.store(true, Ordering::Relaxed);
         terminal.draw(|frame| {
             let hint = if matches!(

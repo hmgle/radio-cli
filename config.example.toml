@@ -40,6 +40,8 @@ theme = "default"
 # off | station | track. Optional details-panel images; default off.
 # station: catalog logos, populated by sync after upgrading.
 # track: prefer ICY track covers, then catalog logos.
+# Track probing can count as another listener; it runs only for the playing
+# station shown in details. Recording cancels it and shows logos instead.
 # Monochrome and narrow/short layouts remain text-only; tmux uses half blocks.
 artwork = "off"
 # false permits the terminal's native text selection.
