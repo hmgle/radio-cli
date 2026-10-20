@@ -30,6 +30,9 @@ impl Server {
                     Ok((mut stream, _)) => {
                         let handler = handler.clone();
                         connections.push(thread::spawn(move || {
+                            // Darwin inherits the listener's nonblocking flag;
+                            // fixture handlers need blocking reads with timeouts.
+                            stream.set_nonblocking(false).unwrap();
                             stream
                                 .set_read_timeout(Some(Duration::from_secs(2)))
                                 .unwrap();
