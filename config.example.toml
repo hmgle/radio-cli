@@ -5,9 +5,11 @@ ffprobe = "ffprobe"
 volume = 80
 # Playback-only adaptive level control; recordings remain stream copies.
 # Uses dynaudnorm with a short window (f=150:g=5); adds some buffering.
+# Filter support is cached per mpv executable for this process.
 normalize_loudness = false
 # Optional mpv output device; absent/empty uses automatic selection.
 # Names depend on mpv's audio backend; list them with: radio devices
+# Local player/device failures end playback without stream URL fallback.
 # audio_device = "pulse/your-device-name"
 # false: fresh start; true: restore source and play the last station.
 # "selection": restore source and station selection without starting audio.

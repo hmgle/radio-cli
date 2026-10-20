@@ -74,3 +74,9 @@ receive the v2 error envelope (the option itself is a valueless flag).
 Recording objects may include `track`, the title captured when recording was
 requested during playback. It is omitted when unknown, including old records
 and standalone CLI recordings. It remains unchanged when the track changes.
+
+Configured audio-output failures return `audio_device_failed` with a `device`
+parameter (exit 1). Local player startup errors retain their original codes,
+such as `missing_dependency` (exit 3), `player_startup` (exit 1), or
+`normalization_unavailable` (exit 1). These failures end the play request without
+stream fallback or directory refresh; the error code survives normal shutdown.

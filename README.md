@@ -144,7 +144,12 @@ times per outage, after 1, 3, and 7 seconds. Successful playback renews this
 budget; a rolling limit of six retries per minute bounds flapping streams. A reconnect keeps the same station and URL
 and does not duplicate history or click reports. Stop, switching stations,
 and exit cancel pending retries. Exhausted retries use the normal fallback
-chain; initial connection failures retain their existing fallback behavior.
+chain; stream connection failures before playback also use candidate URLs.
+Local player startup failures, including missing executables, IPC/socket
+startup timeouts, unavailable normalization filters, and configured audio
+device failures, end the current play request without trying other URLs,
+random stations, or a directory refresh. Retry playback after resolving the
+local problem; a transient player startup failure also requires a new request.
 
 Use `radio devices` (or `radio --json devices`) to list mpv audio outputs.
 Set `audio_device = "NAME"` to choose one; empty or absent uses automatic
@@ -155,6 +160,8 @@ Set `normalize_loudness = true` for optional adaptive playback level control.
 It uses mpv's `dynaudnorm` with a short window (`f=150:g=5`), adds some
 buffering, and leaves recording stream copies untouched. It is off by default;
 a missing filter reports how to disable it or install a compatible mpv.
+Filter support is checked once per configured mpv executable per process;
+`radio devices` always enumerates the current outputs.
 
 Runtime volume is remembered in SQLite. Set `resume = true` to restore the
 last successfully played station and TUI source on startup (default: false).
@@ -216,7 +223,8 @@ A single data directory allows only one playback / recording / TUI session; othe
 - Recordings started during playback include the track title known when recording
   was requested in the filename and metadata. Later track changes never rename
   the file. Unknown titles (including standalone CLI recording) keep the previous
-  naming format. Filename components are sanitized and bounded by bytes.
+  naming format. Filename components are sanitized and bounded by bytes;
+  whitespace between track words becomes underscores.
 - Each recording has a JSON sidecar with the station, actually requested address, timestamps, codec, media duration, and completion status. The final CDN address after a source-side redirect may not be visible.
 - A unique `.part` file is written first; the final file is produced after a normal stop. Interruptions / failures keep the `.part` file and its status, and unfinished records are recovered when a media session starts next. Use `recordings list` to inspect results; media duration may be an estimate.
 - Final files never overwrite existing files. On macOS, publication requires a filesystem that supports hard links; an interrupted publication can be retried with `recordings recover`.
