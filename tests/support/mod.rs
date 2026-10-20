@@ -88,8 +88,11 @@ pub fn response(stream: &mut TcpStream, status: u16, content_type: &str, body: &
     }
 }
 pub fn config(dir: &std::path::Path) -> radio_cli::config::Config {
+    let path = dir.join("test-default.toml");
+    std::fs::write(&path, "").unwrap();
     let config =
-        radio_cli::config::Config::load(None, Some(dir), Some("http://127.0.0.1:1")).unwrap();
+        radio_cli::config::Config::load(Some(&path), Some(dir), Some("http://127.0.0.1:1"))
+            .unwrap();
     config.prepare().unwrap();
     config
 }

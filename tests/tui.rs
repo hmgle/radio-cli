@@ -57,9 +57,13 @@ impl Tui {
             )
         };
         let mut command = Command::new(env!("CARGO_BIN_EXE_radio"));
-        if let Some(config) = config {
-            command.arg("--config").arg(config);
+        let default_config = dir.join("tui-default.toml");
+        if config.is_none() {
+            fs::write(&default_config, "").unwrap();
         }
+        command
+            .arg("--config")
+            .arg(config.unwrap_or(&default_config));
         let child = command
             .arg("--data-dir")
             .arg(dir)
