@@ -34,6 +34,40 @@ pub struct Player {
     stream: UnixStream,
     socket: PathBuf,
     buffer: Vec<u8>,
+    audio_device: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AudioDevice {
+    pub name: String,
+    pub description: String,
+}
+
+fn parse_audio_devices(output: &str) -> Vec<AudioDevice> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim().strip_prefix('\'')?;
+            let (name, description) = line.rsplit_once("' (")?;
+            Some(AudioDevice {
+                name: name.into(),
+                description: description.strip_suffix(')')?.into(),
+            })
+        })
+        .collect()
+}
+
+pub fn audio_devices(config: &Config, stop: &Arc<AtomicBool>) -> Result<Vec<AudioDevice>> {
+    let output = crate::process::output(
+        Command::new(&config.settings.mpv).args(["--no-config", "--audio-device=help"]),
+        Duration::from_secs(3),
+        stop,
+    )?;
+    let devices = parse_audio_devices(&String::from_utf8_lossy(&output));
+    if devices.is_empty() {
+        bail!(DomainError::new(ErrorCode::AudioDevicesUnavailable));
+    }
+    Ok(devices)
 }
 
 fn metadata_title(metadata: &Value) -> String {
@@ -108,6 +142,14 @@ fn playback_command(config: &Config, socket: &Path) -> Command {
     if config.settings.normalize_loudness {
         command.arg("--af=dynaudnorm=f=150:g=5");
     }
+    if let Some(device) = config
+        .settings
+        .audio_device
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        command.arg(format!("--audio-device={device}"));
+    }
     command
 }
 
@@ -174,6 +216,7 @@ impl Player {
             stream,
             socket,
             buffer: vec![],
+            audio_device: config.settings.audio_device.clone(),
         };
         for (id, property) in [(1, "metadata"), (2, "pause"), (3, "volume"), (4, "mute")] {
             player.command(json!(["observe_property", id, property]))?;
@@ -230,9 +273,23 @@ impl Player {
             };
             match value["event"].as_str().unwrap_or("") {
                 "playback-restart" => out.push(Event::Playing),
-                "end-file" => out.push(Event::End(
-                    value["reason"].as_str().unwrap_or("unknown").into(),
-                )),
+                "end-file" => {
+                    if value["file_error"]
+                        .as_str()
+                        .is_some_and(|error| error.contains("audio output"))
+                        && let Some(device) = self
+                            .audio_device
+                            .as_deref()
+                            .filter(|s| !s.trim().is_empty())
+                    {
+                        bail!(
+                            DomainError::new(ErrorCode::AudioDeviceFailed).with("device", device)
+                        );
+                    }
+                    out.push(Event::End(
+                        value["reason"].as_str().unwrap_or("unknown").into(),
+                    ));
+                }
                 "property-change" => match value["name"].as_str().unwrap_or("") {
                     "metadata" => {
                         out.push(Event::Title(metadata_title(&value["data"])));
@@ -298,8 +355,40 @@ mod socket_path_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{metadata_title, playback_command};
+    use super::{metadata_title, parse_audio_devices, playback_command};
     use serde_json::json;
+
+    #[test]
+    fn device_names_preserve_backend_syntax_and_optional_arguments() {
+        let parsed = parse_audio_devices(
+            "List of detected audio devices:\n  'auto' (Autoselect device)\n  'alsa/plughw:CARD=USB,DEV=0' (Listener's USB (stereo))\nignored\n",
+        );
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[1].name, "alsa/plughw:CARD=USB,DEV=0");
+        assert_eq!(parsed[1].description, "Listener's USB (stereo)");
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::load(None, Some(dir.path()), None).unwrap();
+        let socket = std::path::Path::new("/tmp/radio.sock");
+        let original: Vec<_> = playback_command(&config, socket)
+            .get_args()
+            .map(|a| a.to_owned())
+            .collect();
+        config.settings.audio_device = Some(String::new());
+        assert_eq!(
+            playback_command(&config, socket)
+                .get_args()
+                .collect::<Vec<_>>(),
+            original
+        );
+        config.settings.audio_device = Some(parsed[1].name.clone());
+        let command = playback_command(&config, socket);
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(&args[..original.len()], original);
+        assert_eq!(
+            args.last().unwrap(),
+            &"--audio-device=alsa/plughw:CARD=USB,DEV=0"
+        );
+    }
 
     #[test]
     fn normalization_changes_only_the_opt_in_filter_argument() {

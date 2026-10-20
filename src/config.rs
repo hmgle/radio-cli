@@ -20,6 +20,7 @@ pub struct Settings {
     pub api_url: Option<String>,
     pub mpv: String,
     pub normalize_loudness: bool,
+    pub audio_device: Option<String>,
     pub ffmpeg: String,
     pub ffprobe: String,
     pub connect_timeout_secs: u64,
@@ -43,6 +44,7 @@ impl Default for Settings {
             api_url: None,
             mpv: "mpv".into(),
             normalize_loudness: false,
+            audio_device: None,
             ffmpeg: "ffmpeg".into(),
             ffprobe: "ffprobe".into(),
             connect_timeout_secs: 5,
@@ -235,6 +237,10 @@ impl Config {
                 .checked_mul(1024 * 1024)
                 .is_none()
             || settings.volume > 100
+            || settings
+                .audio_device
+                .as_ref()
+                .is_some_and(|value| value.chars().any(char::is_control))
             || settings.connect_timeout_secs == 0
             || settings.request_timeout_secs == 0
             || settings.playback_timeout_secs == 0

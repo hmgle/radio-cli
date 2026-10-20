@@ -724,6 +724,57 @@ fn normalization_reports_a_missing_filter_before_starting_playback() {
 }
 
 #[test]
+fn invalid_audio_device_names_the_device_and_device_listing_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut config) = mpv_config(dir.path()) else {
+        return;
+    };
+    // Use a nonexistent backend so no hardware output can be opened.
+    config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+    config.settings.audio_device = Some("radio-test-missing/device".into());
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.play(&server.url).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !engine.playback_failed {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline, "{}", engine.status.message);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        engine.status.message.contains("radio-test-missing/device"),
+        "{}",
+        engine.status.message
+    );
+    assert!(engine.status.message.contains("radio devices"));
+}
+
+#[test]
+fn selected_audio_device_plays_through_real_mpv() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut config) = mpv_config(dir.path()) else {
+        return;
+    };
+    config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+    config.settings.audio_device = Some("null".into());
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+    let mut player =
+        Player::start(&config, &server.url, &Arc::new(AtomicBool::new(false))).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !player
+        .poll()
+        .unwrap()
+        .iter()
+        .any(|event| matches!(event, Event::Playing))
+    {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn mpv_ipc_delivers_one_shot_icy_titles_during_playback() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

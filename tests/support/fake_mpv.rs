@@ -3,6 +3,10 @@ use std::{fs::{self, OpenOptions}, io::{BufRead, BufReader, Write}, os::unix::ne
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     if args.iter().any(|s| s == "--version") { println!("fake mpv"); return; }
+    if args.iter().any(|s| s == "--audio-device=help") {
+        println!("List of detected audio devices:\n  'auto' (Autoselect device)\n  'test/headphones' (Test headphones)");
+        return;
+    }
     let socket = args.iter().find_map(|s| s.strip_prefix("--input-ipc-server=")).unwrap();
     let path = std::env::current_exe().unwrap().with_extension("commands");
     let mut log = OpenOptions::new().create(true).append(true).open(path).unwrap();

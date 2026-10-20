@@ -36,6 +36,7 @@ Legacy `--json` remains available throughout 0.3.x. Its success shapes are:
 | `record` | Array containing the most recent recording |
 | `recordings recover` | `{warnings}` |
 | `recordings remove` | `{id,removed,index_only}` |
+| `devices` | Array of `{name,description}` from the configured mpv |
 | `doctor` | Object with `checks`, `config`, `database` |
 | `play`, `random`, `recordings play/open` | No legacy JSON result; v2 `data:null` |
 

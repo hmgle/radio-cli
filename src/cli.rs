@@ -212,6 +212,8 @@ pub enum Action {
         action: RecordingAction,
     },
     Doctor,
+    /// List mpv audio output devices without starting playback.
+    Devices,
 }
 
 #[derive(Args)]
@@ -386,6 +388,20 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             crate::tui::run(config, stop)?;
         }
         Action::Doctor => doctor(&config, cli.json, &stop)?,
+        Action::Devices => {
+            let devices = crate::player::audio_devices(&config, &stop)?;
+            if cli.json {
+                emit(&devices)?;
+            } else {
+                for device in devices {
+                    println!(
+                        "{}\t{}",
+                        crate::clean_text(&device.name),
+                        crate::clean_text(&device.description)
+                    );
+                }
+            }
+        }
         Action::Sync { accept_shrink } => {
             let mut directory = Directory::new(&config, stop.clone())?;
             let count = directory.sync_with_policy(

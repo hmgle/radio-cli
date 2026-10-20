@@ -146,6 +146,11 @@ and does not duplicate history or click reports. Stop, switching stations,
 and exit cancel pending retries. Exhausted retries use the normal fallback
 chain; initial connection failures retain their existing fallback behavior.
 
+Use `radio devices` (or `radio --json devices`) to list mpv audio outputs.
+Set `audio_device = "NAME"` to choose one; empty or absent uses automatic
+selection. Names depend on mpv's audio backend and the local machine, and
+may change when hardware is reconnected.
+
 Set `normalize_loudness = true` for optional adaptive playback level control.
 It uses mpv's `dynaudnorm` with a short window (`f=150:g=5`), adds some
 buffering, and leaves recording stream copies untouched. It is off by default;
