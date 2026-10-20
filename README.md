@@ -115,7 +115,7 @@ TUI keys:
 | `?` | Open help or current failure details |
 | `q` / `Ctrl-C` | Finalize recordings and quit |
 
-The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and the wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
+The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and select rows; double-click a station row to play it. The wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.
 
 Inside the TUI, `:sync` runs a background sync, `:sync-cancel` cancels the task, `:current` shows full details of the current station, and `:record --duration 30m` schedules a timed recording of the current station. Commands support quoting, Tab completion, and history; see the [TUI guide](docs/tui.md) for more commands and interaction design (in Chinese).
 

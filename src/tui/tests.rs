@@ -147,6 +147,83 @@ fn input_labels_use_display_cells_and_keep_the_cursor_inside() {
 }
 
 #[test]
+fn double_click_plays_only_the_same_station_without_intervening_movement() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let data = view();
+    let mut app = App::default();
+    app.rects[Focus::List.index()] = ratatui::layout::Rect::new(10, 5, 40, 10);
+    let (sender, receiver) = command::channel(16);
+    let now = Instant::now();
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 15,
+        row: 7,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse_at(click, &data, &sender, now);
+    assert_eq!(app.list.selected(), Some(1));
+    assert!(receiver.try_recv().is_err());
+    app.mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..click
+        },
+        &data,
+        &sender,
+        now + Duration::from_millis(50),
+    );
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Play(id)) if id == data.rows[1].stationuuid));
+    for intervening in [
+        MouseEventKind::Moved,
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::ScrollDown,
+    ] {
+        app.mouse_at(click, &data, &sender, now);
+        app.mouse_at(
+            MouseEvent {
+                kind: intervening,
+                ..click
+            },
+            &data,
+            &sender,
+            now,
+        );
+        app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+        assert!(receiver.try_recv().is_err());
+        app.mouse_at(
+            MouseEvent {
+                kind: MouseEventKind::Moved,
+                ..click
+            },
+            &data,
+            &sender,
+            now,
+        );
+    }
+    app.mouse_at(click, &data, &sender, now);
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(501));
+    assert!(receiver.try_recv().is_err());
+    app.mouse_enabled = false;
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(510));
+    assert!(receiver.try_recv().is_err());
+    app.mouse_enabled = true;
+    app.help = true;
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(520));
+    assert!(receiver.try_recv().is_err());
+    app.help = false;
+    let mut changed = data.clone();
+    changed.rows_revision += 1;
+    app.mouse_at(click, &data, &sender, now);
+    app.mouse_at(click, &changed, &sender, now + Duration::from_millis(100));
+    assert!(receiver.try_recv().is_err());
+    app.source = Source::Recordings;
+    app.mouse_at(click, &data, &sender, now);
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
 fn context_hints_match_source_and_focus_actions() {
     let data = view();
     let (sender, receiver) = command::channel(20);

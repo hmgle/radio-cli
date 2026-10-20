@@ -309,6 +309,7 @@ impl Editor {
 }
 
 pub(super) struct App {
+    last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
     jump_progress: usize,
     jump_last: Option<Instant>,
@@ -359,6 +360,7 @@ impl Default for App {
         let mut list = ListState::default();
         list.select(Some(0));
         Self {
+            last_click: None,
             jump_binding: "''".into(),
             jump_progress: 0,
             jump_last: None,
@@ -908,6 +910,7 @@ impl App {
         false
     }
     pub fn key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
+        self.last_click = None;
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
             || self.too_small && key.code == KeyCode::Char('q')
         {
@@ -1254,14 +1257,41 @@ impl App {
         }
     }
     pub fn mouse(&mut self, event: MouseEvent, view: &View, sender: &CommandSender) {
+        self.mouse_at(event, view, sender, Instant::now());
+    }
+    pub(super) fn mouse_at(
+        &mut self,
+        event: MouseEvent,
+        view: &View,
+        sender: &CommandSender,
+        now: Instant,
+    ) {
         if !self.mouse_enabled
             || self.mode != Mode::Normal
             || self.help
             || self.filter_edit.is_some()
             || self.confirmation.is_some()
         {
+            self.last_click = None;
             return;
         }
+        let previous = match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.last_click.take(),
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self
+                    .last_click
+                    .as_ref()
+                    .is_some_and(|(_, x, y, _, _)| (*x, *y) != (event.column, event.row))
+                {
+                    self.last_click = None;
+                }
+                None
+            }
+            _ => {
+                self.last_click = None;
+                None
+            }
+        };
         let point = ratatui::layout::Position::new(event.column, event.row);
         if self.filter_summary.contains(point)
             && event.kind == MouseEventKind::Down(MouseButton::Left)
@@ -1287,13 +1317,36 @@ impl App {
                     }
                 } else if focus == Focus::List {
                     let rect = self.rects[focus.index()];
-                    if event.row > rect.y && event.row < rect.bottom().saturating_sub(1) {
+                    if event.row > rect.y
+                        && event.row < rect.bottom().saturating_sub(1)
+                        && event.column > rect.x
+                        && event.column < rect.right().saturating_sub(1)
+                    {
                         let index = self.list.offset() + usize::from(event.row - rect.y - 1);
                         if index < self.length(view) {
                             self.list.select(Some(index));
                             self.selected_id = self.selection_id(view);
                             self.details_scroll = 0;
                             self.inspect_info = false;
+                            if let Some(station) = self.selected(view) {
+                                let uuid = station.stationuuid.clone();
+                                if previous.is_some_and(|(at, x, y, id, revision)| {
+                                    now.saturating_duration_since(at) <= Duration::from_millis(500)
+                                        && (x, y) == (event.column, event.row)
+                                        && id == uuid
+                                        && revision == view.rows_revision
+                                }) {
+                                    self.send(sender, Command::Play(uuid));
+                                } else {
+                                    self.last_click = Some((
+                                        now,
+                                        event.column,
+                                        event.row,
+                                        uuid,
+                                        view.rows_revision,
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
