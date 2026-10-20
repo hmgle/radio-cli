@@ -12,12 +12,35 @@ fn names() -> &'static BTreeMap<String, String> {
     })
 }
 
+fn name_zh(code: &str) -> Option<&'static str> {
+    let code = code.trim().to_ascii_uppercase();
+    names().get(code.as_str()).map(String::as_str)
+}
+
+/// `name (CODE)` for known codes and the bare code otherwise.
 pub(crate) fn display_zh(code: &str) -> String {
     let code = code.trim().to_ascii_uppercase();
-    match names().get(&code) {
+    match name_zh(&code) {
         Some(name) => format!("{name} ({code})"),
         None => code,
     }
+}
+
+/// Localized label that keeps the upstream catalog name when the code is
+/// missing or absent from the CLDR table, so no catalog metadata is dropped.
+pub(crate) fn display_zh_or(code: &str, upstream: &str) -> String {
+    let code = code.trim().to_ascii_uppercase();
+    if let Some(name) = name_zh(&code) {
+        return format!("{name} ({code})");
+    }
+    let upstream = upstream.trim();
+    if upstream.is_empty() {
+        return code;
+    }
+    if code.is_empty() {
+        return upstream.to_owned();
+    }
+    format!("{upstream} ({code})")
 }
 
 pub(crate) fn matching_codes(query: &str) -> impl Iterator<Item = &'static str> + '_ {

@@ -78,27 +78,63 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
 #[test]
 fn station_details_localize_territory_codes_without_changing_catalog_values() {
     let data = view();
-    for (code, original, expected) in [
-        ("TW", "Taiwan, Republic Of China", "台湾 (TW)"),
-        ("HK", "Hong Kong", "中国香港特别行政区 (HK)"),
-        ("MO", "Macao", "中国澳门特别行政区 (MO)"),
-        ("FR", "France", "法国 (FR)"),
-        (" us ", "United States", "美国 (US)"),
-        ("QZ", "Unrecognized upstream name", "QZ"),
-        ("", "Missing upstream code", "未知"),
+    for (code, original, expected, keeps_upstream) in [
+        ("TW", "Taiwan, Republic Of China", "台湾 (TW)", false),
+        ("HK", "Hong Kong", "中国香港特别行政区 (HK)", false),
+        ("MO", "Macao", "中国澳门特别行政区 (MO)", false),
+        ("FR", "France", "法国 (FR)", false),
+        (" us ", "United States", "美国 (US)", false),
+        // Unknown and missing codes fall back to the upstream catalog name
+        // instead of discarding it.
+        (
+            "QZ",
+            "Unrecognized upstream name",
+            "Unrecognized upstream name (QZ)",
+            true,
+        ),
+        ("", "Missing upstream code", "Missing upstream code", true),
     ] {
         let mut row = station("Catalog station");
         row.country = original.into();
         row.countrycode = code.into();
         row.state = "Catalog subdivision".into();
         let details = render::station_details(&row, &data);
-        assert!(details.contains(&format!("\n国家/地区: {expected}\n")));
+        assert!(
+            details.contains(&format!("\n国家/地区: {expected}\n")),
+            "{code}: {details}"
+        );
         assert!(details.contains("\n州/省/区域: Catalog subdivision\n"));
-        assert!(!details.contains(original));
+        assert_eq!(
+            keeps_upstream,
+            details.contains(original),
+            "{code}: {details}"
+        );
         let json = serde_json::to_value(&row).unwrap();
         assert_eq!(json["country"], original);
         assert_eq!(json["countrycode"], code);
     }
+}
+
+#[test]
+fn help_notice_follows_the_selected_locale() {
+    let english = render::help_text(crate::messages::Locale::En, "");
+    let chinese = render::help_text(crate::messages::Locale::ZhCn, "");
+    assert!(english.contains("Radio Browser"), "{english}");
+    assert!(!english.contains("默认电台目录"), "{english}");
+    assert!(
+        chinese.contains("默认电台目录来自 Radio Browser"),
+        "{chinese}"
+    );
+    for (locale, text) in [
+        (crate::messages::Locale::En, &english),
+        (crate::messages::Locale::ZhCn, &chinese),
+    ] {
+        assert!(text.starts_with(command::HELP), "{locale:?}");
+        assert!(!text.contains("Unknown message"), "{locale:?}");
+    }
+    let with_binding = render::help_text(crate::messages::Locale::En, "''");
+    assert!(with_binding.contains("定位当前播放电台"), "{with_binding}");
+    assert!(with_binding.starts_with(&english), "{with_binding}");
 }
 
 #[test]

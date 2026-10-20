@@ -677,22 +677,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         frame.render_widget(Clear, rect);
         frame.render_widget(
             scroll_text(
-                &app.help_content.clone().unwrap_or_else(|| {
-                    let help = format!(
-                        "{HELP}\n{}",
-                        crate::messages::text_in(
-                            crate::messages::Locale::ZhCn,
-                            "catalog_source_notice"
-                        )
-                    );
-                    if app.jump_binding.is_empty() {
-                        return help;
-                    }
-                    format!(
-                        "{help}\n{}  定位当前播放电台（可在 keybindings.jump_to_playing 配置）",
-                        app.jump_binding
-                    )
-                }),
+                &app.help_content
+                    .clone()
+                    .unwrap_or_else(|| help_text(crate::messages::locale(), &app.jump_binding)),
                 rect,
                 &mut app.help_scroll,
             )
@@ -700,6 +687,20 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             rect,
         );
     }
+}
+
+pub(super) fn help_text(locale: crate::messages::Locale, jump_binding: &str) -> String {
+    let help = format!(
+        "{HELP}\n{}",
+        crate::messages::text_in(locale, "catalog_source_notice")
+    );
+    if jump_binding.is_empty() {
+        return help;
+    }
+    format!(
+        "{help}\n{}  定位当前播放电台（可在 keybindings.jump_to_playing 配置）",
+        jump_binding
+    )
 }
 
 pub(super) fn station_details(station: &Station, view: &View) -> String {
@@ -716,7 +717,10 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
         } else {
             " · 列表选中 / 指定电台"
         },
-        value(&crate::territories::display_zh(&station.countrycode)),
+        value(&crate::territories::display_zh_or(
+            &station.countrycode,
+            &station.country,
+        )),
         value(&station.language),
         value(&station.state),
         bitrate(station),

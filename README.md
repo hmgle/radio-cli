@@ -155,8 +155,9 @@ a custom `api_url` selects a different directory service.
 
 The Chinese TUI displays country/region names using a pinned
 [Unicode CLDR 48](https://github.com/unicode-org/cldr/tree/release-48) Chinese name
-table keyed by the upstream `countrycode`. Unrecognized codes display as codes;
-missing codes display as unknown. The `state` field is labeled state/province/area.
+table keyed by the upstream `countrycode`. Unrecognized or missing codes fall back
+to the upstream catalog name, then to the code, then to unknown. The `state` field
+is labeled state/province/area.
 Upstream `country` and `countrycode` values are preserved in local storage and
 JSON output. The `--country` option and `countries` command remain compatible;
 code filters continue to use upstream codes. Geographic names and codes serve

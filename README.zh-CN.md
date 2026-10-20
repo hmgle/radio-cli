@@ -139,8 +139,8 @@ TUI 按键：
 目录元数据由上游提供；使用自定义 `api_url` 时，目录来自指定服务。
 
 中文 TUI 的国家/地区名称根据上游 `countrycode`，使用固定版本的
-[Unicode CLDR 48](https://github.com/unicode-org/cldr/tree/release-48) 中文名称显示；
-未识别的代码显示代码本身，缺失代码显示未知。`state` 字段标为“州/省/区域”。
+[Unicode CLDR 48](https://github.com/unicode-org/cldr/tree/release-48) 中文名称显示；代码无法识别或缺失时回退显示上游目录名称，再回退代码，最后显示未知。
+`state` 字段标为“州/省/区域”。
 上游 `country`、`countrycode` 字段在本地保存和 JSON 输出中保留原值，
 `--country` 参数及 `countries` 命令保持兼容，代码筛选仍使用上游代码。
 地理名称与代码仅用于电台检索和展示，不表示本项目对相关地区政治地位或主权归属的立场。
