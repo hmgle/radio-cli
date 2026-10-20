@@ -8,6 +8,7 @@ pub struct Station {
     pub url: String,
     pub url_resolved: String,
     pub homepage: String,
+    pub favicon: String,
     pub country: String,
     pub countrycode: String,
     pub state: String,

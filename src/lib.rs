@@ -1,3 +1,4 @@
+mod artwork;
 pub mod cli;
 pub mod config;
 pub mod directory;

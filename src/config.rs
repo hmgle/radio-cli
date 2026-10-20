@@ -10,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub artwork: ArtworkMode,
     pub keybindings: Keybindings,
     pub mouse: bool,
     pub theme: Theme,
@@ -34,6 +35,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            artwork: ArtworkMode::Off,
             keybindings: Keybindings::default(),
             mouse: true,
             theme: Theme::Default,
@@ -55,6 +57,15 @@ impl Default for Settings {
             recording_dir: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArtworkMode {
+    #[default]
+    Off,
+    Station,
+    Track,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -294,6 +305,26 @@ pub fn validate_url(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artwork_modes_are_explicit_and_disabled_by_default() {
+        assert_eq!(Settings::default().artwork, ArtworkMode::Off);
+        for (value, expected) in [
+            ("off", ArtworkMode::Off),
+            ("station", ArtworkMode::Station),
+            ("track", ArtworkMode::Track),
+        ] {
+            let settings: Settings = toml::from_str(&format!("artwork = {value:?}")).unwrap();
+            assert_eq!(settings.artwork, expected);
+            assert_eq!(
+                toml::from_str::<Settings>(&toml::to_string(&settings).unwrap())
+                    .unwrap()
+                    .artwork,
+                expected
+            );
+        }
+        assert!(toml::from_str::<Settings>("artwork = true").is_err());
+    }
 
     #[test]
     fn resume_accepts_booleans_or_selection_and_round_trips() {

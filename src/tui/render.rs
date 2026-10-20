@@ -497,23 +497,43 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         } else {
             "选择电台查看码率、编码、国家、标签和地址。\n4 查看当前播放电台。".into()
         };
-        frame.render_widget(
-            scroll_text(
-                &text,
-                app.rects[Focus::Details.index()],
-                &mut app.details_scroll,
-            )
-            .block(panel(
-                if area.width < 100 {
-                    "[2/3] 详情 · 2 返回 · j/k 滚动"
-                } else {
-                    "3 详情 · j/k 滚动"
-                }
-                .into(),
-                active(Focus::Details),
-            )),
-            app.rects[Focus::Details.index()],
+        let image =
+            super::artwork::image(app, view, area).map(|(image, rect)| (image.clone(), rect));
+        let mut text_rect = app.rects[Focus::Details.index()];
+        let block = panel(
+            if area.width < 100 {
+                "[2/3] 详情 · 2 返回 · j/k 滚动"
+            } else {
+                "3 详情 · j/k 滚动"
+            }
+            .into(),
+            active(Focus::Details),
         );
+        if let Some((image, rect)) = image {
+            frame.render_widget(block, text_rect);
+            frame.render_widget(ratatui_image::Image::new(&image), rect);
+            text_rect = Rect::new(
+                text_rect.x + 1,
+                text_rect.y + 8,
+                text_rect.width.saturating_sub(2),
+                text_rect.height.saturating_sub(9),
+            );
+            let geometry = Rect::new(0, 0, text_rect.width + 2, text_rect.height + 2);
+            frame.render_widget(
+                scroll_text(&text, geometry, &mut app.details_scroll),
+                text_rect,
+            );
+        } else {
+            frame.render_widget(
+                scroll_text(
+                    &text,
+                    app.rects[Focus::Details.index()],
+                    &mut app.details_scroll,
+                )
+                .block(block),
+                app.rects[Focus::Details.index()],
+            );
+        }
     }
     let task = if view.task.is_empty() {
         view.catalog_note.clone()

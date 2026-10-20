@@ -36,6 +36,7 @@ fn sync_fetches_pages_and_deduplicates_uuid() {
     let first = Station {
         stationuuid: uuid::Uuid::new_v4().to_string(),
         name: "First".into(),
+        favicon: "https://example.test/logo.png".into(),
         ..Station::default()
     };
     let last = Station {
@@ -43,7 +44,7 @@ fn sync_fetches_pages_and_deduplicates_uuid() {
         name: "Last".into(),
         ..Station::default()
     };
-    let page = serde_json::to_vec(&vec![first; 1000]).unwrap();
+    let page = serde_json::to_vec(&vec![first.clone(); 1000]).unwrap();
     let tail = serde_json::to_vec(&vec![last]).unwrap();
     let server = Server::new(move |request, stream| {
         response(
@@ -65,6 +66,10 @@ fn sync_fetches_pages_and_deduplicates_uuid() {
     let mut progress = vec![];
     assert_eq!(client.sync(&mut store, |n| progress.push(n)).unwrap(), 2);
     assert_eq!(progress, vec![0, 1000, 1001]);
+    assert_eq!(
+        store.station(&first.stationuuid).unwrap().favicon,
+        first.favicon
+    );
 }
 
 #[test]

@@ -259,6 +259,14 @@ Generate shell integration with `radio completions bash|zsh|fish`. For example,
 zsh and fish completions plus `man/radio.1`.
 
 Configure `theme = "default"|"mono"|"light"`; nonempty `NO_COLOR` forces mono.
+Set `artwork = "station"` for optional station logos in the TUI details panel
+(default: `"off"`). Logos come from the catalog's `favicon`, independently of
+the audio stream; run `radio sync` after upgrading to populate existing rows.
+Images use Kitty, Sixel or iTerm2 protocols when supported, with Unicode half
+blocks as fallback; tmux always uses half blocks. Monochrome themes and screens
+smaller than 100×24 keep text-only details. Downloads are limited to 256 KiB
+JPEG/PNG images, decoded with size limits, and cached under `artwork/` in the
+data directory (128 entries / 32 MiB). Changed favicon URLs invalidate the cache.
 At 80×24, details open with `3` and the idle task area collapses.
 Use `mouse = false` or `:set mouse false` for native text selection.
 Command history retains 100 entries across sessions. `:help record` shows command

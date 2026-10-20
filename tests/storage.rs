@@ -26,6 +26,21 @@ fn db() -> (TempDir, Store) {
 }
 
 #[test]
+fn station_logos_are_optional_in_older_json_and_round_trip() {
+    let mut old = serde_json::to_value(station("old")).unwrap();
+    old.as_object_mut().unwrap().remove("favicon");
+    let mut station: Station = serde_json::from_value(old).unwrap();
+    assert!(station.favicon.is_empty());
+    station.favicon = "https://example.test/logo.png".into();
+    let (_dir, store) = db();
+    store.upsert(&station).unwrap();
+    assert_eq!(
+        store.station(&station.stationuuid).unwrap().favicon,
+        station.favicon
+    );
+}
+
+#[test]
 fn unicode_filters_literals_and_pagination() {
     let (_dir, store) = db();
     let s = station("上海 Jazz 100%_FM");

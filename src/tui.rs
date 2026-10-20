@@ -1,3 +1,4 @@
+mod artwork;
 mod command;
 mod output;
 mod render;
@@ -53,6 +54,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let theme = config.settings.theme.effective(no_color);
     let mouse = config.settings.mouse;
     let jump_binding = config.settings.keybindings.jump_to_playing.clone();
+    let artwork_config = config.clone();
     let history_path = config.data_dir.join("command-history.json");
     if theme == crate::config::Theme::Mono {
         crossterm::style::force_color_output(false);
@@ -69,6 +71,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     });
     let result = (|| -> Result<()> {
         let _screen = Screen::enter(mouse)?;
+        let mut artwork = artwork::Controller::new(artwork_config, theme);
         let writer = output::TerminalWriter::new(io::stdout(), theme == crate::config::Theme::Mono);
         let mut terminal = Terminal::new(CrosstermBackend::new(writer))?;
         execute!(
@@ -88,6 +91,14 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         while !stop.load(Ordering::Relaxed) && !app.quit {
             let snapshot = view.lock().unwrap().snapshot();
             app.reconcile(&snapshot);
+            if let Some(artwork) = &mut artwork {
+                let size = terminal.size()?;
+                dirty |= artwork.update(
+                    &mut app,
+                    &snapshot,
+                    ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                );
+            }
             app.request_selected_backups(&snapshot, &sender);
             app.request_facets(&sender);
             if dirty

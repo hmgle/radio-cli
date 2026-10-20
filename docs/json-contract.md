@@ -64,6 +64,10 @@ Recording objects include `reconnects`, the number of HTTP retry attempts
 reported by FFmpeg. A positive count means live audio may have gaps even when
 `status` is `complete`; old metadata without this field reads as zero.
 
+Station objects include `favicon`, the catalog's optional station-logo URL.
+It defaults to an empty string for older stored rows and custom stations.
+Refresh the catalog with `sync` to populate existing catalog stations.
+
 `info`, `station edit/remove/backups`, and `recordings remove` always produce
 JSON, even without a JSON flag. For station removal, `removed:true` means the
 custom station was removed; `placeholder_kept:true` explicitly indicates that
