@@ -554,10 +554,9 @@ pub(super) fn run(
     commands: CommandReceiver,
     view: Arc<Mutex<View>>,
     stop: Arc<AtomicBool>,
+    mut filter: Filter,
 ) -> Result<()> {
     engine.enable_background_media();
-    let source = super::state::Source::restore(&engine.store, engine.config.settings.resume)?;
-    let (mut filter, _) = source.initial_filter(&engine.store, engine.config.settings.resume)?;
     refresh(&engine, &filter, &view)?;
     if let Err(error) = engine.resume_last_station() {
         view.lock()

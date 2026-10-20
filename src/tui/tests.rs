@@ -115,6 +115,22 @@ fn selection_resume_restores_source_and_page_once_without_playback() {
     data.rows_revision = 1;
     app.reconcile(&data);
     assert_eq!(app.selected(&data).unwrap().name, "Station 1");
+    // The target can disappear between restoration and the first query.
+    // A later revision must not unexpectedly select it when it returns.
+    let mut vanished = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    let mut absent = data.clone();
+    absent.rows = data
+        .rows
+        .iter()
+        .filter(|s| s.name != "Station 1")
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    vanished.reconcile(&absent);
+    let first = vanished.selected(&absent).unwrap().stationuuid.clone();
+    data.rows_revision += 1;
+    vanished.reconcile(&data);
+    assert_eq!(vanished.selected(&data).unwrap().stationuuid, first);
     let (sender, _) = command::channel(8);
     app.key(key(KeyCode::Home), &data, &sender);
     data.rows_revision += 1;
@@ -135,6 +151,23 @@ fn selection_resume_restores_source_and_page_once_without_playback() {
     let fresh = App::restore(&engine.store, ResumeMode::Disabled).unwrap();
     assert_eq!(fresh.source, Source::Stations);
     assert_eq!(fresh.filter.offset, 0);
+
+    // The worker uses the same startup page even if preferences change
+    // between App restoration and worker startup.
+    let initial_filter = app.filter.clone();
+    let expected_filter = initial_filter.clone();
+    engine.config.settings.auto_sync_days = 0;
+    engine.store.set_meta("pref_source", "stations").unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let output = shared.clone();
+    let stop = engine.stop.clone();
+    let flag = stop.clone();
+    let (_sender, receiver) = command::channel(8);
+    let handle = thread::spawn(move || worker::run(engine, receiver, output, flag, initial_filter));
+    wait_for(|| shared.lock().unwrap().rows_revision > 0);
+    assert_eq!(shared.lock().unwrap().filter, expected_filter);
+    stop.store(true, Ordering::Relaxed);
+    handle.join().unwrap().unwrap();
 }
 
 #[test]
@@ -498,7 +531,12 @@ fn expired_catalog_syncs_at_startup_and_can_be_disabled() {
     let worker_view = shared.clone();
     let worker_stop = stop.clone();
     let (_sender, receiver) = command::channel(10);
-    let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle = thread::spawn(move || {
+        worker::run(engine, receiver, worker_view, worker_stop, initial_filter)
+    });
     let deadline = Instant::now() + Duration::from_secs(5);
     while shared
         .lock()
@@ -847,7 +885,12 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
     let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle = thread::spawn(move || {
+        worker::run(engine, receiver, worker_view, worker_stop, initial_filter)
+    });
     sender.send(Command::Sync(false)).unwrap();
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     sender.send(Command::Sync(false)).unwrap();
@@ -1171,7 +1214,11 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
     let (sender, receiver) = command::channel(16);
     let output = shared.clone();
     let worker_stop = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, output, worker_stop));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle =
+        thread::spawn(move || worker::run(engine, receiver, output, worker_stop, initial_filter));
     let wait = |check: &dyn Fn(&View) -> bool, budget: Duration| {
         let deadline = Instant::now() + budget;
         loop {
@@ -1285,7 +1332,10 @@ fn slow_recording_verification_does_not_hold_media_controls_or_shutdown() {
     let (sender, receiver) = command::channel(16);
     let output = shared.clone();
     let flag = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, output, flag));
+    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+        .unwrap()
+        .filter;
+    let handle = thread::spawn(move || worker::run(engine, receiver, output, flag, initial_filter));
     sender.send(Command::Play(row.stationuuid)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     while !shared.lock().unwrap().status.playing() {

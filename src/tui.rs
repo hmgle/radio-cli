@@ -63,7 +63,10 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();
-    let handle = thread::spawn(move || worker::run(engine, receiver, worker_view, worker_stop));
+    let initial_filter = app.filter.clone();
+    let handle = thread::spawn(move || {
+        worker::run(engine, receiver, worker_view, worker_stop, initial_filter)
+    });
     let result = (|| -> Result<()> {
         let _screen = Screen::enter(mouse)?;
         let writer = output::TerminalWriter::new(io::stdout(), theme == crate::config::Theme::Mono);
