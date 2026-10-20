@@ -24,6 +24,7 @@ pub enum Event {
     Playing,
     Title(String),
     End(String),
+    Failed(DomainError),
     Paused(bool),
     Volume(u8),
     Muted(bool),
@@ -245,9 +246,13 @@ impl Player {
     pub fn poll(&mut self) -> Result<Vec<Event>> {
         let mut out = vec![];
         let mut buf = [0u8; 8192];
+        let mut closed = false;
         loop {
             match self.stream.read(&mut buf) {
-                Ok(0) => bail!(DomainError::new(ErrorCode::PlayerClosed)),
+                Ok(0) => {
+                    closed = true;
+                    break;
+                }
                 Ok(n) => self.buffer.extend_from_slice(&buf[..n]),
                 Err(e)
                     if matches!(
@@ -282,9 +287,10 @@ impl Player {
                             .as_deref()
                             .filter(|s| !s.trim().is_empty())
                     {
-                        bail!(
-                            DomainError::new(ErrorCode::AudioDeviceFailed).with("device", device)
-                        );
+                        out.push(Event::Failed(
+                            DomainError::new(ErrorCode::AudioDeviceFailed).with("device", device),
+                        ));
+                        continue;
                     }
                     out.push(Event::End(
                         value["reason"].as_str().unwrap_or("unknown").into(),
@@ -304,7 +310,12 @@ impl Player {
                 _ => {}
             }
         }
-        if self.child.try_wait()?.is_some() {
+        // Deliver buffered end-file errors even when mpv closes IPC or exits
+        // immediately afterward; otherwise their structured reason is lost.
+        if out.is_empty() && closed {
+            bail!(DomainError::new(ErrorCode::PlayerClosed));
+        }
+        if out.is_empty() && self.child.try_wait()?.is_some() {
             bail!(DomainError::new(ErrorCode::PlayerExited));
         }
         Ok(out)

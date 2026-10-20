@@ -134,6 +134,31 @@ fn direct_play_rejects_invalid_urls_with_the_domain_error() {
 }
 
 #[test]
+fn playback_device_failure_preserves_the_json_error_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let mpv = support::fake_mpv(dir.path());
+    let config = dir.path().join("config.toml");
+    fs::write(
+        &config,
+        toml::to_string(&serde_json::json!({
+            "mpv": mpv, "audio_device": "test/fail"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = radio(dir.path())
+        .arg("--config")
+        .arg(&config)
+        .args(["--json-v2", "play", "https://example.com/live"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "audio_device_failed");
+    assert_eq!(value["error"]["params"]["device"], "test/fail");
+}
+
+#[test]
 fn devices_lists_the_configured_mpv_outputs_in_text_and_json() {
     let dir = tempfile::tempdir().unwrap();
     let mpv = support::fake_mpv(dir.path());

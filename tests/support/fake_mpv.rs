@@ -20,7 +20,11 @@ fn main() {
         writeln!(log,"{line}").unwrap(); log.flush().unwrap();
         if line.contains("\"quit\"") { break; }
         let event = if line.contains("\"loadfile\"") {
-            if line.contains("/fail") { "{\"event\":\"end-file\",\"reason\":\"error\"}".to_owned() }
+            if args.iter().any(|s| s == "--audio-device=test/fail") {
+                writeln!(stream, "{{\"event\":\"end-file\",\"reason\":\"error\",\"file_error\":\"audio output initialization failed\"}}").unwrap();
+                break;
+            }
+            else if line.contains("/fail") { "{\"event\":\"end-file\",\"reason\":\"error\"}".to_owned() }
             else { "{\"event\":\"playback-restart\"}".to_owned() }
         } else if line.contains("\"cycle\",\"pause\"") {
             paused = !paused;

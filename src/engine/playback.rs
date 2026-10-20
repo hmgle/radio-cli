@@ -28,6 +28,7 @@ pub(super) struct PlaybackController {
     pub(super) started: Instant,
     pub(super) random_filter: Option<Filter>,
     pub(super) random_tried: Vec<String>,
+    pub(super) failure: Option<DomainError>,
 }
 
 impl PlaybackController {
@@ -142,6 +143,7 @@ impl PlaybackController {
         self.reconnect_due = None;
         recording.clear_finished(session);
         session.playback_failed = false;
+        self.failure = None;
         session.status.title.clear();
         session.status.muted = false;
         session.status.playback_state = PlaybackState::Idle;
@@ -316,6 +318,24 @@ impl PlaybackController {
         self.exhausted(session, recording, reason)
     }
 
+    fn player_failed(
+        &mut self,
+        session: &mut Session,
+        recording: &mut RecordingController,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        // Local player and device failures cannot be repaired by changing
+        // stations, retrying streams, or refreshing the network directory.
+        let reason = format!("{error:#}");
+        self.failure = error.downcast_ref::<DomainError>().cloned();
+        self.refresh_task = None;
+        self.candidates.clear();
+        self.random_filter = None;
+        self.retire_player(session, recording);
+        recording.stop_recording(session, self, Some(&reason))?;
+        self.exhausted(session, recording, &reason)
+    }
+
     pub(super) fn exhausted(
         &mut self,
         session: &mut Session,
@@ -348,7 +368,7 @@ impl PlaybackController {
         if self.reconnect_due.is_some_and(|due| Instant::now() >= due) {
             self.reconnect_due = None;
             if let Err(error) = self.start_url(session, recording) {
-                self.stream_failed(session, recording, &format!("{error:#}"))?;
+                self.player_failed(session, recording, error)?;
             }
         }
         if let Some(player) = self.player.as_mut() {
@@ -357,6 +377,10 @@ impl PlaybackController {
                 Ok(events) => {
                     for event in events {
                         match event {
+                            Event::Failed(error) => {
+                                self.player_failed(session, recording, error.into())?;
+                                break;
+                            }
                             Event::Playing => {
                                 self.reconnect_attempts = 0;
                                 self.reconnect_due = None;
@@ -556,11 +580,7 @@ impl PlaybackController {
                         self.started = Instant::now();
                     }
                     Err(error) => {
-                        self.stream_failed(
-                            session,
-                            recording,
-                            &crate::t!("playback_start_failed", "reason" => format!("{error:#}")),
-                        )?;
+                        self.player_failed(session, recording, error)?;
                     }
                 }
             }

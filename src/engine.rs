@@ -166,6 +166,7 @@ impl Engine {
                 started: Instant::now(),
                 random_filter: None,
                 random_tried: vec![],
+                failure: None,
             },
             recording: RecordingController {
                 recording_probe: None,
@@ -362,6 +363,10 @@ impl Engine {
             || self.playback.reconnect_due.is_some()
     }
 
+    pub fn playback_error(&self) -> Option<&DomainError> {
+        self.playback.failure.as_ref()
+    }
+
     pub fn shutdown(&mut self) -> Result<()> {
         self.stop_playback()?;
         self.playback.click_task = None;
@@ -403,6 +408,91 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_failure_skips_backups_reconnects_refresh_and_random_fallback() {
+        use crate::test_support::{Server, fake_mpv};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        let server = Server::new(move |_, _| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let mpv = fake_mpv(dir.path());
+        for background in [false, true] {
+            let data = dir.path().join(background.to_string());
+            let mut config = Config::load(None, Some(&data), Some(&server.url)).unwrap();
+            config.prepare().unwrap();
+            config.settings.mpv = mpv.to_string_lossy().into_owned();
+            config.settings.audio_device = Some("test/fail".into());
+            let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            engine.session.background_media = background;
+            let station = Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: "Catalog station".into(),
+                url: format!("{}/live", server.url),
+                active: true,
+                ..Station::default()
+            };
+            engine.store.upsert(&station).unwrap();
+            engine
+                .store
+                .add_backup(&station.stationuuid, &format!("{}/backup", server.url))
+                .unwrap();
+            engine.play(&station.stationuuid).unwrap();
+            engine.playback.random_filter = Some(Filter::default());
+            engine.playback.session_started = true;
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !engine.playback_failed {
+                engine.tick().unwrap();
+                assert!(Instant::now() < deadline, "{}", engine.status.message);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let error = engine.playback_error().unwrap();
+            assert_eq!(error.code, ErrorCode::AudioDeviceFailed);
+            assert_eq!(error.params["device"], "test/fail");
+            assert_eq!(engine.playback.tried.len(), 1);
+            assert!(!engine.playback_active());
+            assert!(!engine.playback.refreshed);
+            assert!(engine.playback.reconnect_window.is_empty());
+            engine.shutdown().unwrap();
+        }
+        assert_eq!(requests.load(Ordering::Relaxed), 0);
+        let commands = std::fs::read_to_string(mpv.with_extension("commands")).unwrap();
+        assert_eq!(
+            commands
+                .lines()
+                .filter(|s| s.contains("\"loadfile\""))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn background_player_startup_preserves_dependency_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::test_support::config(dir.path());
+        config.settings.mpv = dir
+            .path()
+            .join("missing-mpv")
+            .to_string_lossy()
+            .into_owned();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine.enable_background_media();
+        engine.play("https://example.com/live").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !engine.playback_failed {
+            engine.tick().unwrap();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            engine.playback_error().unwrap().code,
+            ErrorCode::MissingDependency
+        );
+        assert!(!engine.playback_active());
+    }
 
     #[test]
     fn failed_recording_finalization_keeps_the_previous_playback_source_kind() {

@@ -688,6 +688,9 @@ fn playback_loop(engine: &mut Engine, stop: &AtomicBool) -> Result<()> {
     }
     engine.shutdown()?;
     if engine.playback_failed {
+        if let Some(error) = engine.playback_error() {
+            return Err(error.clone().into());
+        }
         bail!("{}", engine.status.message);
     }
     Ok(())
