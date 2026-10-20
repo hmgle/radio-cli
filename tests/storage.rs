@@ -196,6 +196,34 @@ fn chinese_territory_queries_preserve_upstream_metadata_and_code_filters() {
 }
 
 #[test]
+fn single_character_queries_do_not_widen_to_territory_names() {
+    let (_dir, store) = db();
+    let mut singapore = station("Catalog station");
+    singapore.country = "Singapore".into();
+    singapore.countrycode = "SG".into();
+    store.upsert(&singapore).unwrap();
+    let mut named = station("新歌电台");
+    named.countrycode = "FR".into();
+    store.upsert(&named).unwrap();
+    let matches = |query: &str| {
+        store
+            .search(&Filter {
+                query: query.into(),
+                limit: 100,
+                ..Filter::default()
+            })
+            .unwrap()
+            .len()
+    };
+    // "新" is a prefix of 新加坡 but also of 新喀里多尼亚, 新西兰 and 巴布亚新几内亚,
+    // so a one-character query must not pull in whole territories.
+    assert_eq!(matches("新"), 1);
+    assert_eq!(matches("新加坡"), 1);
+    assert_eq!(matches(" 新加坡 "), 1);
+    assert_eq!(matches("新歌"), 1);
+}
+
+#[test]
 fn sync_is_atomic_and_preserves_local_state() {
     let (_dir, mut store) = db();
     let first = station("旧台");

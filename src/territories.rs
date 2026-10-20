@@ -44,8 +44,12 @@ pub(crate) fn display_zh_or(code: &str, upstream: &str) -> String {
 }
 
 pub(crate) fn matching_codes(query: &str) -> impl Iterator<Item = &'static str> + '_ {
+    // A single character is too ambiguous to widen a station-name search:
+    // "岛" alone matches 32 territories and "国" matches 15.
+    let query = query.trim();
+    let eligible = query.chars().count() >= 2;
     names()
         .iter()
-        .filter(move |(_, name)| name.contains(query))
+        .filter(move |(_, name)| eligible && name.contains(query))
         .map(|(code, _)| code.as_str())
 }

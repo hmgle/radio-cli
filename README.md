@@ -103,7 +103,7 @@ radio record <UUID> --duration 30m --output-dir ./recordings
 radio recordings list
 ```
 
-Name, country/region, language, and tag searches run locally; searches also match Chinese country/region names. Country/region code, language, and tag filters use full values (languages also accept the codes provided by the catalog, e.g. `zh`). The minimum-bitrate filter excludes records with unknown bitrate. `random` samples across the entire matching catalog and is not limited by search pagination. `info` always outputs JSON; query commands accept `--json`. Runtime status and diagnostics go to stderr.
+Name, country/region, language, and tag searches run locally. A query of two or more characters also matches Chinese country/region names as substrings, so `刚果` finds stations in both Congos and `法国` finds French stations; single-character queries match station text only, because one character is shared by too many territories (`岛` appears in 32 names). Country/region code, language, and tag filters use full values (languages also accept the codes provided by the catalog, e.g. `zh`). The minimum-bitrate filter excludes records with unknown bitrate. `random` samples across the entire matching catalog and is not limited by search pagination. `info` always outputs JSON; query commands accept `--json`. Runtime status and diagnostics go to stderr.
 
 Use `--json-v2` for atomic success/error envelopes and stable error codes; legacy
 `--json` shapes remain unchanged. See the [JSON contract](docs/json-contract.md).
