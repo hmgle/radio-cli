@@ -61,6 +61,7 @@ codes! {
     PlayerMessageTooLarge => ("player_message_too_large", 1),
     PlayerExited => ("player_exited", 1),
     ProcessTimeout => ("process_timeout", 1),
+    ArtworkHandoffTimeout => ("artwork_handoff_timeout", 1),
     ProcessFailed => ("process_failed", 1),
     BackgroundFailed => ("background_failed", 1),
     EmptyStationName => ("empty_station_name", 2),

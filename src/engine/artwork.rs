@@ -2,6 +2,7 @@
 use crate::{
     artwork::{Task, client},
     config::Config,
+    error::{DomainError, ErrorCode},
 };
 use anyhow::{Result, bail, ensure};
 use std::{
@@ -148,7 +149,7 @@ pub(super) fn handoff_deadline(config: &Config) -> Instant {
 
 pub(super) fn handoff_expired(deadline: Instant) -> Result<()> {
     if Instant::now() >= deadline {
-        bail!(crate::t!("artwork_handoff_timeout"));
+        bail!(DomainError::new(ErrorCode::ArtworkHandoffTimeout));
     }
     Ok(())
 }
@@ -160,9 +161,7 @@ pub(super) fn wait_for_handoff(
 ) -> Result<()> {
     while done.is_some_and(|done| !done.load(std::sync::atomic::Ordering::Acquire)) {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            bail!(crate::error::DomainError::new(
-                crate::error::ErrorCode::Cancelled
-            ));
+            bail!(DomainError::new(ErrorCode::Cancelled));
         }
         handoff_expired(deadline)?;
         std::thread::sleep(Duration::from_millis(10));
@@ -542,6 +541,28 @@ mod tests {
         assert_eq!(controller.due, due);
         assert!(controller.task.is_none());
         assert_eq!(hits.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn handoff_timeout_retains_its_domain_code() {
+        let done = AtomicBool::new(false);
+        let error =
+            wait_for_handoff(Some(&done), Instant::now(), &AtomicBool::new(false)).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<DomainError>().unwrap().code,
+            ErrorCode::ArtworkHandoffTimeout
+        );
+        assert_eq!(
+            crate::error::json_error(&error)["error"]["code"],
+            "artwork_handoff_timeout"
+        );
+        assert_eq!(crate::error::exit_code(&error), 1);
+        let cancelled =
+            wait_for_handoff(Some(&done), Instant::now(), &AtomicBool::new(true)).unwrap_err();
+        assert_eq!(
+            cancelled.downcast_ref::<DomainError>().unwrap().code,
+            ErrorCode::Cancelled
+        );
     }
 
     #[test]
