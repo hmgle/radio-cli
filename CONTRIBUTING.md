@@ -22,8 +22,24 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked
 ```
 
-Formatting is checked on Linux; Clippy and tests run on Linux and macOS.
+Formatting is checked on Linux; Clippy and tests run on Linux and both Apple
+Silicon and Intel macOS runners.
 All CI gates must pass before merge.
+
+## Release archives
+
+Run `scripts/package-release.sh [target]` from a clean tracked checkout on the
+target's native host. Supported targets are `x86_64-unknown-linux-musl`,
+`aarch64-apple-darwin`, and `x86_64-apple-darwin`. Linux needs `musl-tools`;
+macOS needs `brew install gnu-tar`. Install the Rust target with `rustup target
+add <target>` and ensure mpv, FFmpeg and ffprobe are on `PATH`.
+
+The script checks the executable architecture, creates the archive, then runs
+`--version` and `doctor` from the extracted package with isolated configuration.
+Each archive includes `BUILDINFO`, English completions and the manual. CI only
+assembles the `release-archives` artifact and combined `SHA256SUMS` after all
+test, MSRV, packaging and audit jobs pass; publishing a GitHub Release is a
+separate step.
 
 ## Tests
 

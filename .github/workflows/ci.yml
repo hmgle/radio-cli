@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -20,7 +23,16 @@ jobs:
       - run: cargo test --all-targets --all-features --locked
       - run: cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
   macos:
-    runs-on: macos-latest
+    name: macOS (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       RADIO_TEST_MPV: mpv
@@ -29,8 +41,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: ${{ matrix.target }}
       - run: |
-          brew install ffmpeg-full mpv
+          brew install ffmpeg-full mpv gnu-tar
           echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - run: |
           mpv --version
@@ -38,6 +51,12 @@ jobs:
           ffprobe -version
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --all-targets --all-features --locked
+      - run: scripts/package-release.sh "${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.target }}
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
   msrv:
     runs-on: ubuntu-latest
     steps:
@@ -51,12 +70,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
-      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools ffmpeg mpv
       - run: scripts/package-release.sh
-      - run: |
-          file target/x86_64-unknown-linux-musl/release/radio | tee /tmp/radio-linkage
-          grep -E 'static(ally linked|-pie linked)' /tmp/radio-linkage
-          target/x86_64-unknown-linux-musl/release/radio --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-x86_64-unknown-linux-musl
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
   audit:
     runs-on: ubuntu-latest
     steps:
@@ -64,3 +84,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --version 0.22.2 --locked
       - run: cargo audit
+  release-artifacts:
+    name: Verified release archives
+    needs: [test, macos, msrv, musl, audit]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: target/dist
+      - name: Create combined checksums
+        working-directory: target/dist
+        run: |
+          set -- radio-cli-*.tar.gz
+          test "$#" -eq 3
+          sha256sum "$@" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-archives
+          path: target/dist/*
+          if-no-files-found: error
