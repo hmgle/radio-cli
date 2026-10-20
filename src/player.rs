@@ -55,10 +55,12 @@ fn metadata_title(metadata: &Value) -> String {
 
 /// `sockaddr_un.sun_path` holds 104 bytes on macOS (108 on Linux) including
 /// the terminating NUL; stay at the lowest common denominator. The default
-/// per-user data directory (`~/Library/Application Support` on macOS) plus
-/// the socket name could exceed it, so prefer a short name under the runtime
-/// directory and fall back to the system temp directory with the full UUID
-/// (unguessable in shared temp dirs) when the runtime directory runs deep.
+/// per-user data directory (`~/Library/Application Support` on macOS) plus a
+/// full UUID socket name could exceed it, so the runtime-directory name keeps
+/// only 12 hex characters; when the runtime directory runs deeper, fall back
+/// to the system temp directory with the full UUID, which stays unguessable
+/// in shared temp dirs. Do not lengthen the runtime-directory name again: the
+/// default macOS path leaves room for little more than the truncation.
 /// Session uniqueness comes from the random suffix; the application allows a
 /// single media session per data directory anyway.
 const SOCKET_PATH_LIMIT: usize = 100;
@@ -94,10 +96,7 @@ impl Player {
         if socket.as_os_str().len() > SOCKET_PATH_LIMIT {
             // The runtime directory and the system temp directory are both
             // too deep; surface the path so the JSON report shows the culprit.
-            bail!(
-                DomainError::new(ErrorCode::RuntimePathTooLong)
-                    .with("path", socket.display().to_string())
-            );
+            bail!(DomainError::new(ErrorCode::RuntimePathTooLong).with("path", socket.display()));
         }
         let mut command = Command::new(&config.settings.mpv);
         command
