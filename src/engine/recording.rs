@@ -46,10 +46,10 @@ impl RecordingController {
         duration: Option<Duration>,
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
-        if playback.local_playback {
+        if playback.source_kind == super::playback::SourceKind::Local {
             bail!(DomainError::new(ErrorCode::LocalRecording));
         }
-        if playback.ephemeral_playback {
+        if playback.source_kind == super::playback::SourceKind::Ephemeral {
             bail!(DomainError::new(ErrorCode::EphemeralRecording));
         }
         if !session.status.playing() {

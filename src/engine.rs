@@ -158,8 +158,7 @@ impl Engine {
                 refreshed: false,
                 confirmed: false,
                 session_started: false,
-                ephemeral_playback: false,
-                local_playback: false,
+                source_kind: playback::SourceKind::Catalog,
                 local_recording_id: None,
                 reconnect_attempts: 0,
                 reconnect_due: None,
@@ -406,6 +405,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failed_recording_finalization_keeps_the_previous_playback_source_kind() {
+        use crate::test_support::{Server, config, fixture, response};
+        let bytes = fixture("libmp3lame", "mp3");
+        let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &bytes));
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(config(dir.path()), Arc::new(AtomicBool::new(false))).unwrap();
+        let station = Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "Saved station".into(),
+            url: server.url.clone(),
+            active: true,
+            custom: true,
+            ..Station::default()
+        };
+        engine.store.upsert(&station).unwrap();
+        engine.status.station = Some(station.clone());
+        engine.status.playback_state = PlaybackState::Playing;
+        engine.playback.url = server.url.clone();
+        engine.record_current(None, None).unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_recording_update BEFORE UPDATE ON recordings BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(engine.play("https://example.com/audition").is_err());
+        assert_eq!(
+            engine.status.station.as_ref().unwrap().stationuuid,
+            station.stationuuid
+        );
+        assert_eq!(engine.playback.source_kind, playback::SourceKind::Catalog);
+    }
+
+    #[test]
     fn recording_track_is_snapshotted_before_probe_and_stays_stable() {
         use crate::test_support::{Server, config, fixture, response};
         let bytes = fixture("libmp3lame", "mp3");
@@ -513,7 +542,7 @@ mod tests {
                         &mut engine.recording,
                         Station::default(),
                         vec![],
-                        false
+                        playback::SourceKind::Catalog
                     )
                     .is_err()
             );

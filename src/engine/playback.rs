@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SourceKind {
+    Catalog,
+    Ephemeral,
+    Local,
+}
+
 pub(super) struct PlaybackController {
     pub(super) generation: u64,
     pub(super) refresh_task: Option<(u64, String, Background<Option<Station>>)>,
@@ -13,8 +20,7 @@ pub(super) struct PlaybackController {
     pub(super) refreshed: bool,
     pub(super) confirmed: bool,
     pub(super) session_started: bool,
-    pub(super) ephemeral_playback: bool,
-    pub(super) local_playback: bool,
+    pub(super) source_kind: SourceKind,
     pub(super) local_recording_id: Option<String>,
     pub(super) reconnect_attempts: usize,
     pub(super) reconnect_due: Option<Instant>,
@@ -46,9 +52,13 @@ impl PlaybackController {
             active: true,
             ..Station::default()
         };
-        let result = self.play_source(session, recording, station, vec![target.into()], false);
-        self.ephemeral_playback = true;
-        result
+        self.play_source(
+            session,
+            recording,
+            station,
+            vec![target.into()],
+            SourceKind::Ephemeral,
+        )
     }
 
     /// TUI-only opt-in restoration; CLI media commands remain explicit.
@@ -76,7 +86,7 @@ impl PlaybackController {
         station: Station,
     ) -> Result<()> {
         let candidates = station.stream_candidates(&session.store.backups(&station.stationuuid)?);
-        self.play_source(session, recording, station, candidates, false)
+        self.play_source(session, recording, station, candidates, SourceKind::Catalog)
     }
 
     pub(super) fn play_recording(
@@ -102,7 +112,7 @@ impl PlaybackController {
             recording,
             station,
             vec![path.to_string_lossy().into_owned()],
-            true,
+            SourceKind::Local,
         )?;
         self.local_recording_id = Some(id.into());
         Ok(())
@@ -114,7 +124,7 @@ impl PlaybackController {
         recording: &mut RecordingController,
         station: Station,
         candidates: Vec<String>,
-        local: bool,
+        source_kind: SourceKind,
     ) -> Result<()> {
         self.generation = self.generation.wrapping_add(1);
         self.refresh_task = None;
@@ -125,8 +135,7 @@ impl PlaybackController {
         self.refreshed = false;
         self.confirmed = false;
         self.session_started = false;
-        self.ephemeral_playback = false;
-        self.local_playback = local;
+        self.source_kind = source_kind;
         self.local_recording_id = None;
         self.reconnect_attempts = 0;
         self.reconnect_window.clear();
@@ -164,7 +173,7 @@ impl PlaybackController {
     ) -> Result<()> {
         session.config.settings.volume = session.status.volume;
         if session.background_media {
-            let local = self.local_playback;
+            let local = self.source_kind == SourceKind::Local;
             let config = session.config.clone();
             let url = self.url.clone();
             self.player_start = Some((
@@ -179,7 +188,7 @@ impl PlaybackController {
                 })?,
             ));
         } else {
-            self.player = Some(if self.local_playback {
+            self.player = Some(if self.source_kind == SourceKind::Local {
                 Player::start_local(
                     &session.config,
                     std::path::Path::new(&self.url),
@@ -357,9 +366,9 @@ impl PlaybackController {
                                     self.confirmed = true;
                                     if let Some(s) = &session.status.station
                                         && !self.session_started
-                                        && !self.local_playback
+                                        && self.source_kind != SourceKind::Local
                                     {
-                                        if !self.ephemeral_playback {
+                                        if self.source_kind != SourceKind::Ephemeral {
                                             session.store.played(&s.stationuuid)?;
                                             session
                                                 .store
@@ -402,7 +411,9 @@ impl PlaybackController {
                                 }
                             }
                             Event::End(reason) if reason == "redirect" => {}
-                            Event::End(reason) if self.local_playback && reason == "eof" => {
+                            Event::End(reason)
+                                if self.source_kind == SourceKind::Local && reason == "eof" =>
+                            {
                                 self.stop_playback(session, recording)?;
                                 session.status.message =
                                     crate::t!("playback_local_finished").into();
