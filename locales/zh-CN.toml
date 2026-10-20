@@ -94,3 +94,5 @@ ephemeral_recording = "请先用 station add 保存此流地址，再开始录�
 normalization_unavailable = "此 mpv 不支持 dynaudnorm；请安装包含该滤镜的 mpv，或设置 normalize_loudness = false"
 audio_device_failed = "音频设备 '{device}' 初始化失败；请运行 radio devices 并检查配置中的 audio_device"
 audio_devices_unavailable = "mpv 未返回音频设备；请确认配置的 mpv 支持 --audio-device=help"
+
+artwork_handoff_timeout = "等待封面连接关闭超时，请重试播放或录音"

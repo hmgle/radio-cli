@@ -94,3 +94,5 @@ ephemeral_recording = "Add this stream with station add before recording it"
 normalization_unavailable = "This mpv build lacks dynaudnorm; install an mpv build with the filter or set normalize_loudness = false"
 audio_device_failed = "Audio output initialization failed for device '{device}'; run radio devices and check audio_device in your config"
 audio_devices_unavailable = "mpv returned no audio devices; check that the configured mpv supports --audio-device=help"
+
+artwork_handoff_timeout = "Artwork connection cleanup timed out; retry playback or recording"

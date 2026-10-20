@@ -187,17 +187,11 @@ impl PlaybackController {
                 self.generation,
                 session.status.volume,
                 Background::start("radio-player-start", move |cancel| {
-                    // Do not open another audio stream until the old ICY
-                    // probe has actually dropped its response and runtime.
-                    while artwork_done
-                        .as_ref()
-                        .is_some_and(|done| !done.load(std::sync::atomic::Ordering::Acquire))
-                    {
-                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                            bail!(DomainError::new(ErrorCode::Cancelled));
-                        }
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+                    super::artwork::wait_for_handoff(
+                        artwork_done.as_deref(),
+                        super::artwork::handoff_deadline(&config),
+                        &cancel,
+                    )?;
                     if local {
                         Player::start_local(&config, std::path::Path::new(&url), &cancel)
                     } else {

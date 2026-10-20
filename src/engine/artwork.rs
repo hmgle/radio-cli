@@ -3,7 +3,7 @@ use crate::{
     artwork::{Task, client},
     config::Config,
 };
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use std::{
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
@@ -131,6 +131,35 @@ impl Controller {
             }
         }
     }
+}
+
+/// Connection handoffs remain bounded even if an optional artwork worker stalls.
+pub(super) fn handoff_deadline(config: &Config) -> Instant {
+    Instant::now() + Duration::from_secs(config.settings.connect_timeout_secs.saturating_mul(2))
+}
+
+pub(super) fn handoff_expired(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        bail!(crate::t!("artwork_handoff_timeout"));
+    }
+    Ok(())
+}
+
+pub(super) fn wait_for_handoff(
+    done: Option<&AtomicBool>,
+    deadline: Instant,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    while done.is_some_and(|done| !done.load(std::sync::atomic::Ordering::Acquire)) {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!(crate::error::DomainError::new(
+                crate::error::ErrorCode::Cancelled
+            ));
+        }
+        handoff_expired(deadline)?;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
 }
 
 fn metadata(bytes: &[u8]) -> Metadata {
@@ -423,6 +452,66 @@ mod tests {
         controller.update(&config, None);
         finish(&mut controller, &config, Some(first));
         assert!(controller.cover.is_some());
+    }
+
+    #[test]
+    fn stalled_handoffs_fail_before_opening_another_audio_connection() {
+        use crate::{
+            engine::{Engine, PlaybackState, RecordingState},
+            model::Station,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine.enable_background_media();
+        engine.status.station = Some(Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            url: "http://localhost/live".into(),
+            ..Station::default()
+        });
+        engine.status.playback_state = PlaybackState::Playing;
+        engine.playback.url = "http://localhost/live".into();
+        let (entered, ready) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let task = Task::start(move || async move {
+            entered.send(()).unwrap();
+            gate.recv().unwrap();
+            Ok(None)
+        })
+        .unwrap();
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        engine.artwork.task = Some((
+            Key {
+                generation: 1,
+                request: request("http://localhost/live", "Track"),
+            },
+            task,
+        ));
+        engine.record_current(None, None).unwrap();
+        engine
+            .recording
+            .recording_probe
+            .as_mut()
+            .unwrap()
+            .artwork_deadline = Instant::now();
+        engine.tick().unwrap();
+        assert!(matches!(
+            engine.status.recording_state,
+            RecordingState::Failed { .. }
+        ));
+        assert!(engine.recording.recording_probe.is_none());
+        assert!(engine.store.recordings(1).unwrap().is_empty());
+        assert_eq!(engine.status.playback_state, PlaybackState::Playing);
+        assert!(
+            wait_for_handoff(
+                Some(&AtomicBool::new(false)),
+                Instant::now(),
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        release.send(()).unwrap();
+        engine.shutdown().unwrap();
     }
 
     #[test]

@@ -279,6 +279,9 @@ at 25-second intervals, and can count as another listener. It stops on pause,
 stop, station changes and exit; HLS and local recording playback are excluded.
 Recording takes priority: its codec probe waits for the ICY connection to close,
 and covers fall back to logos throughout probing, recording and finalization.
+If connection cleanup exceeds twice `connect_timeout_secs`, playback or recording
+startup reports a timeout and can be retried without exceeding the connection
+budget.
 Listening and recording retain the two-audio-upstream-connection budget;
 catalog and image HTTP requests are separate. Track associations are never
 persisted, even when the downloaded image file is reused from the cache.

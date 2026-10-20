@@ -15,6 +15,7 @@ pub(super) struct RecordingProbe {
     dir: std::path::PathBuf,
     duration: Option<Duration>,
     task: Option<Background<serde_json::Value>>,
+    pub(super) artwork_deadline: Instant,
 }
 
 impl RecordingController {
@@ -89,6 +90,7 @@ impl RecordingController {
                 dir: dir.unwrap_or(&session.config.recording_dir).into(),
                 duration,
                 task,
+                artwork_deadline: super::artwork::handoff_deadline(&session.config),
             });
             session.status.recording_state = RecordingState::Probing;
             session.status.recording_ms = 0;
@@ -300,6 +302,18 @@ impl RecordingController {
         playback: &mut PlaybackController,
     ) -> Result<()> {
         self.retiring_probes.retain(|task| task.poll().is_none());
+        if let Some(probe) = &self.recording_probe
+            && probe.task.is_none()
+            && !session.artwork.quiescent()
+            && let Err(error) = super::artwork::handoff_expired(probe.artwork_deadline)
+        {
+            self.recording_probe = None;
+            let reason = format!("{error:#}");
+            session.status.recording_state = RecordingState::Failed {
+                reason: reason.clone(),
+            };
+            session.status.message = reason;
+        }
         if let Some(probe) = self.recording_probe.as_mut()
             && probe.task.is_none()
             && session.artwork.quiescent()
