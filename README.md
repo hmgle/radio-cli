@@ -4,12 +4,12 @@
 
 A lightweight, Linux-first terminal radio. Rust manages the local catalog and interaction, SQLite stores favorites and history, mpv plays audio, and FFmpeg records streams losslessly. No account or API key required.
 
-Linux is the primary tested platform. macOS has been reported to work, and
-basic CLI/TUI operation is a support goal; it is not yet covered by CI and
-has known limitations in directory opening and recording recovery. Native
-Windows is not currently supported because the code requires Unix APIs.
-CI covers Rust 1.88, stable with all features, static x86_64 musl builds, and
-RustSec dependency auditing.
+Linux is the primary platform. macOS supports the core CLI/TUI workflow:
+catalog management, favorites and history, playback controls, recording,
+and normal shutdown. Native Windows is not currently supported because the
+code requires Unix APIs. CI tests Linux and macOS with real mpv and FFmpeg;
+Linux checks also cover Rust 1.88, static x86_64 musl builds, and RustSec
+dependency auditing.
 
 Homepage: <https://github.com/hmgle/radio-cli>
 
@@ -29,6 +29,17 @@ cargo build --release --locked
 
 # or install to ~/.cargo/bin
 cargo install --path . --locked
+```
+
+On macOS, install Rust 1.88+ and the media tools with Homebrew, then build
+from source (the release downloads are Linux binaries):
+
+```sh
+brew install rust mpv ffmpeg # omit rust if a suitable toolchain is installed
+cargo install --path . --locked
+radio doctor
+radio sync
+radio tui
 ```
 
 Running `radio` directly opens the TUI in an interactive terminal; when output is redirected it prints help instead. With no catalog present, the TUI and `random` first fetch the top 1,000 stations; the full catalog is fetched with `sync`. A failed sync keeps the previous catalog.
@@ -150,11 +161,17 @@ Default paths on Linux:
 - Data: `${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - Recordings: `recordings/` under the data directory
 
+Default paths on macOS:
+
+- Config: `~/Library/Application Support/radio-cli/config.toml`
+- Data: `~/Library/Application Support/radio-cli/radio.db`
+- Recordings: `~/Library/Application Support/radio-cli/recordings/`
+
 The config file is optional; see [config.example.toml](config.example.toml), pass it with `--config <file>`, and use `--data-dir <dir>` to isolate test data. Relative directories are resolved against the working directory at startup; the recording database stores absolute paths.
 
 Radio Browser servers are discovered automatically with limited retries. Set `api_url`, or use `--api-url https://server` which takes precedence. HTTP requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables; audio backends follow their own proxy support, so a reachable catalog does not imply a reachable audio stream. Previously synced catalogs refresh in the background at startup according to auto_sync_days; set it to 0 to disable.
 
-A single data directory allows only one playback / recording / TUI session; other CLI queries and favorite operations still work. Leaving the foreground stops the audio; for long-running use, run it inside tmux or systemd.
+A single data directory allows only one playback / recording / TUI session; other CLI queries and favorite operations still work. Normal exit and Ctrl-C stop playback and finalize recordings on Linux and macOS. Linux also terminates media children if the frontend is killed abruptly; macOS does not guarantee child cleanup after SIGKILL or a crash. For long-running use, run inside tmux, or systemd on Linux.
 
 ## Recording Behavior
 
@@ -162,6 +179,7 @@ A single data directory allows only one playback / recording / TUI session; othe
 - Stream copy is used: no re-encoding, no quality loss. Recording an unsupported codec fails with a clear error.
 - Each recording has a JSON sidecar with the station, actually requested address, timestamps, codec, media duration, and completion status. The final CDN address after a source-side redirect may not be visible.
 - A unique `.part` file is written first; the final file is produced after a normal stop. Interruptions / failures keep the `.part` file and its status, and unfinished records are recovered when a media session starts next. Use `recordings list` to inspect results; media duration may be an estimate.
+- Final files never overwrite existing files. On macOS, publication requires a filesystem that supports hard links; an interrupted publication can be retried with `recordings recover`.
 - Switching stations in the TUI ends the current recording first; the new station requires pressing `r` again. Pausing playback does not pause recording. A live source ending early is not treated as a complete recording.
 - Truncated HTTP/ICY connections retry with bounded backoff, and HLS segment re-fetch failures count as reconnects. Reconnection can leave gaps in live audio; completed recordings retain a reconnect count and show a warning. Exhausted retries retain the partial file and failure diagnostics. Finite sources are not replayed to fill the requested duration.
 - `--duration` accepts seconds, `s`, `m`, and `h`, from 1 second to 365 days. Cut points follow audio packet boundaries; exact song boundaries cannot be guaranteed.
@@ -174,9 +192,10 @@ To recover a `.part` file, copy it to a new file first, then use FFmpeg stream c
 
 ```sh
 cargo fmt --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --all-targets --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
 cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
+# Linux only: resource sampling uses /proc
 uv run scripts/measure_resources.py --binary target/release/radio
 ```
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Support basic CLI/TUI operation on macOS, with a macOS CI job and source
+  installation instructions. Use the native directory opener and make terminal
+  tests portable. Linux remains the primary platform and release target;
+  macOS does not guarantee media-child cleanup after abrupt frontend death.
+- Recover recording publication interrupted between creating a hard link and
+  removing the temporary name. Verify file identity before removing the partial
+  name; unrelated files and symlink destinations remain protected.
 - Stop playback from failing when the mpv IPC socket path exceeds the
   100-byte Unix socket limit: use a shorter socket name under the runtime
   directory and fall back to the system temp directory with the full UUID

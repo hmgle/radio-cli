@@ -19,6 +19,25 @@ jobs:
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --all-targets --all-features --locked
       - run: cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
+  macos:
+    runs-on: macos-latest
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      RADIO_TEST_MPV: mpv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: |
+          brew install ffmpeg-full mpv
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
+      - run: |
+          mpv --version
+          ffmpeg -version
+          ffprobe -version
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-targets --all-features --locked
   msrv:
     runs-on: ubuntu-latest
     steps:

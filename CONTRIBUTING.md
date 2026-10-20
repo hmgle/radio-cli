@@ -5,7 +5,7 @@ requests are welcome.
 
 ## Ground rules
 
-- radio-cli is **Linux-first**, with basic CLI/TUI support on macOS as a goal.
+- radio-cli is **Linux-first**, with basic CLI/TUI support on macOS.
   Keep shared Unix behavior portable and isolate platform-specific operations.
   Native Windows support is outside the current scope.
 - The README is the user-facing documentation; design details live in `docs/`
@@ -18,11 +18,12 @@ See the README for prerequisites (Rust 1.88+, mpv, FFmpeg). Typical loop:
 
 ```sh
 cargo fmt --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --all-targets --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
 ```
 
-All three gates run in CI and must pass before merge.
+Formatting is checked on Linux; Clippy and tests run on Linux and macOS.
+All CI gates must pass before merge.
 
 ## Tests
 
@@ -31,6 +32,9 @@ All three gates run in CI and must pass before merge.
 - Recording tests require FFmpeg. mpv IPC tests use a null audio output and are
   skipped when mpv is unavailable; point them at a binary with
   `RADIO_TEST_MPV=/absolute/path/to/mpv` to run them locally.
+- On macOS, the Vorbis fixture needs the encoder in Homebrew's `ffmpeg-full`:
+  run `brew install ffmpeg-full mpv` and
+  `export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"` before testing.
 - Use `--data-dir <dir>` (and `--config <file>` when needed) so tests and manual
   runs never touch the default data directory.
 

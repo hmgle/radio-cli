@@ -4,9 +4,9 @@
 
 Linux 优先的轻量 CLI / TUI 网络收音机。Rust 管理本地目录与交互，SQLite 保存收藏和历史，mpv 播放，FFmpeg 无损录音。无需账号或 API Key。
 
-Linux 是主要测试平台。已有 macOS 正常运行反馈，基本 CLI/TUI 操作也纳入支持目标；
-目前尚无 macOS CI，打开录音目录和录音恢复仍有已知限制。代码依赖 Unix API，
-Windows 原生暂不支持。CI 覆盖 Rust 1.88、stable 全部特性、x86_64 musl 静态构建
+Linux 是主要支持平台。macOS 支持基本 CLI/TUI 操作：目录管理、收藏和历史、播放控制、
+录音及正常退出。代码依赖 Unix API，Windows 原生暂不支持。CI 在 Linux 和 macOS 上
+使用真实 mpv、FFmpeg 测试；Linux 检查还覆盖 Rust 1.88、x86_64 musl 静态构建
 及 RustSec 依赖审计。
 
 ## 安装与启动
@@ -25,6 +25,16 @@ cargo build --release --locked
 
 # 或安装到 ~/.cargo/bin
 cargo install --path . --locked
+```
+
+macOS 可通过 Homebrew 安装 Rust 1.88+ 和媒体工具，再从源码安装（发布下载为 Linux 程序）：
+
+```sh
+brew install rust mpv ffmpeg # 已有合适的 Rust 工具链时可省略 rust
+cargo install --path . --locked
+radio doctor
+radio sync
+radio tui
 ```
 
 直接运行 `radio` 会在交互终端打开 TUI；重定向输出时显示帮助。没有目录时，TUI 和 `random` 先获取热门 1,000 台；完整目录通过 `sync` 获取。同步失败保留之前的目录。
@@ -127,11 +137,17 @@ Linux 默认路径：
 - 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
 - 录音：数据目录下的 `recordings/`
 
+macOS 默认路径：
+
+- 配置：`~/Library/Application Support/radio-cli/config.toml`
+- 数据：`~/Library/Application Support/radio-cli/radio.db`
+- 录音：`~/Library/Application Support/radio-cli/recordings/`
+
 配置文件可选。参见 [config.example.toml](config.example.toml)，使用 `--config 文件` 指定；`--data-dir 目录` 可隔离测试数据。相对目录按启动时的工作目录解释；录音数据库保存绝对路径。
 
 默认发现 Radio Browser 服务器并有限重试。可设置 `api_url`，或使用优先级更高的 `--api-url https://服务器`。HTTP 请求支持 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 等标准环境变量；音频后端遵循其各自的代理支持，目录可达不代表音频流可达。过期目录按 auto_sync_days 配置自动后台刷新，可设 0 关闭。
 
-同一数据目录只允许一个播放 / 录音 / TUI 会话；其他 CLI 查询和收藏操作仍可使用。退出前台即停止音频，长时间运行可放在 tmux 或 systemd 中。
+同一数据目录只允许一个播放 / 录音 / TUI 会话；其他 CLI 查询和收藏操作仍可使用。Linux 和 macOS 正常退出或 Ctrl-C 时均停止播放并收尾录音。Linux 还会在前台被强制终止时结束媒体子进程；macOS 不保证 SIGKILL 或崩溃后的子进程清理。长时间运行可放在 tmux 中，Linux 也可使用 systemd。
 
 ## 录音行为
 
@@ -139,6 +155,7 @@ Linux 默认路径：
 - 使用流拷贝，不重编码、不降低音质；不支持的录音编码明确报错。
 - 每个录音有 JSON 元数据，包含电台、实际请求地址、时间、编码、媒体时长和完成状态。源站重定向后的最终 CDN 地址不一定可见。
 - 先写唯一 `.part` 文件；正常停止后生成最终文件。中断 / 失败保留 `.part` 和状态，后续启动媒体会话时恢复未收尾记录。`recordings list` 可查看结果；媒体时长可能为估计值。
+- 最终文件不会覆盖已有文件。macOS 的录音发布要求文件系统支持硬链接；发布中断后可使用 `recordings recover` 重试。
 - TUI 切台先结束当前录音；新电台需重新按 `r`。暂停播放不会暂停录音。直播源提前结束不视作完整录音。
 - HTTP/ICY 连接异常截断时有限重连，HLS 分段拉取失败也计入重连次数。重连可能留下直播音频缺口；完成的录音仍保存重连次数并显示提示。重试耗尽仍保留临时文件和错误诊断。不会循环播放有限长度的源来凑足录音时长。
 - `--duration` 接受秒、`s`、`m`、`h`，范围为 1 秒至 365 天。切点以音频包为单位，不能保证精确歌曲边界。
@@ -151,9 +168,10 @@ Linux 默认路径：
 
 ```sh
 cargo fmt --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --all-targets --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
 cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
+# 仅 Linux：资源采样依赖 /proc
 uv run scripts/measure_resources.py --binary target/release/radio
 ```
 
