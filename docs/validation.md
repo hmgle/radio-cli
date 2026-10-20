@@ -5,8 +5,8 @@
 - Linux all-target/all-feature tests: 209 passed, zero failures; the separate
   catalog benchmark is excluded from that count. Formatting, strict Clippy and
   Rust 1.88 checks pass with the locked dependencies.
-- A native Apple Silicon macOS run passes 202 tests with zero failures. The
-  Linux-only CLI and pseudo-terminal cases are excluded there. HTTP fixtures
+- A native Apple Silicon macOS run passes 207 tests with zero failures, including
+  pseudo-terminal cases; two Linux-only CLI cases are excluded. HTTP fixtures
   explicitly clear inherited nonblocking mode on accepted sockets so Darwin
   tests actually wait for cancellation and connection handoffs.
 - The explicit release benchmark passes with 50,000 synthetic stations and
