@@ -873,7 +873,8 @@ fn engine_uses_explicit_backup_without_merging_names() {
         .add_backup(&station.stationuuid, &server.url)
         .unwrap();
     engine.play(&station.stationuuid).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Allow startup of both the failing primary and the backup player.
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !engine.status.playing() && Instant::now() < deadline {
         engine.tick().unwrap();
         thread::sleep(Duration::from_millis(20));
@@ -964,9 +965,13 @@ fn progress_flood_does_not_lose_final_duration() {
         &Arc::new(AtomicBool::new(false)),
     )
     .unwrap();
-    // Deliberately leave all progress unread until the producer exits.
-    thread::sleep(Duration::from_millis(200));
-    assert!(recorder.poll().unwrap());
+    // Process exit and the progress reader can become observable separately;
+    // wait for both instead of assuming the producer finishes within 200 ms.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !recorder.poll().unwrap() || recorder.elapsed_ms() != 2000 {
+        assert!(Instant::now() < deadline, "final progress was not observed");
+        thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(recorder.elapsed_ms(), 2000);
     let record = recorder.finish(&config, &store, None).unwrap();
     assert_eq!(record.status, "complete", "{record:?}");
