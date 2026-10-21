@@ -1,3 +1,5 @@
+mod facets;
+
 use crate::error::{DomainError, ErrorCode};
 use crate::model::{Filter, Recording, Station};
 use anyhow::{Context, Result, bail};
@@ -19,10 +21,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 3 {
+        if version < 4 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -52,7 +54,7 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2 | 3 => {},
+                2 | 3 | 4 => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             if version < 3 {
@@ -74,14 +76,25 @@ impl Store {
                     ])?;
                 }
             }
-            tx.pragma_update(None, "user_version", 3)?;
+            if version < 4 {
+                tx.execute_batch(
+                    "CREATE TABLE facets_cache (
+                    kind INTEGER NOT NULL,value TEXT NOT NULL,n INTEGER NOT NULL CHECK(n>=0),
+                    PRIMARY KEY(kind,value)) WITHOUT ROWID;",
+                )?;
+                facets::rebuild(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 4)?;
             tx.commit()?;
         }
         Ok(Self { conn })
     }
 
     pub fn upsert(&self, station: &Station) -> Result<()> {
-        Self::write_station(&self.conn, "stations", station)
+        let tx = self.conn.unchecked_transaction()?;
+        Self::write_station(&tx, "stations", station)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn bootstrap(
@@ -94,7 +107,7 @@ impl Store {
             if cancelled() {
                 bail!(DomainError::new(ErrorCode::Cancelled));
             }
-            Self::write_station(&tx, "stations", row)?;
+            Self::write_station_with_policy(&tx, "stations", row, false, false)?;
         }
         if cancelled() {
             bail!(DomainError::new(ErrorCode::Cancelled));
@@ -102,12 +115,13 @@ impl Store {
         if rows.is_empty() {
             bail!(DomainError::new(ErrorCode::EmptyCatalog));
         }
+        facets::rebuild(&tx)?;
         tx.commit()?;
         Ok(rows.len())
     }
 
     fn write_station(conn: &Connection, table: &str, s: &Station) -> Result<()> {
-        Self::write_station_with_policy(conn, table, s, false)
+        Self::write_station_with_policy(conn, table, s, false, table == "stations")
     }
 
     fn write_station_with_policy(
@@ -115,11 +129,17 @@ impl Store {
         table: &str,
         s: &Station,
         custom: bool,
+        maintain_facets: bool,
     ) -> Result<()> {
         if s.stationuuid.is_empty() || s.name.trim().is_empty() {
             bail!(DomainError::new(ErrorCode::InvalidStation));
         }
         uuid::Uuid::parse_str(&s.stationuuid).context(DomainError::new(ErrorCode::InvalidUuid))?;
+        let before = if maintain_facets {
+            facets::station_values(conn, &s.stationuuid)?
+        } else {
+            Default::default()
+        };
         let sql = format!("INSERT INTO {table} (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url)
             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
@@ -152,6 +172,13 @@ impl Store {
             serde_json::to_string(s)?,
             crate::service::normalized_url(s.primary_url()).ok()
         ])?;
+        if maintain_facets {
+            facets::update(
+                conn,
+                &before,
+                &facets::station_values(conn, &s.stationuuid)?,
+            )?;
+        }
         Ok(())
     }
 
@@ -216,6 +243,7 @@ impl Store {
             "INSERT OR REPLACE INTO meta(key,value) VALUES ('last_sync',?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
+        facets::rebuild(&tx)?;
         tx.commit()?;
         Ok(count)
     }
@@ -398,28 +426,23 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<crate::model::Facet>> {
         use crate::model::{Facet, FacetKind};
-        // Station writes normalize values with the same Rust Unicode case
-        // conversion as these prefixes; SQLite lower() only handles ASCII.
-        let (sql, prefix) = match kind {
-            FacetKind::Country => (
-                "SELECT country,count(*) FROM stations WHERE active=1 AND country<>'' AND substr(country,1,length(?1))=?1 GROUP BY country ORDER BY country LIMIT ?2".to_owned(), prefix.trim().to_uppercase()
-            ),
-            FacetKind::Language | FacetKind::Tag => {
-                let column = if matches!(kind, FacetKind::Language) { "languages" } else { "tags" };
-                (format!("WITH RECURSIVE split(uuid,value,rest) AS (
-                    SELECT uuid,'',trim({column},',')||',' FROM stations WHERE active=1
-                    UNION ALL SELECT uuid,substr(rest,1,instr(rest,',')-1),substr(rest,instr(rest,',')+1) FROM split WHERE rest<>''
-                ), entries AS (SELECT DISTINCT uuid,value FROM split WHERE value<>'')
-                SELECT value,count(*) FROM entries WHERE substr(value,1,length(?1))=?1 GROUP BY value ORDER BY value LIMIT ?2"), prefix.trim().to_lowercase())
-            }
+        let (kind, prefix) = match kind {
+            FacetKind::Country => (0, prefix.trim().to_uppercase()),
+            FacetKind::Language => (1, prefix.trim().to_lowercase()),
+            FacetKind::Tag => (2, prefix.trim().to_lowercase()),
         };
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![prefix, limit.min(i64::MAX as usize) as i64], |r| {
-            Ok(Facet {
-                value: r.get(0)?,
-                count: r.get(1)?,
-            })
-        })?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT value,n FROM facets_cache WHERE kind=?1 AND substr(value,1,length(?2))=?2 ORDER BY value LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![kind, prefix, limit.min(i64::MAX as usize) as i64],
+            |r| {
+                Ok(Facet {
+                    value: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            },
+        )?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -489,7 +512,7 @@ impl Store {
         ).optional()? {
             bail!(DomainError::new(ErrorCode::DuplicateStation).with("uuid", uuid));
         }
-        Self::write_station_with_policy(&tx, "stations", station, true)?;
+        Self::write_station_with_policy(&tx, "stations", station, true, true)?;
         if let Some(backups) = backups {
             tx.execute("DELETE FROM streams WHERE uuid=?1", [&station.stationuuid])?;
             for url in backups {
@@ -524,9 +547,11 @@ impl Store {
             station.active = false;
             station.url.clear();
             station.url_resolved.clear();
-            Self::write_station_with_policy(&tx, "stations", &station, true)?;
+            Self::write_station_with_policy(&tx, "stations", &station, true, true)?;
         } else {
+            let before = facets::station_values(&tx, uuid)?;
             tx.execute("DELETE FROM stations WHERE uuid=?1", [uuid])?;
+            facets::update(&tx, &before, &Default::default())?;
         }
         tx.commit()?;
         Ok(referenced || keep_references)

@@ -703,7 +703,7 @@ fn url_index_backfills_legacy_rows_without_rejecting_shared_directory_urls() {
     drop(store);
     let path = dir.path().join("radio.db");
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
+    conn.execute_batch("DROP TABLE facets_cache; DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
     drop(conn);
     store = Store::open(&path).unwrap();
     assert_eq!(store.directory_count().unwrap(), 2);
@@ -730,4 +730,43 @@ fn url_index_backfills_legacy_rows_without_rejecting_shared_directory_urls() {
         &[],
     )
     .unwrap();
+}
+
+#[test]
+fn facet_cache_tracks_atomic_mutations_sync_and_external_writers() {
+    use radio_cli::model::FacetKind;
+    let (dir, mut store) = db();
+    let mut row = station("facets");
+    row.language = "中文,中文".into();
+    row.languagecodes = "中文".into();
+    row.tags = "Jazz,jazz,100%_".into();
+    store.bootstrap(&[row.clone()], || false).unwrap();
+    assert_eq!(store.facets(FacetKind::Language, "中").unwrap()[0].count, 1);
+    assert_eq!(store.facets(FacetKind::Tag, "100%_").unwrap()[0].count, 1);
+    let other = Store::open(&dir.path().join("radio.db")).unwrap();
+    row.active = false;
+    other.upsert(&row).unwrap();
+    assert!(store.facets(FacetKind::Tag, "").unwrap().is_empty());
+    row.active = true;
+    row.custom = true;
+    store.save_custom(&row, None).unwrap();
+    let mut invalid = row.clone();
+    invalid.tags = "changed".into();
+    assert!(store.save_custom(&invalid, Some(&["bad".into()])).is_err());
+    assert_eq!(other.facets(FacetKind::Tag, "jazz").unwrap()[0].count, 1);
+    assert!(other.facets(FacetKind::Tag, "changed").unwrap().is_empty());
+    store.begin_sync().unwrap();
+    store.stage(&[station("directory")]).unwrap();
+    store.finish_sync().unwrap();
+    assert_eq!(other.facets(FacetKind::Country, "cn").unwrap()[0].count, 2);
+    store.favorite(&row.stationuuid, true).unwrap();
+    store.remove_custom(&row.stationuuid, false).unwrap();
+    assert!(other.facets(FacetKind::Tag, "100%_").unwrap().is_empty());
+    let mut custom = station("delete without references");
+    custom.custom = true;
+    custom.url = "https://example.com/unique".into();
+    custom.tags = "unique".into();
+    store.save_custom(&custom, None).unwrap();
+    store.remove_custom(&custom.stationuuid, false).unwrap();
+    assert!(other.facets(FacetKind::Tag, "unique").unwrap().is_empty());
 }
