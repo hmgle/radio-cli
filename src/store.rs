@@ -372,7 +372,14 @@ impl Store {
                 .to_owned(),
         ];
         let mut args = vec![];
-        let mut source = "stations s";
+        // Token filters still use instr. Without a country index to narrow
+        // them, avoid random table lookups through a sorting index.
+        let mut source =
+            if filter.country.is_none() && (filter.language.is_some() || filter.tag.is_some()) {
+                "stations s NOT INDEXED"
+            } else {
+                "stations s"
+            };
         if filter.favorites {
             clauses.push("EXISTS(SELECT 1 FROM favorites f WHERE f.uuid=s.uuid)".into());
         }
