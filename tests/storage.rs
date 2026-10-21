@@ -903,3 +903,56 @@ fn trigram_index_tracks_updates_deletes_and_rolled_back_publications() {
     );
     assert_eq!(other.search_count(&find("firstneedle")).unwrap(), 0);
 }
+
+#[test]
+fn indexed_positions_match_pages_with_mixed_directions_and_invisible_targets() {
+    use radio_cli::model::Sort;
+    let (_dir, store) = db();
+    let mut all = Vec::new();
+    for i in 0..31 {
+        let mut s = station(["A", "a", "B", "same jazz"][i % 4]);
+        s.clickcount = (i % 7) as u64;
+        s.bitrate = (i as u32 % 3) * 128;
+        s.active = i % 5 != 0;
+        store.upsert(&s).unwrap();
+        if i % 2 == 0 {
+            store.favorite(&s.stationuuid, true).unwrap();
+        }
+        if i % 3 == 0 {
+            store.played(&s.stationuuid).unwrap();
+        }
+        all.push(s);
+    }
+    for sort in [Sort::Clickcount, Sort::Bitrate, Sort::Name, Sort::Votes] {
+        for variant in 0..5 {
+            let filter = Filter {
+                sort,
+                limit: 100,
+                favorites: variant == 1,
+                history: variant == 2,
+                min_bitrate: if variant == 3 { 128 } else { 0 },
+                query: if variant == 4 {
+                    "jazz".into()
+                } else {
+                    String::new()
+                },
+                ..Filter::default()
+            };
+            let rows = store.search(&filter).unwrap();
+            for s in &all {
+                let expected = rows.iter().position(|r| r.stationuuid == s.stationuuid);
+                assert_eq!(
+                    store.station_position(&s.stationuuid, &filter).unwrap(),
+                    expected,
+                    "{sort:?} variant {variant}"
+                );
+            }
+            assert!(
+                store
+                    .station_position("missing", &filter)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+}

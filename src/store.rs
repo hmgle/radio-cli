@@ -404,12 +404,70 @@ impl Store {
 
     /// Locate a station without loading every preceding page into memory.
     pub fn station_position(&self, uuid: &str, filter: &Filter) -> Result<Option<usize>> {
+        use crate::model::Sort;
         let (conditions, mut args) = Self::conditions(filter);
+        let source = Self::search_source(filter);
+        if !filter.history && matches!(filter.sort, Sort::Clickcount | Sort::Bitrate | Sort::Name) {
+            let tx = self.conn.unchecked_transaction()?;
+            let mut target_args = args.clone();
+            target_args.push(uuid.to_owned().into());
+            let target = tx
+                .query_row(
+                    &format!(
+                        "SELECT s.popularity,s.bitrate,s.name FROM {source}
+                    LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} AND s.uuid=?"
+                    ),
+                    params_from_iter(target_args),
+                    |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((popularity, bitrate, name)) = target else {
+                return Ok(None);
+            };
+            let count = |predicate: &str, values: Vec<Value>| -> Result<usize> {
+                let mut values_with_filter = args.clone();
+                values_with_filter.extend(values);
+                Ok(tx
+                    .prepare_cached(&format!(
+                        "SELECT count(*) FROM {source}
+                    LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} AND ({predicate})"
+                    ))?
+                    .query_row(params_from_iter(values_with_filter), |r| r.get(0))?)
+            };
+            // Separate ranges let each count use the leading sort key. DESC
+            // on the numeric key and ASC on ties cannot use one tuple '<'.
+            let position = if filter.sort == Sort::Name {
+                count("s.name COLLATE NOCASE < ?", vec![name.clone().into()])?
+                    + count(
+                        "s.name COLLATE NOCASE = ? AND s.uuid < ?",
+                        vec![name.into(), uuid.to_owned().into()],
+                    )?
+            } else {
+                let (column, value) = if filter.sort == Sort::Bitrate {
+                    ("bitrate", bitrate)
+                } else {
+                    ("popularity", popularity)
+                };
+                count(&format!("s.{column}>?"), vec![value.into()])?
+                    + count(
+                        &format!("s.{column}=? AND (s.name,s.uuid)<(?,?)"),
+                        vec![value.into(), name.into(), uuid.to_owned().into()],
+                    )?
+            };
+            tx.commit()?;
+            return Ok(Some(position));
+        }
         let order = Self::search_order(filter);
         let sql = format!(
             "WITH ranked AS (
             SELECT s.uuid,row_number() OVER (ORDER BY {order})-1 AS position
-            FROM stations s LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions}
+            FROM {source} LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions}
         ) SELECT position FROM ranked WHERE uuid=?"
         );
         args.push(uuid.to_owned().into());
