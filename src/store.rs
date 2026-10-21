@@ -30,6 +30,9 @@ impl Store {
 
     pub(crate) fn read_snapshot<T>(&self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
         let tx = self.conn.unchecked_transaction()?;
+        // BEGIN is deferred. Pin the WAL snapshot before reading data_version
+        // so a count cached for an older snapshot cannot be reused for new rows.
+        tx.query_row("SELECT 1 FROM sqlite_schema LIMIT 1", [], |_| Ok(()))?;
         let value = read(self)?;
         tx.commit()?;
         Ok(value)
@@ -890,6 +893,30 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_snapshot_pins_revision_before_a_concurrent_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let writer = Store::open(&path).unwrap();
+        let reader = Store::open_reader(&path).unwrap();
+        let revision = reader
+            .read_snapshot(|store| {
+                let revision = store.revision()?;
+                writer.upsert(&Station {
+                    stationuuid: uuid::Uuid::new_v4().to_string(),
+                    name: "new row".into(),
+                    active: true,
+                    ..Station::default()
+                })?;
+                assert_eq!(store.revision()?, revision);
+                assert_eq!(store.count()?, 0);
+                Ok(revision)
+            })
+            .unwrap();
+        assert_ne!(reader.revision().unwrap(), revision);
+        assert_eq!(reader.count().unwrap(), 1);
+    }
 
     #[test]
     fn cancellation_before_sync_commit_rolls_back_all_derived_data() {

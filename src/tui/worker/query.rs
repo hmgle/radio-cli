@@ -142,18 +142,19 @@ struct Reader {
 
 impl Reader {
     fn page(&mut self, store: &Store, filter: &Filter) -> Result<Rows> {
-        // data_version tokens are only compared on this reader connection.
-        let revision = store.revision()?;
         let mut key = filter.clone();
         key.limit = 0;
         key.offset = 0;
         key.sort = Sort::default();
-        let known = self
-            .count
-            .as_ref()
-            .filter(|(k, r, _)| *k == key && *r == revision)
-            .map(|(_, _, n)| *n);
-        let rows = store.read_snapshot(|store| {
+        let (rows, revision) = store.read_snapshot(|store| {
+            // Sample after pinning the snapshot, and compare tokens only on
+            // this reader connection.
+            let revision = store.revision()?;
+            let known = self
+                .count
+                .as_ref()
+                .filter(|(k, r, _)| *k == key && *r == revision)
+                .map(|(_, _, n)| *n);
             let (stations, recordings) = if filter.recordings {
                 (vec![], store.recordings_page(filter.limit, filter.offset)?)
             } else {
@@ -174,14 +175,17 @@ impl Reader {
             } else {
                 store.search_count(filter)?
             };
-            Ok(Rows {
-                stations,
-                recordings,
-                total,
-            })
+            Ok((
+                Rows {
+                    stations,
+                    recordings,
+                    total,
+                },
+                revision,
+            ))
         })?;
-        // A commit between token sampling and snapshot acquisition invalidates
-        // caching even though this particular page remains internally consistent.
+        // A commit during the read invalidates caching even though this page
+        // and its total belong to one internally consistent snapshot.
         if store.revision()? == revision {
             self.count = Some((key, revision, rows.total));
         } else {
