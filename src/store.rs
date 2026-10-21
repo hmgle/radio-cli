@@ -171,11 +171,12 @@ impl Store {
             bail!(DomainError::new(ErrorCode::EmptyCatalog));
         }
         facets::rebuild(&tx)?;
-        Self::rebuild_search_stats(&tx)?;
         if cancelled() {
             bail!(DomainError::new(ErrorCode::Cancelled));
         }
         tx.commit()?;
+        // Advisory maintenance must not fail an already published catalog.
+        let _ = self.refresh_search_stats();
         Ok(rows.len())
     }
 
@@ -310,13 +311,13 @@ impl Store {
             [chrono::Utc::now().to_rfc3339()],
         )?;
         facets::rebuild(&tx)?;
-        Self::rebuild_search_stats(&tx)?;
         if cancelled() {
             bail!(DomainError::new(ErrorCode::Cancelled));
         }
         tx.commit()?;
         // Planner maintenance cannot turn a successful publication into a
         // reported failure after its transaction has already committed.
+        let _ = self.refresh_search_stats();
         let _ = self.conn.execute_batch("PRAGMA optimize;");
         Ok(count)
     }
@@ -493,12 +494,29 @@ impl Store {
         Some(format!("\"{}\"", best.1.replace('"', "\"\"")))
     }
 
-    fn rebuild_search_stats(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            "DELETE FROM station_search_stats;
-            INSERT INTO station_search_stats SELECT term,doc FROM station_search_terms;
-            INSERT INTO station_search_stats VALUES ('',(SELECT count(*) FROM stations));",
-        )?;
+    fn refresh_search_stats(&self) -> Result<()> {
+        // A single read statement pins a consistent snapshot for the vocabulary
+        // and row count. Collect before taking the main database's write lock:
+        // even a small vocabulary requires scanning FTS postings to count docs.
+        let stats = {
+            let mut stmt = self.conn.prepare(
+                "SELECT term,doc FROM station_search_terms
+                UNION ALL SELECT '',count(*) FROM stations",
+            )?;
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        // Publish all hints atomically. Concurrent station changes may make
+        // them stale, which only affects the choice of search strategy.
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM station_search_stats", [])?;
+        {
+            let mut stmt = tx.prepare("INSERT INTO station_search_stats VALUES (?1,?2)")?;
+            for (term, count) in stats {
+                stmt.execute(params![term, count])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -900,6 +918,138 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_statistics_collection_allows_a_concurrent_writer() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let mut store = Store::open(&path).unwrap();
+        let rows: Vec<_> = (0..256)
+            .map(|i| Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: format!("station {i:05} jazz"),
+                active: true,
+                ..Station::default()
+            })
+            .collect();
+        store.bootstrap(&rows, || false).unwrap();
+        let writer = Connection::open(&path).unwrap();
+        writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let attempted = Arc::new(AtomicBool::new(false));
+        let succeeded = Arc::new(AtomicBool::new(false));
+        let (attempt, success) = (attempted.clone(), succeeded.clone());
+        store.conn.progress_handler(
+            1000,
+            Some(move || {
+                if !attempt.swap(true, Ordering::SeqCst) {
+                    success.store(
+                        writer
+                            .execute("INSERT INTO meta VALUES ('concurrent','write')", [])
+                            .is_ok(),
+                        Ordering::SeqCst,
+                    );
+                }
+                false
+            }),
+        );
+        store.refresh_search_stats().unwrap();
+        store.conn.progress_handler(0, None::<fn() -> bool>);
+        assert!(attempted.load(Ordering::SeqCst));
+        assert!(succeeded.load(Ordering::SeqCst));
+        let actual: usize = store
+            .conn
+            .query_row(
+                "SELECT n FROM station_search_stats WHERE term=''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(actual, rows.len());
+        let differences: usize = store
+            .conn
+            .query_row(
+                "SELECT count(*) FROM (
+                    SELECT term,doc FROM station_search_terms
+                    EXCEPT SELECT term,n FROM station_search_stats WHERE term<>'')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(differences, 0);
+    }
+
+    #[test]
+    fn failed_statistics_refresh_preserves_hints_and_successful_publication() {
+        for sync in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+            let row = |name: &str| Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: name.into(),
+                tags: name.into(),
+                active: true,
+                ..Station::default()
+            };
+            store.bootstrap(&[row("originalneedle")], || false).unwrap();
+            let stats = || {
+                store
+                    .conn
+                    .prepare("SELECT term,n FROM station_search_stats ORDER BY term")
+                    .unwrap()
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap()
+            };
+            let before = stats();
+            store
+                .conn
+                .execute_batch(
+                    "CREATE TRIGGER reject_stats BEFORE INSERT ON station_search_stats
+                BEGIN SELECT RAISE(ABORT,'statistics unavailable'); END;",
+                )
+                .unwrap();
+            let replacement = row("replacementneedle");
+            if sync {
+                store.begin_sync().unwrap();
+                store.stage(&[replacement]).unwrap();
+                assert_eq!(store.finish_sync().unwrap(), 1);
+                assert!(store.meta("last_sync").unwrap().is_some());
+            } else {
+                assert_eq!(store.bootstrap(&[replacement], || false).unwrap(), 1);
+            }
+            assert_eq!(
+                store
+                    .search_count(&Filter {
+                        query: "replacementneedle".into(),
+                        ..Filter::default()
+                    })
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                store
+                    .facets(crate::model::FacetKind::Tag, "replacement")
+                    .unwrap()[0]
+                    .count,
+                1
+            );
+            let after: Vec<_> = store
+                .conn
+                .prepare("SELECT term,n FROM station_search_stats ORDER BY term")
+                .unwrap()
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert_eq!(after, before);
+        }
+    }
 
     #[test]
     fn read_snapshot_pins_revision_before_a_concurrent_commit() {

@@ -19,13 +19,10 @@ fn measure(mut work: impl FnMut(), repetitions: usize) -> (f64, f64) {
     )
 }
 
-#[test]
-#[ignore]
-fn catalog_performance_matrix() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("radio.db");
-    let mut store = Store::open(&path).unwrap();
-    let start = Instant::now();
+fn stage_catalog(store: &mut Store, diverse: bool) {
+    use rand::{SeedableRng, distr::SampleString};
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(0);
     store.begin_sync().unwrap();
     for page in 0..200 {
         let rows: Vec<_> = (0..1000)
@@ -33,7 +30,14 @@ fn catalog_performance_matrix() {
                 let id = page * 1000 + i;
                 Station {
                     stationuuid: uuid::Uuid::from_u128(id as u128 + 1).to_string(),
-                    name: format!("上海 Jazz Station {id}"),
+                    name: if diverse {
+                        format!(
+                            "上海 Jazz Station {id} {}",
+                            rand::distr::Alphanumeric.sample_string(&mut rng, 50)
+                        )
+                    } else {
+                        format!("上海 Jazz Station {id}")
+                    },
                     url: format!("http://example.test/{id}"),
                     countrycode: if id % 3 == 0 { "CN" } else { "FR" }.into(),
                     language: "chinese,chinese,english".into(),
@@ -48,6 +52,56 @@ fn catalog_performance_matrix() {
             .collect();
         store.stage(&rows).unwrap();
     }
+}
+
+#[test]
+#[ignore]
+fn catalog_statistics_scan_cost() {
+    for diverse in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let mut store = Store::open(&path).unwrap();
+        stage_catalog(&mut store, diverse);
+        let start = Instant::now();
+        assert_eq!(store.finish_sync().unwrap(), 200000);
+        let publication = start.elapsed();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA cache_size=-4096").unwrap();
+        let scan = measure(
+            || {
+                let mut stmt = conn.prepare("SELECT term,doc FROM station_search_terms UNION ALL SELECT '',count(*) FROM stations").unwrap();
+                let stats: Vec<_> = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                    .unwrap()
+                    .collect::<rusqlite::Result<_>>()
+                    .unwrap();
+                assert!(stats.contains(&(String::new(), 200000)));
+                std::hint::black_box(stats);
+            },
+            3,
+        );
+        let terms: usize = conn
+            .query_row("SELECT count(*) FROM station_search_stats", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        println!(
+            "200,000 stations diverse={diverse}: publish including maintenance {:.2}s; {terms} statistics rows; vocabulary scan P50/P95 {:.2}/{:.2} ms",
+            publication.as_secs_f64(),
+            scan.0,
+            scan.1
+        );
+    }
+}
+
+#[test]
+#[ignore]
+fn catalog_performance_matrix() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("radio.db");
+    let mut store = Store::open(&path).unwrap();
+    let start = Instant::now();
+    stage_catalog(&mut store, false);
     let staged = start.elapsed();
     let publish = Instant::now();
     store.finish_sync().unwrap();
