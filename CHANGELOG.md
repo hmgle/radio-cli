@@ -12,6 +12,8 @@
   exact totals across pages, and interrupt queries during shutdown.
 - Locate stations through indexed sort ranges and reduce text copying when
   publishing TUI logs and rendering station rows.
+- Collect search-planning statistics after catalog publication without holding
+  the main database write lock, then replace the hints in a short transaction.
 
 ### Compatibility
 
@@ -20,6 +22,13 @@
   first open takes longer and the database uses additional disk space.
   Older binaries cannot open the upgraded database; keep a pre-upgrade copy
   if downgrade support is needed. CLI options and JSON output are unchanged.
+- For scale, the deterministic 200,000-station fixture occupies about 243 MiB
+  with schema v5 (about 144 MiB for the equivalent v2 fixture). Its first-open
+  v2-to-v5 migration took about 5.3 seconds on the development machine. The name
+  and bitrate indexes together occupy about 32 MiB; they speed up those optional
+  sorting modes.
+  These are fixture measurements, not a fixed overhead: station text, catalog
+  contents, SQLite free pages, and hardware affect disk use and migration time.
 
 ## 0.6.1 — 2026-10-20
 
