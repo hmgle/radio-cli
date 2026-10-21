@@ -235,7 +235,7 @@ impl Directory {
                                 .with("servers", failures.join("; "))
                         );
                     }
-                    return store.finish_sync();
+                    return store.finish_sync_cancellable(|| self.stop.load(Ordering::Relaxed));
                 }
                 Err(error) => failures.push(format!("{server}: {error:#}")),
             }

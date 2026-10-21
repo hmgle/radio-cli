@@ -282,6 +282,13 @@ impl Store {
     }
 
     pub fn finish_sync(&mut self) -> Result<usize> {
+        self.finish_sync_cancellable(|| false)
+    }
+
+    pub(crate) fn finish_sync_cancellable(
+        &mut self,
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<usize> {
         let tx = self.conn.transaction()?;
         let count: usize = tx.query_row("SELECT count(*) FROM incoming", [], |r| r.get(0))?;
         if count == 0 {
@@ -301,8 +308,13 @@ impl Store {
         )?;
         facets::rebuild(&tx)?;
         Self::rebuild_search_stats(&tx)?;
+        if cancelled() {
+            bail!(DomainError::new(ErrorCode::Cancelled));
+        }
         tx.commit()?;
-        self.conn.execute_batch("PRAGMA optimize;")?;
+        // Planner maintenance cannot turn a successful publication into a
+        // reported failure after its transaction has already committed.
+        let _ = self.conn.execute_batch("PRAGMA optimize;");
         Ok(count)
     }
 
@@ -872,5 +884,46 @@ impl Store {
             .prepare("SELECT json,recovery_pending FROM recordings WHERE status IN ('recording','finalizing') OR recovery_pending=1")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)))?;
         rows.map(|row| Self::read_recording(row?)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_before_sync_commit_rolls_back_all_derived_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let row = |name: &str, tag: &str| Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: name.into(),
+            tags: tag.into(),
+            active: true,
+            ..Station::default()
+        };
+        store.upsert(&row("originalneedle", "originaltag")).unwrap();
+        store.begin_sync().unwrap();
+        store
+            .stage(&[row("replacementneedle", "replacementtag")])
+            .unwrap();
+        assert!(store.finish_sync_cancellable(|| true).is_err());
+        assert_eq!(store.count().unwrap(), 1);
+        for (query, expected) in [("originalneedle", 1), ("replacementneedle", 0)] {
+            assert_eq!(
+                store
+                    .search_count(&Filter {
+                        query: query.into(),
+                        ..Filter::default()
+                    })
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            store.facets(crate::model::FacetKind::Tag, "").unwrap()[0].value,
+            "originaltag"
+        );
+        assert!(store.meta("last_sync").unwrap().is_none());
     }
 }
