@@ -36,7 +36,10 @@
   migration took about 5.3 seconds locally. Older binaries cannot open the
   upgraded database.
 - `bash -n scripts/package-release.sh` passes and `radio --version` reports
-  `radio 0.7.0`.
+  `radio 0.7.0`. Linux x86_64 musl packaging passes architecture and
+  static-linkage checks plus version and doctor smoke checks from the extracted
+  archive; the archive carries nonempty guides, English completions, the manual
+  and `BUILDINFO`, and `SHA256SUMS` covers the produced tarball.
 - Release archives still require the final GitHub CI gates for Linux, native
   macOS Apple Silicon and Intel, Rust 1.88 and RustSec auditing, plus the musl
   packaging and extracted-archive smoke checks. Those jobs were not run for this
