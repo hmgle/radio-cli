@@ -703,7 +703,10 @@ fn url_index_backfills_legacy_rows_without_rejecting_shared_directory_urls() {
     drop(store);
     let path = dir.path().join("radio.db");
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE facets_cache; DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
+    conn.execute_batch("DROP TRIGGER station_search_insert; DROP TRIGGER station_search_update; DROP TRIGGER station_search_delete;
+        DROP TABLE station_search; DROP INDEX station_sort; DROP INDEX station_name; DROP INDEX station_bitrate;
+        DROP INDEX station_active; DROP INDEX station_directory;
+        DROP TABLE facets_cache; DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
     drop(conn);
     store = Store::open(&path).unwrap();
     assert_eq!(store.directory_count().unwrap(), 2);
@@ -769,4 +772,134 @@ fn facet_cache_tracks_atomic_mutations_sync_and_external_writers() {
     store.save_custom(&custom, None).unwrap();
     store.remove_custom(&custom.stationuuid, false).unwrap();
     assert!(other.facets(FacetKind::Tag, "unique").unwrap().is_empty());
+}
+
+#[test]
+fn trigram_candidates_preserve_literal_substrings_and_sorting() {
+    use radio_cli::model::Sort;
+    let (dir, store) = db();
+    for (i, name) in [
+        "上海 Jazz 100%_FM",
+        "literal AND NOT OR NEAR",
+        "a\"b quote",
+        "nul\0suffix",
+        "ÉCOLE İSTANBUL Σίσυφος Straße",
+        "ab cd ef",
+        "other jazz",
+        "jazz",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut s = station(name);
+        s.clickcount = (i % 3) as u64;
+        s.bitrate = (i as u32 % 2) * 128;
+        store.upsert(&s).unwrap();
+        if i % 2 == 0 {
+            store.favorite(&s.stationuuid, true).unwrap();
+        }
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+    for query in [
+        "上",
+        "上海",
+        "jAZZ",
+        "jaz",
+        "100%_",
+        "%_",
+        "AND",
+        "NOT OR",
+        "a\"b",
+        "nul\0suffix",
+        "suffix",
+        "école",
+        "İST",
+        "Σίσ",
+        "straße",
+        "ab cd",
+        "不存在",
+        " ",
+    ] {
+        for (sort, order) in [
+            (Sort::Clickcount, "popularity DESC,name,uuid"),
+            (Sort::Name, "name COLLATE NOCASE,uuid"),
+            (Sort::Bitrate, "bitrate DESC,name,uuid"),
+            (Sort::Votes, "json_extract(json,'$.votes') DESC,name,uuid"),
+        ] {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT uuid FROM stations WHERE instr(search,?1)>0 ORDER BY {order}"
+                ))
+                .unwrap();
+            let expected: Vec<String> = stmt
+                .query_map([query.trim().to_lowercase()], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let mut filter = Filter {
+                query: query.into(),
+                sort,
+                limit: 100,
+                ..Filter::default()
+            };
+            let actual: Vec<_> = store
+                .search(&filter)
+                .unwrap()
+                .into_iter()
+                .map(|s| s.stationuuid)
+                .collect();
+            assert_eq!(actual, expected, "query {query:?}, sort {sort:?}");
+            assert_eq!(store.search_count(&filter).unwrap(), expected.len());
+            if let Some(s) = store.random(&filter, &[]).unwrap() {
+                assert!(expected.contains(&s.stationuuid));
+            }
+            filter.offset = 1;
+            filter.limit = 2;
+            let actual: Vec<_> = store
+                .search(&filter)
+                .unwrap()
+                .into_iter()
+                .map(|s| s.stationuuid)
+                .collect();
+            assert_eq!(
+                actual,
+                expected.into_iter().skip(1).take(2).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn trigram_index_tracks_updates_deletes_and_rolled_back_publications() {
+    let (dir, mut store) = db();
+    let mut s = station("originalneedle");
+    s.custom = true;
+    store.save_custom(&s, None).unwrap();
+    let find = |text: &str| Filter {
+        query: text.into(),
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut edited = s.clone();
+    edited.name = "replacementneedle".into();
+    assert!(store.save_custom(&edited, Some(&["bad".into()])).is_err());
+    assert_eq!(store.search_count(&find("originalneedle")).unwrap(), 1);
+    store.save_custom(&edited, None).unwrap();
+    assert_eq!(store.search_count(&find("originalneedle")).unwrap(), 0);
+    let other = Store::open(&dir.path().join("radio.db")).unwrap();
+    assert_eq!(other.search_count(&find("replacementneedle")).unwrap(), 1);
+    store.remove_custom(&s.stationuuid, false).unwrap();
+    assert_eq!(other.search_count(&find("replacementneedle")).unwrap(), 0);
+    store.begin_sync().unwrap();
+    store.stage(&[station("syncneedle")]).unwrap();
+    store.finish_sync().unwrap();
+    assert_eq!(other.search_count(&find("syncneedle")).unwrap(), 1);
+    let mut broken = station("rollbackneedle");
+    broken.stationuuid = "invalid".into();
+    assert!(
+        store
+            .bootstrap(&[station("firstneedle"), broken], || false)
+            .is_err()
+    );
+    assert_eq!(other.search_count(&find("firstneedle")).unwrap(), 0);
 }
