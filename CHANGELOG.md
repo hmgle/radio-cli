@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Cache distinct station facets and index normalized stream URLs, removing
+  catalog-wide token splitting and JSON decoding from interactive queries.
+- Use FTS5 trigram candidates for selective substring searches, with exact
+  literal checks and scan paths for short, special, or broad queries. Keep
+  Chinese territory matching and existing sorting and pagination behavior.
+- Run TUI catalog queries on a persistent reader thread so slow searches do
+  not delay media controls. Coalesce requests, discard stale results, cache
+  exact totals across pages, and interrupt queries during shutdown.
+- Locate stations through indexed sort ranges and reduce text copying when
+  publishing TUI logs and rendering station rows.
+
+### Compatibility
+
+- Existing databases migrate atomically to schema v5 on first open. This
+  builds search indexes and facet caches without requiring a catalog sync;
+  first open takes longer and the database uses additional disk space.
+  Older binaries cannot open the upgraded database; keep a pre-upgrade copy
+  if downgrade support is needed. CLI options and JSON output are unchanged.
+
 ## 0.6.1 — 2026-10-20
 
 - Display country/region names in Chinese in the TUI using a pinned Unicode
