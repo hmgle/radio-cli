@@ -704,7 +704,7 @@ fn url_index_backfills_legacy_rows_without_rejecting_shared_directory_urls() {
     let path = dir.path().join("radio.db");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch("DROP TRIGGER station_search_insert; DROP TRIGGER station_search_update; DROP TRIGGER station_search_delete;
-        DROP TABLE station_search; DROP INDEX station_sort; DROP INDEX station_name; DROP INDEX station_bitrate;
+        DROP TABLE station_search_stats; DROP TABLE station_search_terms; DROP TABLE station_search; DROP INDEX station_sort; DROP INDEX station_name; DROP INDEX station_bitrate;
         DROP INDEX station_active; DROP INDEX station_directory;
         DROP TABLE facets_cache; DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
     drop(conn);
@@ -954,5 +954,95 @@ fn indexed_positions_match_pages_with_mixed_directions_and_invisible_targets() {
                     .is_none()
             );
         }
+    }
+}
+
+#[test]
+fn migrations_from_intermediate_versions_preserve_derived_data() {
+    for version in [3, 4] {
+        let (dir, store) = db();
+        let row = station("migrationneedle");
+        store.upsert(&row).unwrap();
+        drop(store);
+        let path = dir.path().join("radio.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TRIGGER station_search_insert; DROP TRIGGER station_search_update; DROP TRIGGER station_search_delete;
+            DROP TABLE station_search_stats; DROP TABLE station_search_terms; DROP TABLE station_search; DROP INDEX station_sort; DROP INDEX station_name;
+            DROP INDEX station_bitrate; DROP INDEX station_active; DROP INDEX station_directory;").unwrap();
+        if version == 3 {
+            conn.execute_batch("DROP TABLE facets_cache;").unwrap();
+        }
+        conn.pragma_update(None, "user_version", version).unwrap();
+        drop(conn);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store
+                .search_count(&Filter {
+                    query: "migrationneedle".into(),
+                    ..Filter::default()
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .facets(radio_cli::model::FacetKind::Country, "")
+                .unwrap()[0]
+                .count,
+            1
+        );
+        assert_eq!(store.station(&row.stationuuid).unwrap().name, row.name);
+    }
+}
+
+#[test]
+fn migration_failure_rolls_back_and_future_versions_are_rejected() {
+    let (dir, store) = db();
+    store.upsert(&station("broken legacy")).unwrap();
+    drop(store);
+    let path = dir.path().join("radio.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE facets_cache;
+        DROP TRIGGER station_search_insert; DROP TRIGGER station_search_update; DROP TRIGGER station_search_delete;
+        DROP TABLE station_search_stats; DROP TABLE station_search_terms; DROP TABLE station_search; DROP INDEX station_sort; DROP INDEX station_name;
+        DROP INDEX station_bitrate; DROP INDEX station_active; DROP INDEX station_directory;
+        DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url;
+        UPDATE stations SET json='invalid'; PRAGMA user_version=2;").unwrap();
+    assert!(Store::open(&path).is_err());
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+    assert!(conn.prepare("SELECT normalized_url FROM stations").is_err());
+    conn.execute_batch("PRAGMA user_version=99").unwrap();
+    let error = Store::open(&path).err().unwrap();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::DatabaseTooNew
+    );
+}
+
+#[test]
+fn stale_trigram_statistics_do_not_exclude_new_or_edited_matches() {
+    let (_dir, mut store) = db();
+    let mut row = station("popular jazz");
+    store.bootstrap(&[row.clone()], || false).unwrap();
+    for name in ["brandnewneedle", "anothernewneedle", "popular jazz"] {
+        row.name = name.into();
+        store.upsert(&row).unwrap();
+        let filter = Filter {
+            query: name.into(),
+            limit: 100,
+            ..Filter::default()
+        };
+        assert_eq!(store.search_count(&filter).unwrap(), 1);
+        assert_eq!(
+            store.search(&filter).unwrap()[0].stationuuid,
+            row.stationuuid
+        );
     }
 }

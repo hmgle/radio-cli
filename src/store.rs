@@ -108,16 +108,20 @@ impl Store {
             }
             if version < 5 {
                 tx.execute_batch(
-                    "CREATE INDEX station_sort ON stations(popularity DESC,name,uuid);
-                    CREATE INDEX station_name ON stations(name COLLATE NOCASE,uuid);
-                    CREATE INDEX station_bitrate ON stations(bitrate DESC,name,uuid);
+                    "CREATE INDEX station_sort ON stations(popularity DESC,name,uuid,active,custom,bitrate);
+                    CREATE INDEX station_name ON stations(name COLLATE NOCASE,uuid,active,custom,bitrate);
+                    CREATE INDEX station_bitrate ON stations(bitrate DESC,name,uuid,active,custom);
                     CREATE INDEX station_active ON stations(active) WHERE active=1;
                     CREATE INDEX station_directory ON stations(active) WHERE active=1 AND custom=0;
                     DROP INDEX IF EXISTS station_popularity;
                     CREATE VIRTUAL TABLE station_search USING fts5(search,
-                        content='stations',content_rowid='rowid',columnsize=0,
+                        content='stations',content_rowid='rowid',columnsize=0,detail=none,
                         tokenize='trigram case_sensitive 1');
                     INSERT INTO station_search(station_search) VALUES ('rebuild');
+                    CREATE VIRTUAL TABLE station_search_terms USING fts5vocab(station_search,'row');
+                    CREATE TABLE station_search_stats(term TEXT PRIMARY KEY,n INTEGER NOT NULL) WITHOUT ROWID;
+                    INSERT INTO station_search_stats SELECT term,doc FROM station_search_terms;
+                    INSERT INTO station_search_stats VALUES ('',(SELECT count(*) FROM stations));
                     CREATE TRIGGER station_search_insert AFTER INSERT ON stations BEGIN
                         INSERT INTO station_search(rowid,search) VALUES (new.rowid,new.search);
                     END;
@@ -164,6 +168,7 @@ impl Store {
             bail!(DomainError::new(ErrorCode::EmptyCatalog));
         }
         facets::rebuild(&tx)?;
+        Self::rebuild_search_stats(&tx)?;
         if cancelled() {
             bail!(DomainError::new(ErrorCode::Cancelled));
         }
@@ -295,6 +300,7 @@ impl Store {
             [chrono::Utc::now().to_rfc3339()],
         )?;
         facets::rebuild(&tx)?;
+        Self::rebuild_search_stats(&tx)?;
         tx.commit()?;
         self.conn.execute_batch("PRAGMA optimize;")?;
         Ok(count)
@@ -345,11 +351,15 @@ impl Store {
         Ok(s)
     }
 
-    fn conditions(filter: &Filter) -> (String, Vec<Value>) {
-        let mut clauses = vec!["(s.active=1 OR s.custom=1 OR f.uuid IS NOT NULL)".to_owned()];
+    fn conditions(&self, filter: &Filter) -> (String, Vec<Value>, &'static str) {
+        let mut clauses = vec![
+            "(s.active=1 OR s.custom=1 OR EXISTS(SELECT 1 FROM favorites f WHERE f.uuid=s.uuid))"
+                .to_owned(),
+        ];
         let mut args = vec![];
+        let mut source = "stations s";
         if filter.favorites {
-            clauses.push("f.uuid IS NOT NULL".into());
+            clauses.push("EXISTS(SELECT 1 FROM favorites f WHERE f.uuid=s.uuid)".into());
         }
         if filter.custom {
             clauses.push("s.custom=1".into());
@@ -363,11 +373,13 @@ impl Store {
             // need a resync or a rewrite of their original station metadata.
             let codes: Vec<_> = crate::territories::matching_codes(query).collect();
             let normalized = query.to_lowercase();
-            if normalized.chars().count() >= 3 && !normalized.contains('\0') {
-                // MATCH input is one literal phrase, never an FTS expression.
+            source = "stations s NOT INDEXED";
+            if let Some(candidate) = self.trigram_candidate(&normalized) {
+                // A literal trigram narrows candidates; instr below checks
+                // the complete query without decoding positional postings.
                 let mut candidates =
                     "SELECT rowid FROM station_search WHERE station_search MATCH ?".to_owned();
-                args.push(format!("\"{}\"", normalized.replace('"', "\"\"")).into());
+                args.push(candidate.into());
                 if !codes.is_empty() {
                     candidates.push_str(&format!(
                         " UNION SELECT rowid FROM stations WHERE country IN ({})",
@@ -376,6 +388,7 @@ impl Store {
                     args.extend(codes.iter().map(|code| Value::from((*code).to_owned())));
                 }
                 clauses.push(if codes.is_empty() {
+                    source = "station_search CROSS JOIN stations s ON s.rowid=station_search.rowid";
                     "station_search MATCH ?".to_owned()
                 } else {
                     format!("s.rowid IN ({candidates})")
@@ -404,28 +417,67 @@ impl Store {
         }
         clauses.push("s.bitrate>=?".into());
         args.push((filter.min_bitrate as i64).into());
-        (clauses.join(" AND "), args)
+        (clauses.join(" AND "), args, source)
     }
 
-    fn search_source(filter: &Filter) -> &'static str {
-        // Text candidates must not turn into a complete scan of a sorting
-        // index with random table lookups. Rowid lookups still work here.
-        if filter.query.trim().is_empty() {
-            "stations s"
-        } else if Self::direct_trigram(filter) {
-            "station_search CROSS JOIN stations s ON s.rowid=station_search.rowid"
-        } else {
-            "stations s NOT INDEXED"
+    /// One rare trigram supplies candidates; instr verifies the full literal.
+    /// Avoid positional phrase decoding for every row of a broad match.
+    fn trigram_candidate(&self, normalized: &str) -> Option<String> {
+        if normalized.chars().count() < 3 || normalized.contains('\0') {
+            return None;
         }
+        let chars: Vec<_> = normalized.chars().collect();
+        let stride = ((chars.len() - 2) / 16).max(1);
+        let mut best = (usize::MAX, chars[..3].iter().collect::<String>());
+        // Bound vocabulary lookups for unusually long command-line queries.
+        let terms: std::collections::BTreeSet<String> = chars
+            .windows(3)
+            .step_by(stride)
+            .take(16)
+            .map(|part| part.iter().collect())
+            .collect();
+        for term in terms {
+            let frequency = self
+                .conn
+                .prepare_cached("SELECT n FROM station_search_stats WHERE term=?1")
+                .and_then(|mut s| s.query_row([&term], |r| r.get::<_, usize>(0)).optional());
+            // If statistics are unavailable, the literal remains a valid
+            // candidate. Query errors are reported by the actual FTS query.
+            let frequency = match frequency {
+                Ok(Some(n)) => n,
+                Ok(None) => 0,
+                Err(_) => continue,
+            };
+            if frequency < best.0 {
+                best = (frequency, term);
+            }
+            if frequency == 0 {
+                break;
+            }
+        }
+        let total: usize = self
+            .conn
+            .query_row(
+                "SELECT n FROM station_search_stats WHERE term=''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        // Statistics only choose a query strategy. Stale hints after a single
+        // station mutation never change the exact substring predicate.
+        if total > 0 && best.0 > total / 4 {
+            return None;
+        }
+        Some(format!("\"{}\"", best.1.replace('"', "\"\"")))
     }
 
-    fn direct_trigram(filter: &Filter) -> bool {
-        let query = filter.query.trim().to_lowercase();
-        query.chars().count() >= 3
-            && !query.contains('\0')
-            && crate::territories::matching_codes(filter.query.trim())
-                .next()
-                .is_none()
+    fn rebuild_search_stats(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "DELETE FROM station_search_stats;
+            INSERT INTO station_search_stats SELECT term,doc FROM station_search_terms;
+            INSERT INTO station_search_stats VALUES ('',(SELECT count(*) FROM stations));",
+        )?;
+        Ok(())
     }
 
     fn search_order(filter: &Filter) -> &'static str {
@@ -445,8 +497,7 @@ impl Store {
     /// Locate a station without loading every preceding page into memory.
     pub fn station_position(&self, uuid: &str, filter: &Filter) -> Result<Option<usize>> {
         use crate::model::Sort;
-        let (conditions, mut args) = Self::conditions(filter);
-        let source = Self::search_source(filter);
+        let (conditions, mut args, source) = self.conditions(filter);
         if !filter.history && matches!(filter.sort, Sort::Clickcount | Sort::Bitrate | Sort::Name) {
             let tx = self.conn.unchecked_transaction()?;
             let mut target_args = args.clone();
@@ -455,7 +506,7 @@ impl Store {
                 .query_row(
                     &format!(
                         "SELECT s.popularity,s.bitrate,s.name FROM {source}
-                    LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} AND s.uuid=?"
+                    WHERE {conditions} AND s.uuid=?"
                     ),
                     params_from_iter(target_args),
                     |r| {
@@ -476,7 +527,7 @@ impl Store {
                 Ok(tx
                     .prepare_cached(&format!(
                         "SELECT count(*) FROM {source}
-                    LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} AND ({predicate})"
+                    WHERE {conditions} AND ({predicate})"
                     ))?
                     .query_row(params_from_iter(values_with_filter), |r| r.get(0))?)
             };
@@ -507,7 +558,7 @@ impl Store {
         let sql = format!(
             "WITH ranked AS (
             SELECT s.uuid,row_number() OVER (ORDER BY {order})-1 AS position
-            FROM {source} LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions}
+            FROM {source} WHERE {conditions}
         ) SELECT position FROM ranked WHERE uuid=?"
         );
         args.push(uuid.to_owned().into());
@@ -519,14 +570,16 @@ impl Store {
     }
 
     pub fn search(&self, filter: &Filter) -> Result<Vec<Station>> {
-        let (conditions, mut args) = Self::conditions(filter);
+        let (conditions, mut args, source) = self.conditions(filter);
         let order = Self::search_order(filter);
-        let source = Self::search_source(filter);
         // Sort compact row references, fetching JSON only for the selected page.
-        let sql = format!("WITH page AS MATERIALIZED (
-            SELECT s.rowid AS id,f.uuid IS NOT NULL AS favorite FROM {source}
-            LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?)
-            SELECT s.json,s.active,page.favorite FROM page JOIN stations s ON s.rowid=page.id ORDER BY {order}");
+        let sql = format!(
+            "WITH page AS MATERIALIZED (
+            SELECT s.rowid AS id FROM {source}
+            WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?)
+            SELECT s.json,s.active,EXISTS(SELECT 1 FROM favorites f WHERE f.uuid=s.uuid)
+            FROM page JOIN stations s ON s.rowid=page.id ORDER BY {order}"
+        );
         args.push((filter.limit.clamp(1, 1000) as i64).into());
         args.push((filter.offset.min(i64::MAX as usize) as i64).into());
         let mut stmt = self.conn.prepare_cached(&sql)?;
@@ -548,15 +601,14 @@ impl Store {
     }
 
     pub fn random(&self, filter: &Filter, exclude: &[String]) -> Result<Option<Station>> {
-        let (mut conditions, mut args) = Self::conditions(filter);
+        let (mut conditions, mut args, source) = self.conditions(filter);
         if !exclude.is_empty() {
             let placeholders = vec!["?"; exclude.len()].join(",");
             conditions.push_str(&format!(" AND s.uuid NOT IN ({placeholders})"));
             args.extend(exclude.iter().cloned().map(Value::Text));
         }
-        let source = Self::search_source(filter);
         let sql = format!(
-            "SELECT s.uuid FROM {source} LEFT JOIN favorites f ON f.uuid=s.uuid
+            "SELECT s.uuid FROM {source}
             WHERE {conditions} ORDER BY random() LIMIT 1"
         );
         let selected = self
@@ -760,9 +812,11 @@ impl Store {
     }
 
     pub fn search_count(&self, filter: &Filter) -> Result<usize> {
-        let (conditions, args) = Self::conditions(filter);
-        let source = Self::search_source(filter);
-        Ok(self.conn.prepare_cached(&format!("SELECT count(*) FROM {source} LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions}"))?.query_row(params_from_iter(args), |r| r.get(0))?)
+        let (conditions, args, source) = self.conditions(filter);
+        Ok(self
+            .conn
+            .prepare_cached(&format!("SELECT count(*) FROM {source} WHERE {conditions}"))?
+            .query_row(params_from_iter(args), |r| r.get(0))?)
     }
 
     pub fn recordings(&self, limit: usize) -> Result<Vec<Recording>> {
