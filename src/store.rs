@@ -425,7 +425,7 @@ impl Store {
                     "(instr(s.search,?)>0 OR s.country IN ({placeholders}))"
                 ));
             }
-            args.push(query.to_lowercase().into());
+            args.push(normalized.into());
             args.extend(codes.into_iter().map(|code| Value::from(code.to_owned())));
         }
         if let Some(country) = &filter.country {
@@ -612,13 +612,20 @@ impl Store {
     pub fn search(&self, filter: &Filter) -> Result<Vec<Station>> {
         let (conditions, mut args, source) = self.conditions(filter);
         let order = Self::search_order(filter);
+        // The random page has already been shuffled. Other sorts still need
+        // their outer order, including history which overrides filter.sort.
+        let page_order = if !filter.history && filter.sort == crate::model::Sort::Random {
+            String::new()
+        } else {
+            format!(" ORDER BY {order}")
+        };
         // Sort compact row references, fetching JSON only for the selected page.
         let sql = format!(
             "WITH page AS MATERIALIZED (
             SELECT s.rowid AS id FROM {source}
             WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?)
             SELECT s.json,s.active,EXISTS(SELECT 1 FROM favorites f WHERE f.uuid=s.uuid)
-            FROM page JOIN stations s ON s.rowid=page.id ORDER BY {order}"
+            FROM page JOIN stations s ON s.rowid=page.id{page_order}"
         );
         args.push((filter.limit.clamp(1, 1000) as i64).into());
         args.push((filter.offset.min(i64::MAX as usize) as i64).into());
@@ -918,6 +925,58 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn territory_queries_union_indexed_country_and_trigram_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let rows: Vec<_> = (0..100)
+            .map(|i| Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: match i {
+                    1 => "爱尔兰音乐".into(),
+                    2 => "爱尔兰广播".into(),
+                    _ => format!("catalog station {i}"),
+                },
+                countrycode: if i == 0 || i == 2 { "IE" } else { "FR" }.into(),
+                clickcount: i,
+                active: true,
+                ..Station::default()
+            })
+            .collect();
+        store.bootstrap(&rows, || false).unwrap();
+        let filter = Filter {
+            query: " 爱尔兰 ".into(),
+            limit: 100,
+            ..Filter::default()
+        };
+        let actual: Vec<_> = store
+            .search(&filter)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.stationuuid)
+            .collect();
+        assert_eq!(actual, [2, 1, 0].map(|i| rows[i].stationuuid.clone()));
+        assert_eq!(store.search_count(&filter).unwrap(), 3);
+        let (conditions, args, source) = store.conditions(&filter);
+        let plan: Vec<String> = store
+            .conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN SELECT s.rowid FROM {source} WHERE {conditions}"
+            ))
+            .unwrap()
+            .query_map(params_from_iter(args), |r| r.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        for index in [
+            "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)",
+            "station_search VIRTUAL TABLE INDEX",
+            "station_country (country=?)",
+        ] {
+            assert!(plan.iter().any(|step| step.contains(index)), "{plan:?}");
+        }
+    }
 
     #[test]
     fn search_statistics_collection_allows_a_concurrent_writer() {

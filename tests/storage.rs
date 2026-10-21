@@ -318,6 +318,61 @@ fn random_uses_entire_matching_catalog_and_excludes_candidates() {
 }
 
 #[test]
+fn random_pages_preserve_filters_limits_and_history_order() {
+    use radio_cli::model::Sort;
+
+    let (_dir, store) = db();
+    let mut matching = Vec::new();
+    for i in 0..30 {
+        let row = station(if i % 2 == 0 { "needle" } else { "other" });
+        store.upsert(&row).unwrap();
+        store.played(&row.stationuuid).unwrap();
+        if i % 2 == 0 {
+            matching.push(row.stationuuid);
+        }
+    }
+    let filter = Filter {
+        query: "NEEDLE".into(),
+        sort: Sort::Random,
+        offset: 3,
+        limit: 5,
+        ..Filter::default()
+    };
+    let page = store.search(&filter).unwrap();
+    assert_eq!(page.len(), 5);
+    let ids: std::collections::BTreeSet<_> = page.iter().map(|row| &row.stationuuid).collect();
+    assert_eq!(ids.len(), 5);
+    assert!(ids.iter().all(|id| matching.contains(id)));
+    assert!(
+        store
+            .search(&Filter {
+                offset: matching.len(),
+                ..filter.clone()
+            })
+            .unwrap()
+            .is_empty()
+    );
+    let history: Vec<_> = store
+        .search(&Filter {
+            history: true,
+            ..filter
+        })
+        .unwrap()
+        .into_iter()
+        .map(|row| row.stationuuid)
+        .collect();
+    assert_eq!(
+        history,
+        matching
+            .into_iter()
+            .rev()
+            .skip(3)
+            .take(5)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn malformed_record_does_not_replace_directory() {
     let (_dir, mut store) = db();
     let s = station("原目录");
