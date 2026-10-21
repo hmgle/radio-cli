@@ -54,6 +54,19 @@ separate step.
 - Use `--data-dir <dir>` (and `--config <file>` when needed) so tests and manual
   runs never touch the default data directory.
 
+Run the local catalog measurements with:
+
+```sh
+cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
+cargo test --release --test catalog_perf -- --ignored --nocapture
+```
+
+The second command builds a deterministic 200,000-station fixture and compares
+legacy SQL against current queries, reporting P50/P95 for each search and
+sorting case, counts, station location, facets, URL checks, and migration cost.
+It also reports index sizes. Run on an otherwise idle machine; its five-sample
+P95 is the slowest observed sample and is sensitive to other disk and CPU work.
+
 ## Commits
 
 Short, imperative subject lines in the style of the existing history, e.g.
