@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-10-21
 
 - Cache distinct station facets and index normalized stream URLs, removing
   catalog-wide token splitting and JSON decoding from interactive queries.

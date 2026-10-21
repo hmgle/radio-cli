@@ -65,8 +65,8 @@ your Mac and `SHA256SUMS`, and verify it before extracting. For Apple Silicon:
 ```sh
 brew install mpv ffmpeg
 grep 'aarch64-apple-darwin.tar.gz$' SHA256SUMS | shasum -a 256 -c -
-tar -xzf radio-cli-v0.6.1-aarch64-apple-darwin.tar.gz
-cd radio-cli-v0.6.1-aarch64-apple-darwin
+tar -xzf radio-cli-v0.7.0-aarch64-apple-darwin.tar.gz
+cd radio-cli-v0.7.0-aarch64-apple-darwin
 ./radio doctor
 ./radio sync
 ./radio tui
