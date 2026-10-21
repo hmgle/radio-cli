@@ -597,7 +597,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     }
     if let Some((selected, values)) = &app.filter_edit {
         let rect = popup(area, 72, 18);
-        frame.render_widget(Clear, rect);
+        clear_popup(frame, rect);
         let names = ["国家/地区代码", "语言", "标签", "最低码率"];
         let label_width = format!("› {}: ", names[*selected]).width() as u16;
         let input_width = rect.width.saturating_sub(2 + label_width);
@@ -680,7 +680,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     }
     if app.help {
         let rect = popup(area, 88, area.height.saturating_sub(2));
-        frame.render_widget(Clear, rect);
+        clear_popup(frame, rect);
         frame.render_widget(
             scroll_text(
                 &app.help_content
@@ -807,6 +807,25 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
         width,
         height,
     )
+}
+
+/// Render `Clear` for a popup plus the column immediately to its left.
+///
+/// Ratatui's buffer diff skips the trailing cell of an unchanged wide
+/// character, so a left border drawn on that cell would never reach the
+/// terminal. Clearing the adjacent column resets any wide character there and
+/// lets the border through. The right border needs no such treatment: its left
+/// neighbour always lies inside the cleared popup.
+fn clear_popup(frame: &mut Frame, rect: Rect) {
+    frame.render_widget(
+        Clear,
+        Rect::new(
+            rect.x.saturating_sub(1),
+            rect.y,
+            rect.width.saturating_add(1),
+            rect.height,
+        ),
+    );
 }
 
 pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {

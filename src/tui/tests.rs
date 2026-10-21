@@ -116,6 +116,169 @@ fn station_details_localize_territory_codes_without_changing_catalog_values() {
 }
 
 #[test]
+fn help_popup_border_survives_mixed_width_station_names() {
+    let mut data = view();
+    data.rows = vec![
+        station("2AC澳洲华人电台粤语广播"),
+        station("CNR-15 中国交通广播"),
+        station("CNR-4 经典音乐广播"),
+        station("故事广播-阿基米德故事会"),
+    ]
+    .into();
+    // Widths chosen so the popup's left border lands on the list panel at
+    // alignments where a wide character's trailing cell sits on the border.
+    for width in [130u16, 160] {
+        let height = 30u16;
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        app.help = true;
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        // Mirror popup(): the help popup is 88 wide (or the whole area when
+        // narrower) and centred, so its left border sits at this column.
+        let popup_w = 88u16.min(width.saturating_sub(2));
+        let left = (width - popup_w) / 2;
+        let popup_h = height.saturating_sub(2);
+        let top = (height - popup_h) / 2;
+        let mut broken = Vec::new();
+        for y in top..top + popup_h {
+            let expected = match y {
+                t if t == top => "┏",
+                b if b == top + popup_h - 1 => "┗",
+                _ => "┃",
+            };
+            let sym = buf[(left, y)].symbol();
+            if sym != expected {
+                broken.push(format!("w={width} y={y} sym={sym:?} expected={expected:?}"));
+            }
+        }
+        assert!(broken.is_empty(), "left border broken at: {broken:?}");
+    }
+}
+
+#[test]
+fn help_popup_border_survives_wide_characters() {
+    let data = view();
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    // Draw once without the popup so wide CJK characters land left of the popup.
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    app.help = true;
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    let mut broken = Vec::new();
+    for y in 1..23 {
+        let expected = match y {
+            1 => "┏",
+            22 => "┗",
+            _ => "┃",
+        };
+        let sym = buf[(6, y)].symbol();
+        if sym != expected {
+            broken.push(format!("y={y} sym={sym:?} expected={expected:?}"));
+        }
+    }
+    assert!(broken.is_empty(), "left border broken at: {broken:?}");
+}
+
+#[test]
+fn filter_popup_border_survives_mixed_width_station_names() {
+    let mut data = view();
+    data.rows = vec![
+        station("2AC澳洲华人电台粤语广播"),
+        station("CNR-15 中国交通广播"),
+        station("CNR-4 经典音乐广播"),
+        station("故事广播-阿基米德故事会"),
+    ]
+    .into();
+    // Widths where the filter popup's left border lands on the list panel at
+    // alignments that put a wide character's trailing cell on the border.
+    for width in [76u16, 130] {
+        let height = 24u16;
+        let mut app = App::default();
+        app.filter_edit = Some((0, Default::default()));
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        // Mirror popup(area, 72, 18): the filter popup is 72 wide (or the whole
+        // area when narrower) and centred.
+        let popup_w = 72u16.min(width.saturating_sub(2));
+        let left = (width - popup_w) / 2;
+        let popup_h = 18u16.min(height.saturating_sub(2));
+        let top = (height - popup_h) / 2;
+        let mut broken = Vec::new();
+        for y in top..top + popup_h {
+            let expected = match y {
+                t if t == top => "┏",
+                b if b == top + popup_h - 1 => "┗",
+                _ => "┃",
+            };
+            let sym = buf[(left, y)].symbol();
+            if sym != expected {
+                broken.push(format!("w={width} y={y} sym={sym:?} expected={expected:?}"));
+            }
+        }
+        assert!(
+            broken.is_empty(),
+            "filter left border broken at: {broken:?}"
+        );
+    }
+}
+
+#[test]
+fn help_popup_preserves_background_right_of_the_border() {
+    let mut data = view();
+    // A long track name so the player panel's title line reaches the right
+    // margin, immediately right of the help popup's right border.
+    data.status.title = "VeryLongTrackNameThatExtendsAcrossThePlayerPanelToCol94".into();
+    let width = 100u16;
+    let height = 24u16;
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let base = terminal.backend().buffer().clone();
+    app.help = true;
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    // At 100x24 the help popup spans x=6..=93; column 94 is the first background
+    // column to its right and must survive the popup's Clear.
+    let right = 94u16;
+    let present: Vec<u16> = (0..height)
+        .filter(|&y| base[(right, y)].symbol() != " ")
+        .collect();
+    assert!(
+        !present.is_empty(),
+        "fixture must place content at column {right} for this test to be meaningful"
+    );
+    let mut erased = Vec::new();
+    for y in present {
+        if buf[(right, y)].symbol() != base[(right, y)].symbol() {
+            erased.push(format!(
+                "y={y} base={:?} now={:?}",
+                base[(right, y)].symbol(),
+                buf[(right, y)].symbol()
+            ));
+        }
+    }
+    assert!(erased.is_empty(), "column {right} erased at: {erased:?}");
+}
+
+#[test]
 fn help_notice_follows_the_selected_locale() {
     let english = render::help_text(crate::messages::Locale::En, "");
     let chinese = render::help_text(crate::messages::Locale::ZhCn, "");
