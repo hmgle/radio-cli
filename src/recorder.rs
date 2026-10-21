@@ -917,7 +917,11 @@ mod tests {
         let mut json = serde_json::to_value(&record).unwrap();
         json.as_object_mut().unwrap().remove("recovery_pending");
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute_batch("CREATE TABLE recordings (id TEXT PRIMARY KEY,status TEXT NOT NULL,json TEXT NOT NULL); PRAGMA user_version=1;").unwrap();
+        conn.execute_batch("CREATE TABLE recordings (id TEXT PRIMARY KEY,status TEXT NOT NULL,json TEXT NOT NULL);
+            CREATE TABLE stations (uuid TEXT PRIMARY KEY,name TEXT NOT NULL,search TEXT NOT NULL,
+                country TEXT NOT NULL,languages TEXT NOT NULL,tags TEXT NOT NULL,bitrate INTEGER NOT NULL,
+                popularity INTEGER NOT NULL,custom INTEGER NOT NULL,active INTEGER NOT NULL,json TEXT NOT NULL);
+            PRAGMA user_version=1;").unwrap();
         conn.execute(
             "INSERT INTO recordings VALUES (?1,?2,?3)",
             rusqlite::params![record.id, record.status, json.to_string()],
@@ -935,7 +939,7 @@ mod tests {
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                 .unwrap(),
-            2
+            3
         );
     }
 

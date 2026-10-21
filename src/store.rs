@@ -19,10 +19,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 2 {
+        if version < 3 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -52,10 +52,29 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2 => {},
+                2 | 3 => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
-            tx.pragma_update(None, "user_version", 2)?;
+            if version < 3 {
+                tx.execute_batch(
+                    "ALTER TABLE stations ADD COLUMN normalized_url TEXT;
+                    CREATE INDEX station_url ON stations(normalized_url) WHERE active=1;",
+                )?;
+                let mut select = tx.prepare("SELECT uuid,json FROM stations")?;
+                let mut update =
+                    tx.prepare("UPDATE stations SET normalized_url=?2 WHERE uuid=?1")?;
+                let rows = select
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                for row in rows {
+                    let (uuid, json) = row?;
+                    let station: Station = serde_json::from_str(&json)?;
+                    update.execute(params![
+                        uuid,
+                        crate::service::normalized_url(station.primary_url()).ok()
+                    ])?;
+                }
+            }
+            tx.pragma_update(None, "user_version", 3)?;
             tx.commit()?;
         }
         Ok(Self { conn })
@@ -101,11 +120,11 @@ impl Store {
             bail!(DomainError::new(ErrorCode::InvalidStation));
         }
         uuid::Uuid::parse_str(&s.stationuuid).context(DomainError::new(ErrorCode::InvalidUuid))?;
-        let sql = format!("INSERT INTO {table} (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+        let sql = format!("INSERT INTO {table} (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
-            bitrate=excluded.bitrate,popularity=excluded.popularity,custom=excluded.custom,active=excluded.active,json=excluded.json
+            bitrate=excluded.bitrate,popularity=excluded.popularity,custom=excluded.custom,active=excluded.active,json=excluded.json,normalized_url=excluded.normalized_url
             WHERE {table}.custom=0 OR {custom}");
         // Facet queries compare normalized prefixes with binary SQL equality.
         // Keep country codes uppercase and language/tag tokens Unicode lowercase
@@ -119,22 +138,20 @@ impl Store {
                 .join(",")
         };
         let languages = normalize(&format!("{},{}", s.language, s.languagecodes));
-        conn.execute(
-            &sql,
-            params![
-                s.stationuuid,
-                s.name,
-                s.search_text(),
-                s.countrycode.to_uppercase(),
-                format!(",{languages},"),
-                format!(",{},", normalize(&s.tags)),
-                s.bitrate,
-                s.clickcount.min(i64::MAX as u64),
-                s.custom,
-                s.active,
-                serde_json::to_string(s)?
-            ],
-        )?;
+        conn.prepare_cached(&sql)?.execute(params![
+            s.stationuuid,
+            s.name,
+            s.search_text(),
+            s.countrycode.to_uppercase(),
+            format!(",{languages},"),
+            format!(",{},", normalize(&s.tags)),
+            s.bitrate,
+            s.clickcount.min(i64::MAX as u64),
+            s.custom,
+            s.active,
+            serde_json::to_string(s)?,
+            crate::service::normalized_url(s.primary_url()).ok()
+        ])?;
         Ok(())
     }
 
@@ -163,7 +180,7 @@ impl Store {
     pub fn begin_sync(&self) -> Result<()> {
         self.conn.execute_batch(
             "DROP TABLE IF EXISTS temp.incoming;
-            CREATE TEMP TABLE incoming AS SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json FROM stations WHERE 0;
+            CREATE TEMP TABLE incoming AS SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url FROM stations WHERE 0;
             CREATE UNIQUE INDEX temp.incoming_uuid ON incoming(uuid);",
         )?;
         Ok(())
@@ -189,10 +206,10 @@ impl Store {
         }
         tx.execute("UPDATE stations SET active=0 WHERE custom=0", [])?;
         tx.execute_batch(
-            "INSERT INTO stations (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json) SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json FROM incoming WHERE true
+            "INSERT INTO stations (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url) SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url FROM incoming WHERE true
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
-            bitrate=excluded.bitrate,popularity=excluded.popularity,active=1,json=excluded.json
+            bitrate=excluded.bitrate,popularity=excluded.popularity,active=1,json=excluded.json,normalized_url=excluded.normalized_url
             WHERE stations.custom=0;",
         )?;
         tx.execute(
@@ -466,23 +483,11 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let key = crate::service::normalized_url(station.primary_url())?;
-        {
-            let mut stmt =
-                tx.prepare("SELECT uuid,json FROM stations WHERE uuid<>?1 AND active=1")?;
-            let rows = stmt.query_map([&station.stationuuid], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?;
-            for row in rows {
-                let (uuid, json) = row?;
-                let other: Station = serde_json::from_str(&json)?;
-                if crate::service::normalized_url(other.primary_url())
-                    .ok()
-                    .as_ref()
-                    == Some(&key)
-                {
-                    bail!(DomainError::new(ErrorCode::DuplicateStation).with("uuid", uuid));
-                }
-            }
+        if let Some(uuid) = tx.query_row(
+            "SELECT uuid FROM stations WHERE active=1 AND normalized_url=?1 AND uuid<>?2 LIMIT 1",
+            params![key, station.stationuuid], |r| r.get::<_, String>(0),
+        ).optional()? {
+            bail!(DomainError::new(ErrorCode::DuplicateStation).with("uuid", uuid));
         }
         Self::write_station_with_policy(&tx, "stations", station, true)?;
         if let Some(backups) = backups {

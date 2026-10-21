@@ -686,3 +686,48 @@ fn bounded_facets_can_reach_values_beyond_the_initial_limit() {
             .is_empty()
     );
 }
+
+#[test]
+fn url_index_backfills_legacy_rows_without_rejecting_shared_directory_urls() {
+    use radio_cli::{
+        error::{DomainError, ErrorCode},
+        service,
+    };
+    let (dir, mut store) = db();
+    let mut first = station("first");
+    first.url = "https://EXAMPLE.com:443/live#one".into();
+    let mut second = first.clone();
+    second.stationuuid = uuid::Uuid::new_v4().to_string();
+    store.upsert(&first).unwrap();
+    store.upsert(&second).unwrap();
+    drop(store);
+    let path = dir.path().join("radio.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
+    drop(conn);
+    store = Store::open(&path).unwrap();
+    assert_eq!(store.directory_count().unwrap(), 2);
+    let error = service::add_station(
+        &mut store,
+        "duplicate".into(),
+        "https://example.com/live".into(),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<DomainError>().unwrap().code,
+        ErrorCode::DuplicateStation
+    );
+    let mut changed = second.clone();
+    changed.url = "https://example.com/changed".into();
+    store.begin_sync().unwrap();
+    store.stage(&[changed]).unwrap();
+    store.finish_sync().unwrap();
+    service::add_station(
+        &mut store,
+        "old inactive URL".into(),
+        "https://example.com/live".into(),
+        &[],
+    )
+    .unwrap();
+}
