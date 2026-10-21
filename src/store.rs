@@ -350,7 +350,11 @@ impl Store {
                     ));
                     args.extend(codes.iter().map(|code| Value::from((*code).to_owned())));
                 }
-                clauses.push(format!("s.rowid IN ({candidates})"));
+                clauses.push(if codes.is_empty() {
+                    "station_search MATCH ?".to_owned()
+                } else {
+                    format!("s.rowid IN ({candidates})")
+                });
             }
             if codes.is_empty() {
                 clauses.push("instr(s.search,?)>0".into());
@@ -383,9 +387,20 @@ impl Store {
         // index with random table lookups. Rowid lookups still work here.
         if filter.query.trim().is_empty() {
             "stations s"
+        } else if Self::direct_trigram(filter) {
+            "station_search CROSS JOIN stations s ON s.rowid=station_search.rowid"
         } else {
             "stations s NOT INDEXED"
         }
+    }
+
+    fn direct_trigram(filter: &Filter) -> bool {
+        let query = filter.query.trim().to_lowercase();
+        query.chars().count() >= 3
+            && !query.contains('\0')
+            && crate::territories::matching_codes(filter.query.trim())
+                .next()
+                .is_none()
     }
 
     fn search_order(filter: &Filter) -> &'static str {
@@ -482,8 +497,11 @@ impl Store {
         let (conditions, mut args) = Self::conditions(filter);
         let order = Self::search_order(filter);
         let source = Self::search_source(filter);
-        let sql = format!("SELECT s.json,s.active,f.uuid IS NOT NULL FROM {source}
-            LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?");
+        // Sort compact row references, fetching JSON only for the selected page.
+        let sql = format!("WITH page AS MATERIALIZED (
+            SELECT s.rowid AS id,f.uuid IS NOT NULL AS favorite FROM {source}
+            LEFT JOIN favorites f ON f.uuid=s.uuid WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?)
+            SELECT s.json,s.active,page.favorite FROM page JOIN stations s ON s.rowid=page.id ORDER BY {order}");
         args.push((filter.limit.clamp(1, 1000) as i64).into());
         args.push((filter.offset.min(i64::MAX as usize) as i64).into());
         let mut stmt = self.conn.prepare_cached(&sql)?;
