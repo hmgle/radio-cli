@@ -65,8 +65,14 @@ fn value(text: &str) -> String {
 
 pub(super) fn fit(text: &str, width: usize) -> String {
     let text = crate::clean_text(text);
-    if text.width() <= width {
-        return format!("{text}{}", " ".repeat(width - text.width()));
+    fit_clean(&text, width)
+}
+
+/// Callers must have already sanitized external text.
+fn fit_clean(text: &str, width: usize) -> String {
+    let text_width = text.width();
+    if text_width <= width {
+        return format!("{text}{}", " ".repeat(width - text_width));
     }
     if width == 0 {
         return String::new();
@@ -212,7 +218,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         format!(
             "{} · {} · 音量 {}\n{} · {} · {}（目录）\n{} · {} · {}",
             playing,
-            fit(
+            fit_clean(
                 &value(&station.name),
                 usize::from(area.width.saturating_sub(40))
             )
@@ -353,13 +359,13 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                         "{}{} {} [{}] {} {}{}",
                         if current { "▶" } else { " " },
                         if s.favorite { "★" } else { " " },
-                        fit(
+                        fit_clean(
                             &value(&s.name),
                             usize::from(app.rects[Focus::List.index()].width.saturating_sub(37))
                         ),
                         fit(&s.countrycode, 2),
-                        fit(&bitrate(s), 10),
-                        fit(&codec(s), 7),
+                        fit_clean(&bitrate(s), 10),
+                        fit_clean(&codec(s), 7),
                         if s.active { "" } else { " [已失效]" }
                     ))
                 })
@@ -492,7 +498,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             .iter()
             .skip(start)
             .take(end - start)
-            .map(|line| Line::from(line.clone())),
+            .map(|line| Line::from(line.as_ref())),
     );
     if rect.height == 1 {
         frame.render_widget(

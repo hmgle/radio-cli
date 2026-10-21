@@ -50,7 +50,7 @@ pub(super) struct View {
     pub catalog_note: String,
     pub task: String,
     pub task_active: bool,
-    pub logs: Arc<VecDeque<String>>,
+    pub logs: Arc<VecDeque<Arc<str>>>,
     pub located: Option<LocatedStation>,
     pub inspected: Option<Station>,
     pub inspected_request: u64,
@@ -115,10 +115,8 @@ impl View {
     }
     fn log(&mut self, message: &str) {
         let message = crate::clean_text(message);
-        Arc::make_mut(&mut self.logs).push_back(format!(
-            "{} {message}",
-            chrono::Local::now().format("%H:%M:%S")
-        ));
+        Arc::make_mut(&mut self.logs)
+            .push_back(format!("{} {message}", chrono::Local::now().format("%H:%M:%S")).into());
         while self.logs.len() > 200 {
             Arc::make_mut(&mut self.logs).pop_front();
         }
