@@ -97,3 +97,5 @@ audio_devices_unavailable = "mpv 未返回音频设备；请确认配置的 mpv 
 
 artwork_handoff_timeout = "等待封面连接关闭超时，请重试播放或录音"
 catalog_source_notice = "默认电台目录来自 Radio Browser；数据来源说明见 README。"
+list_query_failed = "列表查询失败: {detail}"
+facet_query_failed = "筛选候选加载失败: {detail}"

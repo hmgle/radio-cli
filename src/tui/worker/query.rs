@@ -248,7 +248,9 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                         data.filter = page.filter;
                         data.catalog_note = page.note;
                     }
-                    Err(error) => data.log(&format!("列表查询失败: {error:#}")),
+                    Err(error) => {
+                        data.log(&crate::t!("list_query_failed", "detail" => format!("{error:#}")))
+                    }
                 }
                 data.revision += 1;
                 data.immediate_revision += 1;
@@ -296,7 +298,8 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                 match result {
                     Ok(facets) => Arc::make_mut(&mut data.facets)[selected] = facets,
                     Err(error) => {
-                        let message = format!("筛选候选加载失败: {error:#}");
+                        let message =
+                            crate::t!("facet_query_failed", "detail" => format!("{error:#}"));
                         data.log(&message);
                         data.facets_error = Some(message);
                     }
@@ -416,6 +419,64 @@ mod tests {
         assert_eq!(data.total, 0);
         drop(data);
         drop(worker);
+    }
+
+    #[test]
+    fn stale_locations_and_facets_are_not_published() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        let row = Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "station".into(),
+            active: true,
+            tags: "jazz".into(),
+            language: "english".into(),
+            ..Station::default()
+        };
+        store.upsert(&row).unwrap();
+        let view = Arc::new(Mutex::new(View::new(status())));
+        let worker = Worker::start(&path, &view).unwrap();
+        for locating in [true, false] {
+            let (started, waiting) = mpsc::channel();
+            let (release, blocked) = mpsc::channel();
+            *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+                started.send(()).unwrap();
+                blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+            }));
+            if locating {
+                worker.sender.locate(row.stationuuid.clone(), 1, 100);
+            } else {
+                view.lock().unwrap().facets_loading = true;
+                worker.sender.facets(2, "ja".into());
+            }
+            waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+            if locating {
+                worker.sender.locate("missing".into(), 2, 100);
+            } else {
+                worker.sender.facets(1, "en".into());
+            }
+            release.send(()).unwrap();
+            if locating {
+                wait(&view, |v| {
+                    v.located.as_ref().is_some_and(|l| l.request == 2)
+                });
+                assert!(
+                    view.lock()
+                        .unwrap()
+                        .located
+                        .as_ref()
+                        .unwrap()
+                        .filter
+                        .is_err()
+                );
+            } else {
+                wait(&view, |v| !v.facets_loading);
+                let data = view.lock().unwrap();
+                assert!(data.facets[2].is_empty());
+                assert_eq!(data.facets[1][0].value, "english");
+            }
+        }
     }
 
     #[test]
