@@ -1,3 +1,5 @@
+mod query;
+
 use super::command::{Command, CommandReceiver};
 use crate::{
     config::Config,
@@ -30,6 +32,7 @@ pub(super) struct View {
     pub artwork_station: Option<String>,
     pub track_artwork: Option<crate::engine::artwork::TrackArtwork>,
     published: Option<(u64, Arc<View>)>,
+    queries: Option<query::Sender>,
     store_revision: Option<(u64, u64)>,
     refresh_requested: bool,
     pub immediate_revision: u64,
@@ -64,6 +67,7 @@ impl View {
             artwork_station: None,
             track_artwork: None,
             published: None,
+            queries: None,
             store_revision: None,
             refresh_requested: false,
             immediate_revision: 1,
@@ -104,6 +108,7 @@ impl View {
         }
         let mut view = self.clone();
         view.published = None;
+        view.queries = None;
         let snapshot = Arc::new(view);
         self.published = Some((self.revision, snapshot.clone()));
         snapshot
@@ -205,6 +210,15 @@ fn catalog_note(store: &Store, days: u16) -> Result<String> {
 fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
     let store_revision = engine.store.revision()?;
     let note = catalog_note(&engine.store, engine.config.settings.auto_sync_days)?;
+    {
+        let mut data = view.lock().unwrap();
+        if let Some(sender) = data.queries.clone() {
+            data.store_revision = Some(store_revision);
+            data.refresh_requested = false;
+            sender.page(filter.clone(), store_revision, note);
+            return Ok(());
+        }
+    }
     if filter.recordings {
         let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
         let total = engine.store.recordings_count()?;
@@ -301,6 +315,10 @@ pub(super) fn execute(
             request,
             limit,
         } => {
+            if let Some(sender) = view.lock().unwrap().queries.clone() {
+                sender.locate(uuid, request, limit);
+                return Ok(());
+            }
             let result = (|| -> Result<_> {
                 let mut target = Filter {
                     // The rank and subsequent page must use the same stable order;
@@ -332,50 +350,17 @@ pub(super) fn execute(
             data.facets_error = None;
             data.revision += 1;
             data.immediate_revision += 1;
-            if !data.facets_loading {
-                data.facets_loading = true;
-                let path = engine.config.data_dir.join("radio.db");
-                let shared = view.clone();
-                if let Err(error) =
-                    thread::Builder::new()
-                        .name("radio-facets".into())
-                        .spawn(move || {
-                            // Only one query runs at a time; intermediate input is coalesced.
-                            loop {
-                                let request =
-                                    shared.lock().unwrap().facets_request.clone().unwrap();
-                                let (selected, prefix) = &request;
-                                let result = (|| -> Result<_> {
-                                    use crate::model::FacetKind;
-                                    let kind =
-                                        [FacetKind::Country, FacetKind::Language, FacetKind::Tag]
-                                            [*selected];
-                                    Store::open(&path)?.facets_limited(kind, prefix, 100)
-                                })();
-                                let mut data = shared.lock().unwrap();
-                                if data.facets_request.as_ref() != Some(&request) {
-                                    continue;
-                                }
-                                data.facets_loading = false;
-                                match result {
-                                    Ok(facets) => {
-                                        Arc::make_mut(&mut data.facets)[*selected] = facets
-                                    }
-                                    Err(error) => {
-                                        let message = format!("筛选候选加载失败: {error:#}");
-                                        data.log(&message);
-                                        data.facets_error = Some(message);
-                                    }
-                                }
-                                data.revision += 1;
-                                data.immediate_revision += 1;
-                                break;
-                            }
-                        })
-                {
-                    data.facets_loading = false;
-                    return Err(error.into());
-                }
+            data.facets_loading = true;
+            if let Some(sender) = data.queries.clone() {
+                sender.facets(selected, data.facets_request.as_ref().unwrap().1.clone());
+            } else {
+                // Isolated owner tests do not run the query service.
+                use crate::model::FacetKind;
+                let kind = [FacetKind::Country, FacetKind::Language, FacetKind::Tag][selected];
+                let prefix = &data.facets_request.as_ref().unwrap().1;
+                Arc::make_mut(&mut data.facets)[selected] =
+                    engine.store.facets_limited(kind, prefix, 100)?;
+                data.facets_loading = false;
             }
         }
         Command::Search(value) => {
@@ -561,6 +546,8 @@ pub(super) fn run(
     mut filter: Filter,
 ) -> Result<()> {
     engine.enable_background_media();
+    let queries = query::Worker::start(&engine.config.data_dir.join("radio.db"), &view)?;
+    view.lock().unwrap().queries = Some(queries.sender.clone());
     refresh(&engine, &filter, &view)?;
     if let Err(error) = engine.resume_last_station() {
         view.lock()
@@ -695,6 +682,8 @@ pub(super) fn run(
     if let Some(active) = job.as_ref() {
         active.cancel.store(true, Ordering::Relaxed);
     }
+    view.lock().unwrap().queries = None;
+    drop(queries);
     let shutdown = engine.shutdown();
     drop(job);
     result?;

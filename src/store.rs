@@ -13,6 +13,28 @@ pub struct Store {
 }
 
 impl Store {
+    pub(crate) fn open_reader(path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        conn.execute_batch("PRAGMA cache_size=-4096;")?;
+        Ok(Self { conn })
+    }
+
+    pub(crate) fn interrupt_handle(&self) -> rusqlite::InterruptHandle {
+        self.conn.get_interrupt_handle()
+    }
+
+    pub(crate) fn cancel_queries_when(&self, cancel: impl FnMut() -> bool + Send + 'static) {
+        self.conn.progress_handler(1000, Some(cancel));
+    }
+
+    pub(crate) fn read_snapshot<T>(&self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let tx = self.conn.unchecked_transaction()?;
+        let value = read(self)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -117,7 +139,7 @@ impl Store {
     }
 
     pub fn upsert(&self, station: &Station) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         Self::write_station(&tx, "stations", station)?;
         tx.commit()?;
         Ok(())
@@ -142,6 +164,9 @@ impl Store {
             bail!(DomainError::new(ErrorCode::EmptyCatalog));
         }
         facets::rebuild(&tx)?;
+        if cancelled() {
+            bail!(DomainError::new(ErrorCode::Cancelled));
+        }
         tx.commit()?;
         Ok(rows.len())
     }
