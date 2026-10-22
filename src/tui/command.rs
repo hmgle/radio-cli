@@ -98,6 +98,7 @@ impl CommandReceiver {
     }
 }
 
+#[derive(Clone)]
 pub(super) enum Command {
     LocatePlaying {
         uuid: String,

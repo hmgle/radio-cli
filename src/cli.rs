@@ -227,7 +227,7 @@ pub enum Favorite {
     Add { uuid: String },
     Remove { uuid: String },
 }
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum StationAction {
     List(Page),
     Add {

@@ -317,21 +317,22 @@ impl Editor {
 }
 
 pub(super) struct Confirmation {
+    command: Command,
     pub id: String,
     pub summary: String,
     pub scope: &'static str,
     pub error: String,
-    recording: bool,
-    option: bool,
 }
 impl Confirmation {
-    fn new(command: Command, view: &View) -> Self {
-        let (id, recording, option, scope) = match command {
+    fn new(command: Command, view: &View) -> Option<Self> {
+        let (id, summary, scope) = match &command {
             Command::DeleteRecording { id, index_only } => (
-                id,
-                true,
-                index_only,
-                if index_only {
+                id.clone(),
+                view.recordings
+                    .iter()
+                    .find(|r| &r.id == id)
+                    .map(|r| r.station_name.as_str()),
+                if *index_only {
                     crate::t!("confirm_index_scope")
                 } else {
                     crate::t!("confirm_recording_scope")
@@ -341,52 +342,31 @@ impl Confirmation {
                 uuid,
                 keep_references,
             }) => (
-                uuid,
-                false,
-                keep_references,
-                if keep_references {
+                uuid.clone(),
+                view.rows
+                    .iter()
+                    .chain(view.inspected.iter())
+                    .chain(view.status.station.iter())
+                    .find(|s| &s.stationuuid == uuid)
+                    .map(|s| s.name.as_str()),
+                if *keep_references {
                     crate::t!("confirm_station_keep_scope")
                 } else {
                     crate::t!("confirm_station_scope")
                 },
             ),
-            _ => unreachable!("only deletion needs confirmation"),
+            _ => return None,
         };
-        let summary = if recording {
-            view.recordings
-                .iter()
-                .find(|r| r.id == id)
-                .map(|r| r.station_name.clone())
-        } else {
-            view.rows
-                .iter()
-                .chain(view.inspected.iter())
-                .chain(view.status.station.iter())
-                .find(|s| s.stationuuid == id)
-                .map(|s| s.name.clone())
-        }
-        .unwrap_or_default();
-        Self {
+        Some(Self {
+            command,
             id,
-            summary: crate::clean_text(&summary),
+            summary: crate::clean_text(summary.unwrap_or_default()),
             scope,
             error: String::new(),
-            recording,
-            option,
-        }
+        })
     }
     fn command(&self) -> Command {
-        if self.recording {
-            Command::DeleteRecording {
-                id: self.id.clone(),
-                index_only: self.option,
-            }
-        } else {
-            Command::Station(crate::cli::StationAction::Remove {
-                uuid: self.id.clone(),
-                keep_references: self.option,
-            })
-        }
+        self.command.clone()
     }
 }
 
@@ -926,7 +906,7 @@ impl App {
                             Command::Station(crate::cli::StationAction::Remove { .. })
                                 | Command::DeleteRecording { .. }
                         ) {
-                            self.confirmation = Some(Confirmation::new(command, view));
+                            self.confirmation = Confirmation::new(command, view);
                             return;
                         }
                         if let Command::Info(uuid, _) = command {
@@ -1323,13 +1303,13 @@ impl App {
                     .recordings_for(&self.filter)
                     .get(self.list.selected().unwrap_or(0))
                 {
-                    self.confirmation = Some(Confirmation::new(
+                    self.confirmation = Confirmation::new(
                         Command::DeleteRecording {
                             id: r.id.clone(),
                             index_only: false,
                         },
                         view,
-                    ));
+                    );
                 }
             }
             KeyCode::Char('o') if self.source == Source::Recordings => {
