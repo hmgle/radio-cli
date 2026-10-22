@@ -2129,6 +2129,78 @@ fn paste_reaches_command_search_and_filter_fields_but_never_shortcuts() {
 }
 
 #[test]
+fn auto_repeat_moves_and_edits_but_never_triggers_actions() {
+    use crossterm::event::KeyEventKind::Repeat;
+    let repeat = |code| KeyEvent::new_with_kind(code, KeyModifiers::NONE, Repeat);
+    let data = view();
+    let (sender, receiver) = command::channel(20);
+    let mut app = App::default();
+    let focus = app.focus;
+    for code in [
+        'r', 'n', 'm', ' ', 'f', 'y', 'Y', 'F', ':', '/', '?', 'q', 'o', 'e', 'D', '[', ']', 'g',
+    ] {
+        app.key(repeat(KeyCode::Char(code)), &data, &sender);
+    }
+    for code in [KeyCode::Enter, KeyCode::Tab, KeyCode::BackTab, KeyCode::Esc] {
+        app.key(repeat(code), &data, &sender);
+    }
+    assert!(receiver.try_recv().is_err());
+    assert!(!app.quit && !app.help && app.filter_edit.is_none());
+    assert!(app.clipboard.is_none() && app.message.is_empty());
+    assert_eq!(
+        (app.mode, app.focus, app.source),
+        (Mode::Normal, focus, Source::Stations)
+    );
+
+    // Navigation and volume are meant to repeat.
+    app.key(repeat(KeyCode::Char('j')), &data, &sender);
+    assert_eq!(app.list.selected(), Some(1));
+    app.key(repeat(KeyCode::Char('+')), &data, &sender);
+    assert!(matches!(receiver.try_recv(), Ok(Command::AdjustVolume(5))));
+    // A fresh press of the same action key still works.
+    app.key(key(KeyCode::Char('m')), &data, &sender);
+    assert!(matches!(receiver.try_recv(), Ok(Command::Mute)));
+
+    // Text editing repeats, but a held Enter must not submit the line.
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    app.key(repeat(KeyCode::Char('a')), &data, &sender);
+    app.key(repeat(KeyCode::Char('b')), &data, &sender);
+    app.key(repeat(KeyCode::Backspace), &data, &sender);
+    app.key(repeat(KeyCode::Enter), &data, &sender);
+    assert_eq!((app.mode, app.editor.text.as_str()), (Mode::Command, "a"));
+    assert!(receiver.try_recv().is_err());
+
+    // Help scrolls on repeat but does not close.
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    app.key(repeat(KeyCode::Char('j')), &data, &sender);
+    app.key(repeat(KeyCode::Esc), &data, &sender);
+    assert!(app.help);
+
+    // A held key cannot confirm a deletion or its cancel path.
+    let mut app = App::default();
+    app.source = Source::Recordings;
+    let mut recorded = view();
+    recorded.recordings = vec![
+        serde_json::from_value(serde_json::json!({
+            "id":"saved", "stationuuid":"s", "station_name":"Saved audio",
+            "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+            "stopped_at":"2026-01-01", "media_duration_ms":null, "codec":"mp3",
+            "container":"mp3", "path":"/tmp/sample", "size_bytes":1, "status":"complete",
+            "error":null, "reconnects": 0
+        }))
+        .unwrap(),
+    ]
+    .into();
+    app.key(key(KeyCode::Char('D')), &recorded, &sender);
+    assert!(app.confirmation.is_some());
+    app.key(repeat(KeyCode::Char('y')), &recorded, &sender);
+    app.key(repeat(KeyCode::Esc), &recorded, &sender);
+    assert!(app.confirmation.is_some());
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.

@@ -1071,12 +1071,61 @@ impl App {
             self.message = crate::t!("paste_ignored").into();
         }
     }
+    /// Whether an auto-repeated key may act. Navigation, volume and text editing
+    /// may repeat; anything that starts, stops, toggles, submits or deletes needs
+    /// a fresh press.
+    fn repeat_allowed(&self, key: &KeyEvent) -> bool {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let commits = matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab
+        );
+        if self.confirmation.is_some() {
+            false
+        } else if self.mode != Mode::Normal {
+            !commits
+        } else if self.help {
+            matches!(
+                key.code,
+                KeyCode::Char('j' | 'k')
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            )
+        } else if self.filter_edit.is_some() {
+            !commits && !(control && key.code == KeyCode::Char('u'))
+        } else if control {
+            matches!(
+                key.code,
+                KeyCode::Char('h' | 'j' | 'k' | 'l' | 'u' | 'd')
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+            )
+        } else {
+            matches!(
+                key.code,
+                KeyCode::Char('j' | 'k' | 'h' | 'l' | '+' | '=' | '-')
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            )
+        }
+    }
     pub fn key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
         self.last_click = None;
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
             || self.too_small && key.code == KeyCode::Char('q')
         {
             self.quit = true;
+            return;
+        }
+        if key.kind == crossterm::event::KeyEventKind::Repeat && !self.repeat_allowed(&key) {
             return;
         }
         if self.too_small {
