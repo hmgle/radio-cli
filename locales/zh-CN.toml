@@ -247,8 +247,8 @@ value_no = "否"
 station_custom = "自定义"
 station_active = "有效"
 station_inactive = "已失效"
-current_request_url = "当前播放请求地址: {url}\n"
-station_details = "{name}{context}\n国家/地区: {country}\n语言: {language}\n州/省/区域: {subdivision}\n码率: {bitrate}（目录）\n编码: {codec}（目录）\nHLS: {hls}\n标签: {tags}\n收藏: {favorite} · 目录: {catalog}\nUUID: {uuid}\n流地址: {url}\n备用地址: {backups}\n{request}官网: {homepage}"
+current_request_url = "当前播放请求地址:\t{url}\n"
+station_details = "{name}{context}\n\n目录\n国家/地区:\t{country}\n语言:\t{language}\n州/省/区域:\t{subdivision}\n码率:\t{bitrate}（目录）\n编码:\t{codec}（目录）\nHLS:\t{hls}\n标签:\t{tags}\n收藏:\t{favorite} · 目录: {catalog}\n\n地址\nUUID:\t{uuid}\n流地址:\t{url}\n备用地址:\t{backups}\n{request}官网:\t{homepage}"
 # 帮助各段正文每行一条：“键名<TAB>说明”为条目，“键名<TAB>”（无说明）为仅用法条目，
 # 不含制表符的行为备注。两种语言保持相同的顺序与行类型。
 help_jump = "定位当前播放电台；播放失败后定位最后请求的电台（可在 keybindings.jump_to_playing 配置）"

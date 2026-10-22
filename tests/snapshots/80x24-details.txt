@@ -7,16 +7,16 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ┏ ▶ [2/3] Details · 2 back · j/k scroll ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃Selected Station · Selected / inspected station                               ┃
-┃Country: France (FR)                                                          ┃
-┃Language: french                                                              ┃
+┃                                                                              ┃
+┃Catalog                                                                       ┃
+┃Country:             France (FR)                                              ┃
+┃Language:            french                                                   ┃
 ┃State/province/area: Unknown                                                  ┃
-┃Bitrate: 96 kbps (catalog)                                                    ┃
-┃Codec: MP3 (catalog)                                                          ┃
-┃HLS: No                                                                       ┃
-┃Tags: Unknown                                                                 ┃
-┃Favorite: No · Catalog: Active                                                ┃
-┃UUID: 00000000-0000-0000-0000-000000000000                                    ┃
-┃Stream URL:                                                                   ┃
+┃Bitrate:             96 kbps (catalog)                                        ┃
+┃Codec:               MP3 (catalog)                                            ┃
+┃HLS:                 No                                                       ┃
+┃Tags:                Unknown                                                  ┃
+┃Favorite:            No · Catalog: Active                                     ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 5 Catalog ready · Playing                                                       
  NORMAL · Details /  All countries All languages All tags ≥0k            [Clear]

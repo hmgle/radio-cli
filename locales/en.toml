@@ -247,8 +247,8 @@ value_no = "No"
 station_custom = "Custom"
 station_active = "Active"
 station_inactive = "Inactive"
-current_request_url = "Current request URL: {url}\n"
-station_details = "{name}{context}\nCountry: {country}\nLanguage: {language}\nState/province/area: {subdivision}\nBitrate: {bitrate} (catalog)\nCodec: {codec} (catalog)\nHLS: {hls}\nTags: {tags}\nFavorite: {favorite} · Catalog: {catalog}\nUUID: {uuid}\nStream URL: {url}\nBackup URLs: {backups}\n{request}Homepage: {homepage}"
+current_request_url = "Current request URL:\t{url}\n"
+station_details = "{name}{context}\n\nCatalog\nCountry:\t{country}\nLanguage:\t{language}\nState/province/area:\t{subdivision}\nBitrate:\t{bitrate} (catalog)\nCodec:\t{codec} (catalog)\nHLS:\t{hls}\nTags:\t{tags}\nFavorite:\t{favorite} · Catalog: {catalog}\n\nAddresses\nUUID:\t{uuid}\nStream URL:\t{url}\nBackup URLs:\t{backups}\n{request}Homepage:\t{homepage}"
 # Help section bodies hold one entry per line: "keys<TAB>description" is an
 # item, "keys<TAB>" with no description is a usage-only item, and a line
 # without a tab is a note. Both catalogs keep the same order and line kinds.

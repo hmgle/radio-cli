@@ -117,10 +117,10 @@ fn station_details_localize_territory_codes_without_changing_catalog_values() {
         assert_eq!(chinese, expected);
         let country = crate::territories::display_in(crate::messages::Locale::En, code, original);
         assert!(
-            details.contains(&format!("\nCountry: {country}\n")),
+            details.contains(&format!("\nCountry:\t{country}\n")),
             "{code}: {details}"
         );
-        assert!(details.contains("\nState/province/area: Catalog subdivision\n"));
+        assert!(details.contains("\nState/province/area:\tCatalog subdivision\n"));
         assert_eq!(
             keeps_upstream,
             chinese.contains(original),
@@ -3942,6 +3942,43 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
     assert!(
         matches!(command::parse("set language en",None,None,&Filter::default()).unwrap(),Parsed::Worker(Command::SetLanguage(language)) if language == "en")
     );
+}
+
+#[test]
+fn station_fields_align_or_stack_and_keep_the_whole_address() {
+    let url = "https://example.com/very/long/path?quality=high&language=中文&another=value";
+    let content = format!("Catalog\nCountry:\tFrance\nLanguage:\tFrench\n\nAddresses\nURL:\t{url}");
+    for width in [12, 38, 60, 100] {
+        let lines = render::field_lines(&content, width);
+        let lines: Vec<_> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(
+            lines.iter().all(|line| super::text::width(line) <= width),
+            "{width}: {lines:?}"
+        );
+        let from = lines
+            .iter()
+            .position(|line| line.starts_with("URL:"))
+            .unwrap();
+        let fragments: String = lines[from..]
+            .iter()
+            .map(|line| line.strip_prefix("URL:").unwrap_or(line).trim())
+            .collect();
+        assert_eq!(fragments, url, "{width}");
+        if width < 44 {
+            assert_eq!(lines[1], "Country:");
+            assert_eq!(lines[2], "  France");
+        } else {
+            assert_eq!(lines[1].find("France"), lines[2].find("French"));
+        }
+    }
 }
 
 #[test]

@@ -111,6 +111,34 @@ pub(super) fn wrap_words(text: &str, width: usize) -> Vec<&str> {
     lines
 }
 
+/// Prefer URL separators near the end of a line, retaining every byte so
+/// continuation lines can be joined back into the original address.
+pub(super) fn wrap_url(mut text: &str, width: usize) -> Vec<&str> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    while self::width(text) > width {
+        let head = prefix(text, width);
+        if head.is_empty() {
+            let end = next_boundary(text, 0);
+            lines.push(&text[..end]);
+            text = &text[end..];
+            continue;
+        }
+        let end = head
+            .char_indices()
+            .rev()
+            .find(|(at, c)| {
+                matches!(c, '/' | '?' | '&' | '=' | '#' | '-')
+                    && self::width(&head[..*at]) >= width / 2
+            })
+            .map_or(head.len(), |(at, c)| at + c.len_utf8());
+        lines.push(&text[..end]);
+        text = &text[end..];
+    }
+    lines.push(text);
+    lines
+}
+
 /// Longest prefix of whole graphemes that fits in `limit` bytes.
 pub(super) fn prefix_bytes(text: &str, limit: usize) -> &str {
     let mut end = 0;

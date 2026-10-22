@@ -516,7 +516,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         } else if app.inspect_info && view.inspected_request != app.info_request {
             crate::t!("details_loading").into()
         } else if app.inspect_info && view.inspected_error.is_some() {
-            // scroll_text sanitizes each line while preserving long diagnostics.
+            // Keep line breaks while removing credentials and terminal controls.
             super::display::diagnostic(view.inspected_error.as_deref().unwrap())
         } else if let Some(station) = if app.inspect_info {
             view.inspected.as_ref()
@@ -539,8 +539,13 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             .into(),
             active(Focus::Details),
         );
+        let lines = if super::artwork::station(app, view).is_some() {
+            field_lines(&text, usize::from(text_rect.width.saturating_sub(2).max(1)))
+        } else {
+            wrapped_lines(&text, text_rect.width.saturating_sub(2))
+        };
         frame.render_widget(
-            scroll_text(&text, text_rect, &mut app.details_scroll)
+            scroll_lines(lines, text_rect, &mut app.details_scroll)
                 .0
                 .block(block),
             text_rect,
@@ -959,7 +964,7 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
                     urls.iter()
                         .map(|u| crate::clean_text(u))
                         .collect::<Vec<_>>()
-                        .join("\n")
+                        .join("\n\t")
                 })
                 .unwrap_or_default()
         },
@@ -970,6 +975,69 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
         },
         "homepage" => value(&station.homepage)
     )
+}
+
+/// Structured details use tab-separated label/value pairs from the locale,
+/// exactly once for painting and for reserving the artwork area.
+pub(super) fn station_lines(station: &Station, view: &View, width: u16) -> Vec<Line<'static>> {
+    let content = station_details(station, view);
+    field_lines(&content, usize::from(width.max(1)))
+}
+
+pub(super) fn field_lines(content: &str, width: usize) -> Vec<Line<'static>> {
+    let label_width = content
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(label, _)| super::text::width(label))
+        .max()
+        .unwrap_or(0);
+    let stacked = width < 44 || label_width + 12 >= width;
+    let mut result = Vec::new();
+    for line in content.lines() {
+        let Some((label, value)) = line.split_once('\t') else {
+            result.extend(
+                super::text::wrap_words(line, width)
+                    .into_iter()
+                    .map(|line| Line::from(line.to_owned())),
+            );
+            continue;
+        };
+        let indent = if stacked {
+            2.min(width.saturating_sub(1))
+        } else {
+            label_width + 1
+        };
+        if stacked {
+            result.extend(
+                super::text::wrap_words(label, width)
+                    .into_iter()
+                    .map(|label| {
+                        Line::from(Span::styled(
+                            label.to_owned(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ))
+                    }),
+            );
+        }
+        let available = width.saturating_sub(indent).max(1);
+        let values = if value.contains("://") {
+            super::text::wrap_url(value, available)
+        } else {
+            super::text::wrap_words(value, available)
+        };
+        for (index, value) in values.into_iter().enumerate() {
+            let prefix = if !stacked && index == 0 {
+                format!("{label}{}", " ".repeat(indent - super::text::width(label)))
+            } else {
+                " ".repeat(indent)
+            };
+            result.push(Line::from(vec![
+                Span::styled(prefix, Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(value.to_owned()),
+            ]));
+        }
+    }
+    result
 }
 
 /// Hard-wrap by terminal cells so long URLs remain readable and scrolling cannot
@@ -986,14 +1054,6 @@ pub(super) fn wrapped_lines(text: &str, width: u16) -> Vec<Line<'static>> {
         );
     }
     lines
-}
-
-fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> (Paragraph<'a>, ScrollExtent) {
-    scroll_lines(
-        wrapped_lines(text, rect.width.saturating_sub(2)),
-        rect,
-        scroll,
-    )
 }
 
 /// Scroll already wrapped lines; `rect` is the bordered block they appear in.

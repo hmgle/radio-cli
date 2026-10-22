@@ -62,8 +62,7 @@ pub(super) fn area(app: &App, view: &View, screen: Rect) -> Option<Rect> {
         return None;
     }
     let station = station(app, view)?;
-    let text = super::render::station_details(station, view);
-    let lines = super::render::wrapped_lines(&text, rect.width.saturating_sub(2)).len();
+    let lines = super::render::station_lines(station, view, rect.width.saturating_sub(2)).len();
     let top = u16::try_from(lines).ok()?.saturating_add(2);
     let height = rect.height.saturating_sub(top + 1);
     // Keep text in the same cells whether artwork is loading, missing or changing.

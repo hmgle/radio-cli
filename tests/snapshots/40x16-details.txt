@@ -6,9 +6,9 @@
 │>All       Saved    Recent    Files   │
 ╰──────────────────────────────────────╯
 ┏ ▶ [2/3] Details · 2 back · j/k scroll┓
-┃Selected Station · Selected / inspecte┃
-┃d station                             ┃
-┃Country: France (FR)                  ┃
+┃Selected Station · Selected /         ┃
+┃inspected station                     ┃
+┃                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 5 Catalog ready · Playing               
  NORMAL · Details /  All countri…[Clear]
