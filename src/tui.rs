@@ -2,6 +2,7 @@ mod artwork;
 mod capabilities;
 mod command;
 mod display;
+mod help;
 mod output;
 mod render;
 mod state;

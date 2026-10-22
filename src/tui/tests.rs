@@ -295,10 +295,18 @@ fn help_popup_preserves_background_right_of_the_border() {
     assert!(erased.is_empty(), "column {right} erased at: {erased:?}");
 }
 
+fn help_text(locale: crate::messages::Locale, binding: &str, width: u16) -> String {
+    super::help::lines(locale, binding, width)
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn help_notice_follows_the_selected_locale() {
-    let english = render::help_text(crate::messages::Locale::En, "");
-    let chinese = render::help_text(crate::messages::Locale::ZhCn, "");
+    let english = help_text(crate::messages::Locale::En, "", 86);
+    let chinese = help_text(crate::messages::Locale::ZhCn, "", 86);
     assert!(english.contains("Radio Browser"), "{english}");
     assert!(!english.contains("默认电台目录"), "{english}");
     assert!(
@@ -310,18 +318,192 @@ fn help_notice_follows_the_selected_locale() {
         (crate::messages::Locale::ZhCn, &chinese),
     ] {
         assert!(
-            text.starts_with(crate::messages::text_in(locale, "tui_help")),
+            text.starts_with(crate::messages::text_in(locale, "help_nav_title")),
             "{locale:?}"
         );
         assert!(!text.contains("Unknown message"), "{locale:?}");
     }
-    let with_binding = render::help_text(crate::messages::Locale::En, "''");
+    let with_binding = help_text(crate::messages::Locale::En, "''", 86);
     assert!(
         with_binding.contains("Locate the playing station"),
         "{with_binding}"
     );
+    assert!(
+        with_binding
+            .lines()
+            .any(|line| line.trim_start().starts_with("''")),
+        "{with_binding}"
+    );
+    assert!(!english.contains("Locate the playing station"));
     assert_no_cjk(&with_binding);
-    assert!(with_binding.starts_with(&english), "{with_binding}");
+}
+
+#[test]
+fn help_sections_keep_the_same_shape_in_both_locales() {
+    use super::help::Entry;
+    let has_cjk = |text: &str| text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+    let english = super::help::sections(crate::messages::Locale::En, "<F6>");
+    let chinese = super::help::sections(crate::messages::Locale::ZhCn, "<F6>");
+    assert_eq!(english.len(), chinese.len());
+    for (en, zh) in english.iter().zip(&chinese) {
+        assert!(!en.title.is_empty() && !zh.title.is_empty());
+        assert_eq!(en.entries.len(), zh.entries.len(), "{}", en.title);
+        for (a, b) in en.entries.iter().zip(&zh.entries) {
+            match (a, b) {
+                (Entry::Note(_), Entry::Note(_)) => {}
+                (
+                    Entry::Item {
+                        keys: en_keys,
+                        detail: en_detail,
+                    },
+                    Entry::Item {
+                        keys: zh_keys,
+                        detail: zh_detail,
+                    },
+                ) => {
+                    assert!(!en_keys.is_empty() && !zh_keys.is_empty(), "{}", en.title);
+                    assert_eq!(en_detail.is_empty(), zh_detail.is_empty(), "{en_keys}");
+                    // Key names that are not translated must be identical.
+                    if !has_cjk(zh_keys) {
+                        assert_eq!(en_keys, zh_keys, "{}", en.title);
+                    }
+                }
+                _ => panic!("{}: {a:?} vs {b:?}", en.title),
+            }
+        }
+    }
+}
+
+#[test]
+fn help_aligns_descriptions_by_display_width() {
+    let detail_column = |lines: &[String], key: &str, detail: &str| {
+        let line = lines
+            .iter()
+            .find(|line| line.trim_start().starts_with(key) && line.contains(detail))
+            .unwrap_or_else(|| panic!("no line with {key:?} and {detail:?}"));
+        super::text::width(&line[..line.find(detail).unwrap()])
+    };
+    let lines = |locale| -> Vec<String> {
+        super::help::lines(locale, "", 86)
+            .iter()
+            .map(|line| line.to_string())
+            .collect()
+    };
+    let english = lines(crate::messages::Locale::En);
+    let column = detail_column(&english, "Tab / Shift-Tab", "Switch panels");
+    assert_eq!(detail_column(&english, "gg / G", "First/last item"), column);
+    assert_eq!(detail_column(&english, "1–5", "Focus a panel"), column);
+    assert_eq!(
+        detail_column(&english, "Ctrl-h/j/k/l or Ctrl-arrows", "Move focus"),
+        column
+    );
+
+    // Wide characters in a description or key never shift the column.
+    let chinese = lines(crate::messages::Locale::ZhCn);
+    let column = detail_column(&chinese, "Tab / Shift-Tab", "切换面板");
+    assert_eq!(detail_column(&chinese, "gg / G", "首项/末项"), column);
+    assert_eq!(detail_column(&chinese, "Ctrl-u/d", "移动十项"), column);
+    assert_eq!(
+        detail_column(&chinese, "Ctrl-h/j/k/l 或 Ctrl-方向键", "按空间移动焦点"),
+        column
+    );
+    let commands = detail_column(&chinese, ":refresh", "刷新当前列表");
+    assert_eq!(detail_column(&chinese, ":history", "最近播放"), commands);
+    assert_eq!(
+        detail_column(&chinese, ":random [搜索筛选参数]", "不传参数时沿用当前筛选"),
+        commands
+    );
+}
+
+#[test]
+fn help_stacks_keys_above_descriptions_on_narrow_screens() {
+    let lines: Vec<String> = super::help::lines(crate::messages::Locale::En, "", 34)
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    let at = lines
+        .iter()
+        .position(|line| line == "  Tab / Shift-Tab")
+        .expect("the key stands on its own line");
+    assert_eq!(lines[at + 1], "    Switch panels");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("Tab / Shift-Tab") && line.contains("Switch panels"))
+    );
+    // Long descriptions wrap under their own indent.
+    let wrapped = lines
+        .iter()
+        .position(|line| line == "    Play the selected item (open")
+        .expect("descriptions wrap at words");
+    assert_eq!(lines[wrapped + 1], "    the list from sources)");
+    // A key that must wrap hangs its continuation, and the description steps in further.
+    let long = lines
+        .iter()
+        .position(|line| line == "  :station remove UUID")
+        .expect("long keys wrap at words");
+    assert_eq!(lines[long + 1], "    [--keep-references]");
+    assert_eq!(lines[long + 2], "      y confirms deletion");
+}
+
+#[test]
+fn help_lays_out_every_entry_at_every_width_without_losing_text() {
+    use super::help::Entry;
+    let squash = |text: &str| text.split_whitespace().collect::<String>();
+    for locale in [crate::messages::Locale::En, crate::messages::Locale::ZhCn] {
+        let sections = super::help::sections(locale, "<F6>");
+        let expected: String = sections
+            .iter()
+            .flat_map(|section| {
+                std::iter::once(squash(section.title)).chain(section.entries.iter().map(|entry| {
+                    match entry {
+                        Entry::Note(note) => squash(note),
+                        Entry::Item { keys, detail } => squash(&format!("{keys}{detail}")),
+                    }
+                }))
+            })
+            .collect();
+        for width in [12u16, 20, 34, 36, 49, 50, 52, 60, 76, 86, 120, 200] {
+            let lines = super::help::lines(locale, "<F6>", width);
+            for line in &lines {
+                assert!(
+                    super::text::width(&line.to_string()) <= usize::from(width),
+                    "{locale:?} {width}: {line}"
+                );
+            }
+            let joined = lines
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<String>();
+            assert_eq!(squash(&joined), expected, "{locale:?} at {width}");
+        }
+    }
+}
+
+#[test]
+fn help_popup_shows_its_first_and_last_lines_on_small_and_standard_terminals() {
+    let data = view();
+    let (sender, _receiver) = command::channel(4);
+    for (columns, rows) in [(40u16, 16u16), (80, 24), (100, 24)] {
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(columns, rows)).unwrap();
+        app.key(key(KeyCode::Char('?')), &data, &sender);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let first = text(&terminal);
+        assert!(first.contains(crate::t!("help_nav_title")), "{first}");
+        assert!(app.popup.total > app.popup.visible, "{columns}x{rows}");
+
+        app.key(key(KeyCode::End), &data, &sender);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let last = text(&terminal);
+        let inner = columns.min(88).min(columns - 2) - 2;
+        let expected = super::help::lines(crate::messages::locale(), "", inner)
+            .pop()
+            .unwrap()
+            .to_string();
+        assert!(last.contains(expected.trim()), "{columns}x{rows}: {last}");
+        assert!(!last.contains(crate::t!("help_nav_title")));
+    }
 }
 
 #[test]
@@ -1099,7 +1281,7 @@ fn renderer_marks_focus_and_distinguishes_current_from_selected_station() {
         .collect::<String>();
     assert!(detail_text.contains("https://example.com/backup"));
     app.help = true;
-    app.help_scroll = 60;
+    app.help_scroll = u16::MAX;
     terminal
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
@@ -2117,8 +2299,11 @@ fn help_popup_pages_by_its_visible_height_and_reaches_both_ends() {
         extent.total,
         extent.total
     )));
-    let help = render::help_text(crate::messages::locale(), &app.jump_binding);
-    let last = render::wrapped_lines(&help, 86).pop().unwrap().to_string();
+    let last = super::help::lines(crate::messages::locale(), &app.jump_binding, 86)
+        .pop()
+        .unwrap()
+        .to_string();
+    let last = last.trim_start().to_owned();
     assert!(screen.contains(last.trim_end()), "last help line: {last}");
 
     // The short title leaves room for the position even at 40 columns; a title

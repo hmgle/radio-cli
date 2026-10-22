@@ -65,6 +65,52 @@ pub(super) fn wrap(text: &str, width: usize) -> Vec<&str> {
     lines
 }
 
+/// Wrap at spaces, falling back to a hard break inside a word wider than the
+/// line. Spaces at a break and at the start of the text are dropped.
+pub(super) fn wrap_words(text: &str, width: usize) -> Vec<&str> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut used = 0;
+    // Where the latest run of spaces in the current line ends its text and where the next word resumes.
+    let mut gap: Option<(usize, usize)> = None;
+    let mut after_space = false;
+    for (index, grapheme) in text.grapheme_indices(true) {
+        if grapheme == " " {
+            if index == start {
+                start += 1;
+                continue;
+            }
+            gap = match gap {
+                Some((end, _)) if after_space => Some((end, index + 1)),
+                _ => Some((index, index + 1)),
+            };
+            used += 1;
+            after_space = true;
+            continue;
+        }
+        after_space = false;
+        let size = cells(grapheme);
+        if used + size > width && index > start {
+            match gap.take() {
+                Some((end, resume)) => {
+                    lines.push(&text[start..end]);
+                    start = resume;
+                    used = self::width(&text[start..index]);
+                }
+                None => {
+                    lines.push(&text[start..index]);
+                    start = index;
+                    used = 0;
+                }
+            }
+        }
+        used += size;
+    }
+    lines.push(text[start..].trim_end_matches(' '));
+    lines
+}
+
 /// Longest prefix of whole graphemes that fits in `limit` bytes.
 pub(super) fn prefix_bytes(text: &str, limit: usize) -> &str {
     let mut end = 0;
@@ -216,6 +262,40 @@ mod tests {
             ]
         );
         assert!(lines.iter().all(|line| width(line) <= 3));
+    }
+
+    #[test]
+    fn wrap_words_breaks_at_spaces_and_hard_wraps_long_words() {
+        for (text, cells, expected) in [
+            ("", 4, vec![""]),
+            ("hello world", 20, vec!["hello world"]),
+            ("hello world", 8, vec!["hello", "world"]),
+            ("one two three", 7, vec!["one two", "three"]),
+            ("one two three", 8, vec!["one two", "three"]),
+            ("abcde fgh", 5, vec!["abcde", "fgh"]),
+            ("a  b", 2, vec!["a", "b"]),
+            ("abcd efgh", 4, vec!["abcd", "efgh"]),
+            ("abcdefghij", 4, vec!["abcd", "efgh", "ij"]),
+            ("ab cdefghij", 4, vec!["ab", "cdef", "ghij"]),
+            ("abc ", 3, vec!["abc"]),
+            ("  abc", 5, vec!["abc"]),
+            ("你好世界", 4, vec!["你好", "世界"]),
+            ("你好 世界 ok", 5, vec!["你好", "世界", "ok"]),
+            ("abc", 0, vec!["a", "b", "c"]),
+        ] {
+            assert_eq!(wrap_words(text, cells), expected, "{text:?} / {cells}");
+        }
+        let text = format!("{FAMILY} {FAMILY}{FAMILY} {ACCENT}x{FLAG}");
+        let lines = wrap_words(&text, 4);
+        assert_eq!(
+            lines,
+            vec![
+                FAMILY.to_owned(),
+                format!("{FAMILY}{FAMILY}"),
+                format!("{ACCENT}x{FLAG}")
+            ]
+        );
+        assert!(lines.iter().all(|line| width(line) <= 4));
     }
 
     #[test]

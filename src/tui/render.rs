@@ -849,11 +849,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     if app.help {
         let rect = popup(area, 88, area.height.saturating_sub(2));
         clear_popup(frame, rect);
-        let content = app
-            .help_content
-            .clone()
-            .unwrap_or_else(|| help_text(crate::messages::locale(), &app.jump_binding));
-        let (paragraph, extent) = scroll_text(&content, rect, &mut app.help_scroll);
+        let inner = rect.width.saturating_sub(2);
+        let lines = match &app.help_content {
+            Some(content) => wrapped_lines(content, inner),
+            None => super::help::lines(crate::messages::locale(), &app.jump_binding, inner),
+        };
+        let (paragraph, extent) = scroll_lines(lines, rect, &mut app.help_scroll);
         app.popup = extent;
         let title = app.help_title.unwrap_or(crate::t!("help_title"));
         let mut block = panel(title.into(), true);
@@ -909,25 +910,6 @@ fn empty_hint(app: &App) -> &'static str {
         Source::Favorites => crate::t!("empty_favorites"),
         Source::History => crate::t!("empty_history"),
     }
-}
-
-pub(super) fn help_text(locale: crate::messages::Locale, jump_binding: &str) -> String {
-    let help = format!(
-        "{}\n{}\n{}",
-        crate::messages::text_in(locale, "tui_help"),
-        crate::messages::text_in(locale, "catalog_source_notice"),
-        crate::messages::text_in(locale, "core_help_notice")
-    );
-    if jump_binding.is_empty() {
-        return help;
-    }
-    format!(
-        "{help}\n{}",
-        crate::messages::format_text(
-            crate::messages::text_in(locale, "help_jump"),
-            &[("key", jump_binding.to_owned())]
-        )
-    )
 }
 
 pub(super) fn station_details(station: &Station, view: &View) -> String {
@@ -1004,7 +986,19 @@ pub(super) fn wrapped_lines(text: &str, width: u16) -> Vec<Line<'static>> {
 }
 
 fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> (Paragraph<'a>, ScrollExtent) {
-    let lines = wrapped_lines(text, rect.width.saturating_sub(2));
+    scroll_lines(
+        wrapped_lines(text, rect.width.saturating_sub(2)),
+        rect,
+        scroll,
+    )
+}
+
+/// Scroll already wrapped lines; `rect` is the bordered block they appear in.
+fn scroll_lines<'a>(
+    lines: Vec<Line<'a>>,
+    rect: Rect,
+    scroll: &mut u16,
+) -> (Paragraph<'a>, ScrollExtent) {
     let extent = ScrollExtent {
         total: lines.len(),
         visible: usize::from(rect.height.saturating_sub(2)),

@@ -147,7 +147,6 @@ recording_error_title = "Recording failed"
 operation_error_title = "Operation failed"
 list_error_title = "List failed"
 
-core_help_notice = "List: PgUp/PgDn changes database pages; gg/G and Home/End select within the page.\nRecordings: Enter or double-click plays; station search/filter/favorite keys do not apply.\nWheel: list moves three items; help scrolls; filters choose candidates.\nUnder 20 rows: 5 opens task details, 2 returns to the list.\nFailed list: automatic retries back off from 500ms to 30s; F5 retries immediately, Enter shows the full error.\nDeletion: y confirms; Enter/n/Esc/q cancel; Ctrl-C quits.\nFilter popup: Ctrl-U clears search and filters immediately; the explicit Clear label does the same.\nOperation error: ? shows details; Esc dismisses in normal mode."
 
 bitrate_unknown = "Unknown bitrate"
 codec_unknown = "Unknown codec"
@@ -245,8 +244,102 @@ station_active = "Active"
 station_inactive = "Inactive"
 current_request_url = "Current request URL: {url}\n"
 station_details = "{name}{context}\nCountry: {country}\nLanguage: {language}\nState/province/area: {subdivision}\nBitrate: {bitrate} (catalog)\nCodec: {codec} (catalog)\nHLS: {hls}\nTags: {tags}\nFavorite: {favorite} · Catalog: {catalog}\nUUID: {uuid}\nStream URL: {url}\nBackup URLs: {backups}\n{request}Homepage: {homepage}"
-help_jump = "{key}  Locate the playing station (keybindings.jump_to_playing configures this key)"
-tui_help = "NORMAL mode\nTab / Shift-Tab  Switch panels     1–5  Focus a panel\nCtrl-h/j/k/l or Ctrl-arrows  Move focus spatially\n[ / ] Switch category     j/k, arrows  Navigate/scroll\ngg / G  First/last item     Ctrl-u/d  Move ten items\nEnter  Play the selected item (open the list from sources)\nSpace pause  m mute  n random  f favorite  r record  +/- volume\ny copy UUID/recording ID · Y copy URL/file path (OSC 52)\n/  Search (Enter confirms, Esc restores the original search)\nF  Filters (type to narrow · Up/Down candidates · Tab field)\nFilter Ctrl-U clears search and filters     F5 refresh     ? help     q / Ctrl-C quit\n\nCOMMAND mode\n: Enter a command; Enter executes; Esc returns; Ctrl-C finalizes and quits\nTab / Shift-Tab completion; Up/Down history; Left/Right cursor\nHome / Ctrl-a start; End / Ctrl-e end; Ctrl-u clear\n\n:sync [--accept-shrink]  Sync catalog in the background\n:refresh                Refresh the current list\n:sync-cancel            Cancel sync and keep the previous catalog\n:search jazz --country FR --min-bitrate 128\n:play [UUID|URL]        Play the selection, UUID or stream URL\n:random [search options] Reuse the current filters without arguments\n:info [UUID]            Inspect a station\n:current                Inspect the playing station\n:favorites list|add|remove [UUID]\n:history                Recent plays\n:recordings list        Recording records\nRecordings: Enter play · D delete (y confirms) · o folder · e errors\n:recordings play ID / :recordings remove ID [--index-only]\n:open recordings        Open the recording directory\n:station add 'My Station' https://example.com/live\n:station list / :station edit UUID --name NAME --url URL\n:station remove UUID [--keep-references]  y confirms deletion\n:station backups UUID [--add URL] [--remove URL]\n:record [UUID] [--duration 30m] [--output-dir DIR]\n:record stop            Finalize recording\n:pause / :mute / :stop / :volume 70\n:help record            CLI command usage\n:set language en|zh-CN  Switch UI language\n:set mouse true|false   Capture the mouse; false allows terminal selection\nThe last 100 commands persist in command-history.json in the data directory\n:doctor                 Check media tools and directory permissions\n:focus sources|list|details|player|activity\n:quit / :q              Finalize and quit\n\nCommands invoke built-in operations without a shell. Input supports quoting and Unicode.\nBitrate/codec come from the catalog and may be stale; the player handles actual audio.\nEsc / ? / q close help; j/k, PgUp/PgDn, Home/End, g/G, Ctrl-e/y/b/f scroll."
+# Help section bodies hold one entry per line: "keys<TAB>description" is an
+# item, "keys<TAB>" with no description is a usage-only item, and a line
+# without a tab is a note. Both catalogs keep the same order and line kinds.
+help_jump = "Locate the playing station (keybindings.jump_to_playing configures this key)"
+help_nav_title = "Navigation"
+help_nav = """
+Tab / Shift-Tab\tSwitch panels
+1–5\tFocus a panel
+Ctrl-h/j/k/l or Ctrl-arrows\tMove focus spatially
+[ / ]\tSwitch category
+j/k, arrows\tNavigate/scroll
+gg / G\tFirst/last item
+Ctrl-u/d\tMove ten items
+"""
+help_play_title = "Playback"
+help_play = """
+Enter\tPlay the selected item (open the list from sources)
+Space\tPause
+m\tMute
+n\tRandom station
+f\tFavorite the selection
+r\tRecord
++ / -\tVolume
+y\tCopy UUID/recording ID (OSC 52)
+Y\tCopy URL/file path (OSC 52)
+"""
+help_find_title = "Search and filters"
+help_find = """
+/\tSearch (Enter confirms, Esc restores the original search)
+F\tFilters (type to narrow · Up/Down candidates · Tab field)
+Ctrl-U\tIn the filter popup: clear search and filters
+"""
+help_general_title = "General"
+help_general = """
+F5\tRefresh
+?\tHelp
+q / Ctrl-C\tQuit
+"""
+help_input_title = "Command input"
+help_input = """
+:\tEnter a command; Enter executes; Esc returns; Ctrl-C finalizes and quits
+Tab / Shift-Tab\tCompletion
+Up / Down\tHistory
+Left / Right\tMove the cursor
+Home / Ctrl-a\tStart of line
+End / Ctrl-e\tEnd of line
+Ctrl-u\tClear
+"""
+help_commands_title = "Commands"
+help_commands = """
+:sync [--accept-shrink]\tSync catalog in the background
+:refresh\tRefresh the current list
+:sync-cancel\tCancel sync and keep the previous catalog
+:search jazz --country FR --min-bitrate 128\t
+:play [UUID|URL]\tPlay the selection, UUID or stream URL
+:random [search options]\tReuse the current filters without arguments
+:info [UUID]\tInspect a station
+:current\tInspect the playing station
+:favorites list|add|remove [UUID]\t
+:history\tRecent plays
+:recordings list\tRecording records
+Recordings: Enter play · D delete (y confirms) · o folder · e errors
+:recordings play ID / :recordings remove ID [--index-only]\t
+:open recordings\tOpen the recording directory
+:station add 'My Station' https://example.com/live\t
+:station list / :station edit UUID --name NAME --url URL\t
+:station remove UUID [--keep-references]\ty confirms deletion
+:station backups UUID [--add URL] [--remove URL]\t
+:record [UUID] [--duration 30m] [--output-dir DIR]\t
+:record stop\tFinalize recording
+:pause / :mute / :stop / :volume 70\t
+:help record\tCLI command usage
+:set language en|zh-CN\tSwitch UI language
+:set mouse true|false\tCapture the mouse; false allows terminal selection
+The last 100 commands persist in command-history.json in the data directory
+:doctor\tCheck media tools and directory permissions
+:focus sources|list|details|player|activity\t
+:quit / :q\tFinalize and quit
+"""
+help_context_title = "By context"
+help_context = """
+List\tPgUp/PgDn changes database pages; gg/G and Home/End select within the page.
+Recordings\tEnter or double-click plays; station search/filter/favorite keys do not apply.
+Wheel\tList moves three items; help scrolls; filters choose candidates.
+Under 20 rows\t5 opens task details, 2 returns to the list.
+Failed list\tAutomatic retries back off from 500ms to 30s; F5 retries immediately, Enter shows the full error.
+Deletion\ty confirms; Enter/n/Esc/q cancel; Ctrl-C quits.
+Filter popup\tCtrl-U clears search and filters immediately; the explicit Clear label does the same.
+Operation error\t? shows details; Esc dismisses in normal mode.
+"""
+help_notes_title = "Notes"
+help_notes = """
+Commands invoke built-in operations without a shell. Input supports quoting and Unicode.
+Bitrate/codec come from the catalog and may be stale; the player handles actual audio.
+Esc / ? / q close help; j/k, PgUp/PgDn, Home/End, g/G, Ctrl-e/y/b/f scroll.
+"""
 
 station_favorited = "Station favorited"
 station_unfavorited = "Station unfavorited"
