@@ -35,7 +35,7 @@ pub(super) enum PagePhase {
 }
 #[derive(Clone)]
 pub(super) struct PageState {
-    // Diagnostic request identity; reader publication is guarded by Pending.
+    // Identifies the visible request as well as Pending's latest queued query.
     pub generation: u64,
     pub requested: Filter,
     pub phase: PagePhase,

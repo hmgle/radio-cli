@@ -245,6 +245,12 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                 if shared.stop.load(Ordering::Acquire)
                     || shared.pending.lock().unwrap().page_generation != generation
                     || data.store_revision != Some(page.revision)
+                    || data.refresh_requested
+                    || !data.page.as_ref().is_some_and(|p| {
+                        p.generation == generation
+                            && p.requested == page.filter
+                            && p.phase == PagePhase::Loading
+                    })
                 {
                     continue;
                 }
@@ -367,6 +373,24 @@ mod tests {
             assert!(Instant::now() < deadline, "query did not complete");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    fn request_page(
+        worker: &Worker,
+        view: &Arc<Mutex<View>>,
+        filter: Filter,
+        revision: (u64, u64),
+    ) -> u64 {
+        let mut data = view.lock().unwrap();
+        data.store_revision = Some(revision);
+        data.page_retry_at = None;
+        let generation = worker.sender.page(filter.clone(), revision, String::new());
+        data.page = Some(PageState {
+            generation,
+            requested: filter,
+            phase: PagePhase::Loading,
+        });
+        generation
     }
 
     #[test]
@@ -558,15 +582,13 @@ mod tests {
             limit: 100,
             ..Filter::default()
         };
-        worker
-            .sender
-            .page(filter.clone(), store.revision().unwrap(), String::new());
+        request_page(&worker, &view, filter.clone(), store.revision().unwrap());
         wait(&view, |v| v.page_error(&filter).is_some());
         assert!(!view.lock().unwrap().page_ready(&filter));
         conn.execute("DELETE FROM recordings", []).unwrap();
         let revision = store.revision().unwrap();
         view.lock().unwrap().store_revision = Some(revision);
-        worker.sender.page(filter.clone(), revision, String::new());
+        request_page(&worker, &view, filter.clone(), revision);
         wait(&view, |v| v.recordings_revision == 1);
         assert!(view.lock().unwrap().page_ready(&filter));
         assert!(view.lock().unwrap().page_error(&filter).is_none());
@@ -593,21 +615,22 @@ mod tests {
             started.send(()).unwrap();
             blocked.recv_timeout(Duration::from_secs(3)).unwrap();
         }));
-        worker.sender.page(
+        request_page(
+            &worker,
+            &view,
             Filter {
                 recordings: true,
                 limit: 100,
                 ..Filter::default()
             },
             revision,
-            String::new(),
         );
         waiting.recv_timeout(Duration::from_secs(3)).unwrap();
         let filter = Filter {
             limit: 100,
             ..Filter::default()
         };
-        let generation = worker.sender.page(filter.clone(), revision, String::new());
+        let generation = request_page(&worker, &view, filter.clone(), revision);
         release.send(()).unwrap();
         wait(&view, |v| {
             v.page
@@ -617,6 +640,94 @@ mod tests {
         let data = view.lock().unwrap();
         assert!(data.page_ready(&filter));
         assert!(data.logs.is_empty());
+    }
+
+    #[test]
+    fn owner_failure_keeps_retry_when_an_older_reader_finishes() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        for failing_reader in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+            config.prepare().unwrap();
+            let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            let path = dir.path().join("radio.db");
+            rusqlite::Connection::open(&path)
+                .unwrap()
+                .execute(
+                    "INSERT INTO recordings(id,status,json) VALUES ('broken','complete','bad')",
+                    [],
+                )
+                .unwrap();
+            let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+            let worker = Worker::start(&path, &view).unwrap();
+            view.lock().unwrap().queries = Some(worker.sender.clone());
+            let (started, waiting) = mpsc::channel();
+            let (release, blocked) = mpsc::channel();
+            *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+                started.send(()).unwrap();
+                blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+            }));
+            let mut filter = Filter {
+                recordings: failing_reader,
+                limit: 100,
+                ..Filter::default()
+            };
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+            worker::execute(
+                Command::Search(Filter {
+                    query: "latest request".into(),
+                    limit: 100,
+                    ..Filter::default()
+                }),
+                &mut engine,
+                &mut filter,
+                &mut None,
+                &view,
+            )
+            .unwrap();
+            engine
+                .store
+                .test_connection()
+                .authorizer(Some(|context: AuthContext<'_>| {
+                    if matches!(
+                        context.action,
+                        AuthAction::Pragma {
+                            pragma_name: "data_version",
+                            ..
+                        }
+                    ) {
+                        Authorization::Deny
+                    } else {
+                        Authorization::Allow
+                    }
+                }));
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            engine
+                .store
+                .test_connection()
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+            let retry_at = view.lock().unwrap().page_retry_at;
+            assert!(retry_at.is_some());
+            // A facet query queued behind the blocked reader acts as a barrier:
+            // once it finishes, the stale page result has been processed.
+            view.lock().unwrap().facets_loading = true;
+            worker.sender.facets(2, String::new());
+            release.send(()).unwrap();
+            wait(&view, |v| !v.facets_loading);
+            {
+                let data = view.lock().unwrap();
+                assert!(data.page_error(&filter).is_some());
+                assert_eq!(data.page_retry_at, retry_at);
+                assert_eq!(data.rows_revision, 0);
+                assert_eq!(data.recordings_revision, 0);
+                assert_eq!(data.logs.len(), 1);
+            }
+            view.lock().unwrap().page_retry_at = Some(Instant::now());
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            wait(&view, |v| v.page_ready(&filter));
+            assert!(view.lock().unwrap().page_retry_at.is_none());
+        }
     }
 
     #[test]
