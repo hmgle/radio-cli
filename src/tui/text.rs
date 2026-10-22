@@ -2,6 +2,10 @@
 //!
 //! Widths follow `ratatui::buffer::CellWidth`, the measure used when the
 //! buffer is painted, so what is computed here is what the terminal receives.
+//!
+//! These helpers measure text; they do not sanitize it. Clean external text
+//! with `crate::clean_text` before measuring or painting it. Split structural
+//! newlines and label/value tabs before measuring individual display lines.
 
 use ratatui::buffer::CellWidth;
 use unicode_segmentation::UnicodeSegmentation;
@@ -170,6 +174,8 @@ pub(super) fn next_boundary(text: &str, index: usize) -> usize {
 
 /// Horizontally scroll `text` so the cursor (a byte index on a grapheme
 /// boundary) stays visible. Returns the visible slice and the cursor column.
+/// One cell must remain for the cursor, so its column is strictly below
+/// `width` when the input area is nonempty.
 pub(super) fn window(text: &str, cursor: usize, width: usize) -> (&str, usize) {
     if width == 0 {
         return ("", 0);
@@ -368,5 +374,32 @@ mod tests {
         let (visible, column) = window(&text, cursor, 4);
         assert_eq!(visible, format!("{ACCENT}cd"));
         assert_eq!(column, 3);
+    }
+
+    #[test]
+    fn window_reserves_a_cursor_cell_at_mixed_width_boundaries() {
+        for (text, cursor, budget, expected) in [
+            ("a你b", 5, 3, ("b", 1)),
+            ("a你b", 4, 3, ("你b", 2)),
+            ("a你b", 5, 4, ("你b", 3)),
+            ("a你b", 4, 2, ("b", 0)),
+            ("a你b", 1, 3, ("a你", 1)),
+            ("你a", 4, 3, ("a", 1)),
+        ] {
+            assert_eq!(window(text, cursor, budget), expected);
+        }
+        for text in ["a你b", "你a你", "a👨\u{200d}👩\u{200d}👧b", "ae\u{301}你"] {
+            for cursor in text
+                .grapheme_indices(true)
+                .map(|(at, _)| at)
+                .chain([text.len()])
+            {
+                for budget in 1..=6 {
+                    let (visible, column) = window(text, cursor, budget);
+                    assert!(width(visible) <= budget, "{text:?}, {cursor}, {budget}");
+                    assert!(column < budget, "{text:?}, {cursor}, {budget}");
+                }
+            }
+        }
     }
 }
