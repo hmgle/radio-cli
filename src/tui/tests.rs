@@ -1985,6 +1985,66 @@ fn rendered_text_never_splits_grapheme_clusters() {
 }
 
 #[test]
+fn editor_moves_and_deletes_whole_grapheme_clusters() {
+    let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    for cluster in [
+        "👨\u{200d}👩\u{200d}👧",
+        "🇫🇷",
+        "e\u{301}",
+        "👍\u{1f3fd}",
+        "❤\u{fe0f}",
+        "你",
+    ] {
+        let text = format!("a{cluster}b");
+        let mut editor = super::state::Editor::default();
+        editor.set(&text);
+        let offsets = [text.len(), 1 + cluster.len(), 1, 0];
+        for &offset in &offsets[1..] {
+            editor.key(key(KeyCode::Left), true);
+            assert_eq!(editor.cursor, offset, "{cluster:?}");
+        }
+        editor.key(key(KeyCode::Left), true);
+        assert_eq!(editor.cursor, 0);
+        for &offset in offsets[..3].iter().rev() {
+            editor.key(key(KeyCode::Right), true);
+            assert_eq!(editor.cursor, offset, "{cluster:?}");
+        }
+
+        editor.set(&text);
+        editor.key(key(KeyCode::Left), true);
+        editor.key(key(KeyCode::Backspace), true);
+        assert_eq!(editor.text, "ab", "{cluster:?}");
+        assert_eq!(editor.cursor, 1);
+
+        editor.set(&text);
+        editor.cursor = 1;
+        editor.key(key(KeyCode::Delete), true);
+        assert_eq!(editor.text, "ab", "{cluster:?}");
+        assert_eq!(editor.cursor, 1);
+
+        editor.set(&format!("play {cluster}"));
+        editor.key(ctrl('w'), true);
+        assert_eq!(editor.text, "play ", "{cluster:?}");
+
+        // Typing at the cursor keeps working after a cluster edit.
+        editor.key(key(KeyCode::Char('x')), true);
+        assert_eq!(editor.text, "play x");
+    }
+
+    // A cursor left inside a cluster must not panic or leave half a cluster.
+    let mut editor = super::state::Editor::default();
+    let family = "👨\u{200d}👩\u{200d}👧";
+    editor.set(&format!("a{family}b"));
+    editor.cursor = 1 + '👨'.len_utf8();
+    editor.key(key(KeyCode::Delete), true);
+    assert_eq!(editor.text, "a👨b");
+    editor.set(&format!("a{family}b"));
+    editor.cursor = 1 + '👨'.len_utf8();
+    editor.key(key(KeyCode::Left), true);
+    assert_eq!(editor.cursor, 1);
+}
+
+#[test]
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.

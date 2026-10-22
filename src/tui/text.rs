@@ -65,6 +65,23 @@ pub(super) fn wrap(text: &str, width: usize) -> Vec<&str> {
     lines
 }
 
+/// Byte offset of the grapheme boundary before `index`, or 0.
+pub(super) fn prev_boundary(text: &str, index: usize) -> usize {
+    text.grapheme_indices(true)
+        .map(|(start, _)| start)
+        .take_while(|&start| start < index)
+        .last()
+        .unwrap_or(0)
+}
+
+/// Byte offset of the grapheme boundary after `index`, or the text length.
+pub(super) fn next_boundary(text: &str, index: usize) -> usize {
+    text.grapheme_indices(true)
+        .map(|(start, grapheme)| start + grapheme.len())
+        .find(|&end| end > index)
+        .unwrap_or(text.len())
+}
+
 /// Horizontally scroll `text` so the cursor (a byte index on a grapheme
 /// boundary) stays visible. Returns the visible slice and the cursor column.
 pub(super) fn window(text: &str, cursor: usize, width: usize) -> (&str, usize) {
@@ -187,6 +204,31 @@ mod tests {
             ]
         );
         assert!(lines.iter().all(|line| width(line) <= 3));
+    }
+
+    #[test]
+    fn boundaries_move_over_whole_clusters_from_any_offset() {
+        let text = format!("a{FAMILY}{ACCENT}{FLAG}你");
+        let starts = [
+            0,
+            1,
+            1 + FAMILY.len(),
+            1 + FAMILY.len() + ACCENT.len(),
+            1 + FAMILY.len() + ACCENT.len() + FLAG.len(),
+            text.len(),
+        ];
+        for pair in starts.windows(2) {
+            assert_eq!(next_boundary(&text, pair[0]), pair[1]);
+            assert_eq!(prev_boundary(&text, pair[1]), pair[0]);
+        }
+        // A cursor left inside a cluster still resolves to its edges.
+        let inside = 1 + '👨'.len_utf8();
+        assert_eq!(prev_boundary(&text, inside), 1);
+        assert_eq!(next_boundary(&text, inside), 1 + FAMILY.len());
+        assert_eq!(prev_boundary(&text, 0), 0);
+        assert_eq!(next_boundary(&text, text.len()), text.len());
+        assert_eq!(prev_boundary("", 0), 0);
+        assert_eq!(next_boundary("", 0), 0);
     }
 
     #[test]

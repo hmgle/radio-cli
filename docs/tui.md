@@ -61,7 +61,7 @@ Tab / Shift-Tab 循环切换面板；Ctrl-h/j/k/l 或 Ctrl-方向键按位置切
 | `:focus sources\|list\|details\|player\|activity` | 聚焦指定面板，也接受 `1`–`5` |
 | `:help` / `:quit` / `:q` | 帮助 / 收尾并退出 |
 
-命令只调用程序内置操作，不执行 shell。支持单引号、双引号和转义，路径相对启动目录解释。Tab / Shift-Tab 按上下文循环补全命令、参数或 UUID，↑/↓ 浏览持久命令历史，←/→、Home/End 编辑，Ctrl-a/e 到行首/尾，Ctrl-u 清空，Ctrl-w 删除前一个词。参数错误保留输入并展示原因；运行错误写入任务面板。进程级 `--config`、`--data-dir`、`--api-url`、`--json` 不可在已运行的 TUI 内修改。
+命令只调用程序内置操作，不执行 shell。支持单引号、双引号和转义，路径相对启动目录解释。Tab / Shift-Tab 按上下文循环补全命令、参数或 UUID，↑/↓ 浏览持久命令历史，←/→、Home/End 编辑，Ctrl-a/e 到行首/尾，Ctrl-u 清空，Ctrl-w 删除前一个词。光标移动与 Backspace/Delete 按字符簇（grapheme）进行，组合记号、ZWJ 表情和国旗不会被拆开。参数错误保留输入并展示原因；运行错误写入任务面板。进程级 `--config`、`--data-dir`、`--api-url`、`--json` 不可在已运行的 TUI 内修改。
 
 `:play https://example.com/live` 使用临时电台，不写入目录、历史或上次电台偏好；
 `:current` 可查看完整流地址，展示名称最多 60 字符。临时流不支持录音，需先用

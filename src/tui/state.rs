@@ -202,25 +202,14 @@ impl Editor {
         result
     }
     pub fn key(&mut self, key: KeyEvent, command: bool) {
-        let previous = |text: &str, cursor: usize| {
-            text[..cursor]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0)
-        };
         if command && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
             self.complete(key.code == KeyCode::BackTab);
             return;
         }
         self.completion = None;
         match key.code {
-            KeyCode::Left => self.cursor = previous(&self.text, self.cursor),
-            KeyCode::Right => {
-                if let Some(c) = self.text[self.cursor..].chars().next() {
-                    self.cursor += c.len_utf8();
-                }
-            }
+            KeyCode::Left => self.cursor = super::text::prev_boundary(&self.text, self.cursor),
+            KeyCode::Right => self.cursor = super::text::next_boundary(&self.text, self.cursor),
             KeyCode::Home => self.cursor = 0,
             KeyCode::End => self.cursor = self.text.len(),
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => self.cursor = 0,
@@ -241,14 +230,13 @@ impl Editor {
                 self.cursor = end;
             }
             KeyCode::Backspace if self.cursor > 0 => {
-                let start = previous(&self.text, self.cursor);
+                let start = super::text::prev_boundary(&self.text, self.cursor);
                 self.text.drain(start..self.cursor);
                 self.cursor = start;
             }
             KeyCode::Delete => {
-                if let Some(c) = self.text[self.cursor..].chars().next() {
-                    self.text.drain(self.cursor..self.cursor + c.len_utf8());
-                }
+                let end = super::text::next_boundary(&self.text, self.cursor);
+                self.text.drain(self.cursor..end);
             }
             KeyCode::Up if command => {
                 if self.history.is_empty() {
