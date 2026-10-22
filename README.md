@@ -236,7 +236,9 @@ Ctrl-C stays reserved for quitting, and an empty string disables the shortcut.
 When the target is on the current page the source, filters, and sort order are
 kept; otherwise the view switches to all stations, clears filters, and loads
 only the target page. Locating never replays audio, works while paused,
-connecting, or reconnecting, and prompts when nothing is playing. The help panel
+connecting, or reconnecting, and after a failure it selects the station shown
+in the player header with a "playback failed" notice. It prompts when nothing
+is playing. The help panel
 shows the configured key and hides the entry when disabled. See
 [docs/tui.md](docs/tui.md) for details.
 

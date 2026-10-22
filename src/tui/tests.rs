@@ -3439,6 +3439,65 @@ fn jump_waits_for_a_fresh_page_even_when_the_filter_is_unchanged() {
 }
 
 #[test]
+fn jump_locates_the_last_requested_station_after_a_failure_without_replaying() {
+    let failed = || crate::engine::PlaybackState::Failed {
+        reason: "stream refused".into(),
+    };
+    let (tx, rx) = command::channel(4);
+
+    // The station is already on the current page.
+    let mut data = view();
+    Arc::make_mut(&mut data.rows).push(data.status.station.clone().unwrap());
+    data.status.playback_state = failed();
+    let mut app = App::default();
+    app.jump_binding = "<F6>".into();
+    app.focus = Focus::Details;
+    app.key(key(KeyCode::F(6)), &data, &tx);
+    assert_eq!(app.list.selected(), Some(2));
+    assert_eq!(app.focus, Focus::List);
+    assert_eq!(app.message, crate::t!("jump_failed"));
+    assert!(rx.try_recv().is_err(), "locating must never replay");
+
+    // The station sits on another page, so the locate round-trips.
+    let mut data = view();
+    data.status.playback_state = failed();
+    let mut app = App::default();
+    app.jump_binding = "<F6>".into();
+    app.key(key(KeyCode::F(6)), &data, &tx);
+    assert_eq!(app.message, crate::t!("jump_loading"));
+    let request = match rx.try_recv().unwrap() {
+        Command::LocatePlaying { request, .. } => request,
+        _ => panic!("expected locate"),
+    };
+    data.located = Some(worker::LocatedStation {
+        request,
+        filter: Ok(app.filter.clone()),
+    });
+    app.reconcile(&data);
+    app.flush_search(&tx);
+    assert!(matches!(rx.try_recv(), Ok(Command::Search(_))));
+    Arc::make_mut(&mut data.rows).push(data.status.station.clone().unwrap());
+    data.rows_revision += 1;
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(2));
+    assert_eq!(app.message, crate::t!("jump_failed"));
+    assert!(rx.try_recv().is_err(), "locating must never replay");
+
+    // A recovered playback shows no failure notice, and an idle player still refuses.
+    data.status.playback_state = crate::engine::PlaybackState::Playing;
+    app.list.select(Some(0));
+    app.key(key(KeyCode::F(6)), &data, &tx);
+    assert_eq!(app.list.selected(), Some(2));
+    assert!(app.message.is_empty());
+    data.status.playback_state = crate::engine::PlaybackState::Idle;
+    app.list.select(Some(0));
+    app.key(key(KeyCode::F(6)), &data, &tx);
+    assert_eq!(app.list.selected(), Some(0));
+    assert_eq!(app.message, crate::t!("jump_not_playing"));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 fn small_terminal_blocks_actions_and_defers_search_until_visible() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let data = view();

@@ -603,7 +603,7 @@ impl App {
             if let Some(index) = view.rows.iter().position(|row| row.stationuuid == uuid) {
                 self.list.select(Some(index));
                 if self.message == crate::t!("jump_loading") {
-                    self.message.clear();
+                    self.message = located_notice(view);
                 }
             } else {
                 self.message = crate::t!("jump_unavailable").into();
@@ -986,12 +986,14 @@ impl App {
         }
     }
     fn jump_to_playing(&mut self, view: &View, sender: &CommandSender) {
-        let Some(station) = view.status.station.as_ref().filter(|_| {
-            !matches!(
-                view.status.playback_state,
-                crate::engine::PlaybackState::Idle | crate::engine::PlaybackState::Failed { .. }
-            )
-        }) else {
+        // A failed station is still the one the player header names, so it can
+        // be located (never replayed); only an idle player has nothing to find.
+        let Some(station) = view
+            .status
+            .station
+            .as_ref()
+            .filter(|_| view.status.playback_state != crate::engine::PlaybackState::Idle)
+        else {
             self.message = crate::t!("jump_not_playing").into();
             return;
         };
@@ -1008,7 +1010,7 @@ impl App {
         {
             self.list.select(Some(index));
             self.selected_id = Some(station.stationuuid.clone());
-            self.message.clear();
+            self.message = located_notice(view);
             return;
         }
         let request = self.jump_request.wrapping_add(1);
@@ -1657,6 +1659,18 @@ impl App {
         }
     }
 }
+// Locating a failed station must not read like a successful playback jump.
+fn located_notice(view: &View) -> String {
+    if matches!(
+        view.status.playback_state,
+        crate::engine::PlaybackState::Failed { .. }
+    ) {
+        crate::t!("jump_failed").into()
+    } else {
+        String::new()
+    }
+}
+
 fn nonempty(text: &str) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.into())
