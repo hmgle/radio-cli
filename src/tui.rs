@@ -7,6 +7,7 @@ mod render;
 mod state;
 #[cfg(test)]
 mod tests;
+mod text;
 mod worker;
 
 use crate::{config::Config, engine::Engine};

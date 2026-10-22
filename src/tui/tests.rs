@@ -1968,6 +1968,23 @@ fn ignored_keys_explain_why_nothing_happened() {
 }
 
 #[test]
+fn rendered_text_never_splits_grapheme_clusters() {
+    let family = "👨\u{200d}👩\u{200d}👧";
+    let fitted = render::fit(&format!("{family} hello"), 5);
+    assert_eq!(fitted, format!("{family} h…"));
+    assert!(!fitted.ends_with('\u{200d}'));
+    assert_eq!(unicode_width::UnicodeWidthStr::width(fitted.as_str()), 5);
+
+    let lines = render::wrapped_lines(&format!("a{family}b{family}c"), 3);
+    let rows: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        rows,
+        [format!("a{family}"), format!("b{family}"), "c".into()]
+    );
+    assert!(rows.iter().all(|row| !row.starts_with('\u{200d}')));
+}
+
+#[test]
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.

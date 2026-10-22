@@ -10,7 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 fn panel(title: String, active: bool) -> Block<'static> {
     Block::default()
@@ -69,26 +69,7 @@ pub(super) fn fit(text: &str, width: usize) -> String {
 
 /// Callers must have already sanitized external text.
 fn fit_clean(text: &str, width: usize) -> String {
-    let text_width = text.width();
-    if text_width <= width {
-        return format!("{text}{}", " ".repeat(width - text_width));
-    }
-    if width == 0 {
-        return String::new();
-    }
-    let mut result = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let cells = ch.width().unwrap_or(0);
-        if used + cells >= width {
-            break;
-        }
-        result.push(ch);
-        used += cells;
-    }
-    result.push('…');
-    result.push_str(&" ".repeat(width - used - 1));
-    result
+    super::text::fit(text, width)
 }
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
@@ -1008,24 +989,17 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
 }
 
 /// Hard-wrap by terminal cells so long URLs remain readable and scrolling cannot
-/// move beyond the last page. Keep slices on UTF-8 boundaries, including CJK.
+/// move beyond the last page. Lines break only between grapheme clusters.
 pub(super) fn wrapped_lines(text: &str, width: u16) -> Vec<Line<'static>> {
     let width = usize::from(width.max(1));
     let mut lines = Vec::new();
     for line in text.lines() {
         let line = crate::clean_text(line);
-        let mut start = 0;
-        let mut cells = 0;
-        for (index, c) in line.char_indices() {
-            let size = c.width().unwrap_or(0);
-            if cells + size > width && index > start {
-                lines.push(Line::from(line[start..index].to_owned()));
-                start = index;
-                cells = 0;
-            }
-            cells += size;
-        }
-        lines.push(Line::from(line[start..].to_owned()));
+        lines.extend(
+            super::text::wrap(&line, width)
+                .into_iter()
+                .map(|part| Line::from(part.to_owned())),
+        );
     }
     lines
 }
@@ -1088,30 +1062,8 @@ pub(super) fn input_geometry(label: &str, width: u16) -> (u16, u16) {
     )
 }
 
-/// Horizontally scroll input by display cells while keeping the Unicode cursor visible.
+/// Horizontally scroll input by display cells while keeping the cursor visible.
 fn input_window(text: &str, cursor: usize, width: u16) -> (String, u16) {
-    if width == 0 {
-        return (String::new(), 0);
-    }
-    let mut start = 0;
-    let mut cells = text[..cursor]
-        .chars()
-        .map(|c| c.width().unwrap_or(0))
-        .sum::<usize>();
-    while cells >= usize::from(width) && start < cursor {
-        let c = text[start..].chars().next().unwrap();
-        start += c.len_utf8();
-        cells = cells.saturating_sub(c.width().unwrap_or(0));
-    }
-    let mut end = start;
-    let mut used = 0;
-    for c in text[start..].chars() {
-        let n = c.width().unwrap_or(0);
-        if used + n > usize::from(width) {
-            break;
-        }
-        used += n;
-        end += c.len_utf8();
-    }
-    (text[start..end].into(), cells as u16)
+    let (visible, column) = super::text::window(text, cursor, usize::from(width));
+    (visible.to_owned(), column as u16)
 }
