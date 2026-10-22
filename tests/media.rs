@@ -603,21 +603,50 @@ fn mpv_config(dir: &std::path::Path) -> Option<radio_cli::config::Config> {
 
 #[test]
 fn mpv_ipc_reads_icy_titles_and_reaps_child() {
-    exercise_icy_player(false);
+    exercise_icy_player(false, b"Local test", "Local test");
 }
 
 #[test]
 fn normalization_preserves_real_mpv_metadata_volume_and_mute() {
-    exercise_icy_player(true);
+    exercise_icy_player(true, b"Local test", "Local test");
 }
 
-fn exercise_icy_player(normalize: bool) {
+#[test]
+fn mpv_ipc_preserves_accents_and_repairs_wrapped_and_mixed_titles() {
+    for (title, expected) in [
+        ("Björk - Jóga".as_bytes(), "Björk - Jóga"),
+        (
+            "Lääke - Jää（中文电台）".as_bytes(),
+            "Lääke - Jää（中文电台）",
+        ),
+        ("ºÓÍ¼ - ×Ï´¨Â¼".as_bytes(), "河图 - 紫川录"),
+        (
+            "Íõ·Æ - Café（中文电台）".as_bytes(),
+            "王菲 - Café（中文电台）",
+        ),
+        (
+            "é\u{82}\u{9d}ç¾\u{8e}äº\u{91} - 中文电台".as_bytes(),
+            "邝美云 - 中文电台",
+        ),
+    ] {
+        exercise_icy_player(false, title, expected);
+    }
+    let mut raw = b"\xcd\xf5\xb7\xc6 - ".to_vec();
+    raw.extend_from_slice("中文电台".as_bytes());
+    exercise_icy_player(false, &raw, "王菲 - 中文电台");
+}
+
+fn exercise_icy_player(normalize: bool, title_bytes: &[u8], expected_title: &str) {
     let dir = tempfile::tempdir().unwrap();
     let Some(mut config) = mpv_config(dir.path()) else {
         return;
     };
     config.settings.normalize_loudness = normalize;
     let bytes = support::fixture("libmp3lame", "mp3");
+    let mut metadata = b"StreamTitle='".to_vec();
+    metadata.extend_from_slice(title_bytes);
+    metadata.extend_from_slice(b"';");
+    metadata.resize(metadata.len().div_ceil(16) * 16, 0);
     let server = Server::new(move |request, stream| {
         let icy = request.to_lowercase().contains("icy-metadata: 1");
         let header = format!(
@@ -632,12 +661,12 @@ fn exercise_icy_player(normalize: bool) {
                 if stream.write_all(chunk).is_err() {
                     return;
                 }
-                if icy && chunk.len() == 1024 {
-                    let mut metadata = b"StreamTitle='Local test';".to_vec();
-                    metadata.resize(32, 0);
-                    if stream.write_all(&[2]).is_err() || stream.write_all(&metadata).is_err() {
-                        return;
-                    }
+                if icy
+                    && chunk.len() == 1024
+                    && (stream.write_all(&[(metadata.len() / 16) as u8]).is_err()
+                        || stream.write_all(&metadata).is_err())
+                {
+                    return;
                 }
                 // Keep ICY alignment across repeats by ending at a complete block.
                 if chunk.len() != 1024 {
@@ -651,11 +680,15 @@ fn exercise_icy_player(normalize: bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut title = false;
     let mut playing = false;
+    let mut observed_titles = Vec::new();
     while Instant::now() < deadline && !(title && playing) {
         for event in player.poll().unwrap() {
             match event {
                 Event::Playing => playing = true,
-                Event::Title(s) if s == "Local test" => title = true,
+                Event::Title(s) => {
+                    title |= s == expected_title;
+                    observed_titles.push(s);
+                }
                 _ => {}
             }
         }
@@ -663,7 +696,7 @@ fn exercise_icy_player(normalize: bool) {
     }
     assert!(
         title && playing,
-        "must receive playback and ICY metadata events"
+        "must receive playback and title {expected_title:?}, got {observed_titles:?}"
     );
     for muted in [true, false] {
         player.toggle_mute().unwrap();

@@ -171,25 +171,31 @@ pub(super) fn wait_for_handoff(
 
 fn metadata(bytes: &[u8]) -> Metadata {
     let bytes = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
-    let text = String::from_utf8(bytes.to_vec())
-        .unwrap_or_else(|_| bytes.iter().map(|&b| char::from(b)).collect());
-    let mut fields = text.as_str();
+    // Field syntax is ASCII. Keep values as bytes until their encoding is
+    // known, so an invalid title cannot change how another field is decoded.
+    let mut fields = bytes;
     let mut title = String::new();
     let mut url = None;
-    while let Some((name, remaining)) = fields.split_once('=') {
-        let Some(remaining) = remaining.trim_start().strip_prefix('\'') else {
+    while let Some(equal) = fields.iter().position(|&byte| byte == b'=') {
+        let name = &fields[..equal];
+        let Some(remaining) = fields[equal + 1..].trim_ascii_start().strip_prefix(b"'") else {
             break;
         };
-        let Some((value, tail)) = remaining.split_once("';") else {
+        let Some(end) = remaining.windows(2).position(|pair| pair == b"';") else {
             break;
         };
-        if name.trim().eq_ignore_ascii_case("StreamTitle") {
-            title = crate::player::icy_title(value);
-        } else if name.trim().eq_ignore_ascii_case("StreamUrl") {
-            url = (crate::clean_text(value) == value && crate::config::validate_url(value).is_ok())
-                .then(|| value.to_owned());
+        let value = &remaining[..end];
+        if name.trim_ascii().eq_ignore_ascii_case(b"StreamTitle") {
+            title = crate::player::icy_title_bytes(value);
+        } else if name.trim_ascii().eq_ignore_ascii_case(b"StreamUrl") {
+            url = std::str::from_utf8(value)
+                .ok()
+                .filter(|value| {
+                    crate::clean_text(value) == *value && crate::config::validate_url(value).is_ok()
+                })
+                .map(str::to_owned);
         }
-        fields = tail.trim_start();
+        fields = remaining[end + 2..].trim_ascii_start();
     }
     Metadata { title, url }
 }
@@ -337,6 +343,45 @@ mod tests {
             Some("https://example.test/cover.png")
         );
         assert!(metadata(b"broken metadata").url.is_none());
+    }
+
+    #[test]
+    fn icy_parser_matches_player_titles_with_mixed_encodings() {
+        // Raw GBK song text and UTF-8 station text arrive in the same block.
+        // The final UTF-8 character is truncated in the source itself.
+        let mut raw = b"\xcd\xf5\xb7\xc6 -  (AsiaFM".to_vec();
+        raw.extend_from_slice("亚洲粤语".as_bytes());
+        raw.extend_from_slice(b"\xe5\x8f?)");
+        let wrapped = "\u{cd}\u{f5}\u{b7}\u{c6} -  (AsiaFM亚洲粤语\u{e5}\u{8f}?)";
+        let mut block = b"StreamTitle='".to_vec();
+        block.extend_from_slice(&raw);
+        block.extend_from_slice("';StreamUrl='https://example.test/封面.png';".as_bytes());
+        let parsed = metadata(&block);
+        assert_eq!(parsed.title, "王菲 -  (AsiaFM亚洲粤语å?)");
+        assert_eq!(parsed.title, crate::player::icy_title(wrapped));
+        assert_eq!(parsed.url.as_deref(), Some("https://example.test/封面.png"));
+
+        // Fully wrapped GBK titles also use the same repair as mpv metadata.
+        let wrapped = "ºÓÍ¼ - ×Ï´¨Â¼";
+        assert_eq!(
+            metadata(format!("StreamTitle='{wrapped}';").as_bytes()).title,
+            crate::player::icy_title(wrapped)
+        );
+    }
+
+    #[test]
+    fn icy_parser_keeps_unicode_fields_independent_of_invalid_bytes() {
+        let mut block = "StreamTitle='Björk - Jóga';StreamUrl='https://example.test/封面.png';"
+            .as_bytes()
+            .to_vec();
+        block.extend_from_slice(b"Other='\xff';");
+        let parsed = metadata(&block);
+        assert_eq!(parsed.title, "Björk - Jóga");
+        assert_eq!(parsed.url.as_deref(), Some("https://example.test/封面.png"));
+
+        let parsed = metadata(b"StreamTitle='Track';StreamUrl='https://example.test/\xff';");
+        assert_eq!(parsed.title, "Track");
+        assert!(parsed.url.is_none());
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fs,
     io::{Read, Write},
@@ -108,17 +109,95 @@ fn metadata_title(metadata: &Value) -> String {
 }
 
 pub(crate) fn icy_title(title: &str) -> String {
-    // Some ICY sources re-encode UTF-8 as Latin-1. Reverse this only when
-    // the entire title maps to bytes that form valid UTF-8. This heuristic
-    // deliberately leaves mixed encodings and ordinary file tags alone.
-    // Repair before clean_text removes C1 characters needed as UTF-8 bytes.
-    if !title.is_ascii() && title.chars().all(|c| c <= '\u{ff}') {
-        let bytes = title.chars().map(|c| c as u8).collect();
-        if let Ok(repaired) = String::from_utf8(bytes) {
-            return crate::clean_text(&repaired);
+    // Repair Latin-1 byte runs before sanitizing: C1 characters can be
+    // UTF-8 continuation bytes. ASCII and existing Unicode delimit runs,
+    // so GBK guesses cannot consume ASCII letters or span separate words.
+    let mut repaired = String::with_capacity(title.len());
+    let mut start = 0;
+    for (index, character) in title.char_indices() {
+        if !matches!(character, '\u{80}'..='\u{ff}') {
+            repaired.push_str(&repair_latin1_run(&title[start..index]));
+            repaired.push(character);
+            start = index + character.len_utf8();
         }
     }
-    crate::clean_text(title)
+    repaired.push_str(&repair_latin1_run(&title[start..]));
+    crate::clean_text(&repaired)
+}
+
+pub(crate) fn icy_title_bytes(bytes: &[u8]) -> String {
+    // Decode each non-ASCII run independently. Some GBK bytes happen to form
+    // short UTF-8 sequences, so try a complete run before the byte fallback.
+    let mut title = String::with_capacity(bytes.len());
+    let mut start = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte.is_ascii() {
+            decode_icy_run(&bytes[start..index], &mut title);
+            title.push(char::from(byte));
+            start = index + 1;
+        }
+    }
+    decode_icy_run(&bytes[start..], &mut title);
+    icy_title(&title)
+}
+
+fn decode_icy_run(bytes: &[u8], title: &mut String) {
+    if let Ok(valid) = std::str::from_utf8(bytes) {
+        title.push_str(valid);
+        return;
+    }
+    // Existing UTF-8 Han text is stronger evidence than a GBK guess over
+    // the entire run. Preserve it even when adjacent bytes are malformed.
+    let has_utf8_han = bytes
+        .utf8_chunks()
+        .any(|chunk| chunk.valid().chars().any(is_cjk));
+    if !has_utf8_han {
+        let latin1: String = bytes.iter().map(|&byte| char::from(byte)).collect();
+        if let Cow::Owned(repaired) = repair_latin1_run(&latin1) {
+            title.push_str(&repaired);
+            return;
+        }
+    }
+    for chunk in bytes.utf8_chunks() {
+        title.push_str(chunk.valid());
+        title.extend(chunk.invalid().iter().map(|&byte| char::from(byte)));
+    }
+}
+
+fn repair_latin1_run(run: &str) -> Cow<'_, str> {
+    if run.is_empty() {
+        return Cow::Borrowed(run);
+    }
+    let bytes: Vec<u8> = run.chars().map(|c| c as u8).collect();
+    if let Ok(repaired) = std::str::from_utf8(&bytes) {
+        return Cow::Owned(repaired.to_owned());
+    }
+
+    // GBK and genuine Latin-1 text overlap. Require a contiguous run of at
+    // least two double-byte Han characters and some evidence beyond letters
+    // (e.g. the symbols in "Íõ·Æ" or "ºÓÍ¼"). Letter-only runs such as "ää"
+    // and "éééé" stay untouched. This remains a conservative heuristic, not
+    // encoding detection; ambiguous titles may need a source-specific policy.
+    if bytes.len() < 4
+        || !run
+            .chars()
+            .any(|c| !c.is_alphabetic() && !c.is_control() && !c.is_whitespace())
+    {
+        return Cow::Borrowed(run);
+    }
+    if let Some(decoded) =
+        encoding_rs::GB18030.decode_without_bom_handling_and_without_replacement(&bytes)
+        && decoded.chars().all(is_cjk)
+        && decoded.chars().count() * 2 == bytes.len()
+    {
+        Cow::Owned(decoded.into_owned())
+    } else {
+        Cow::Borrowed(run)
+    }
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(character, '\u{3400}'..='\u{9fff}' | '\u{f900}'..='\u{faff}')
 }
 
 /// `sockaddr_un.sun_path` holds 104 bytes on macOS (108 on Linux) including
@@ -389,7 +468,7 @@ mod socket_path_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{metadata_title, parse_audio_devices, playback_command};
+    use super::{icy_title_bytes, metadata_title, parse_audio_devices, playback_command};
     use serde_json::json;
 
     #[test]
@@ -479,18 +558,99 @@ mod tests {
     }
 
     #[test]
+    fn icy_titles_repair_gbk_segments_in_mixed_mojibake() {
+        // AsiaFM sends GBK song text before UTF-8 station text. The final
+        // metadata byte is already a literal question mark and cannot be
+        // recovered from the stream, so only the recoverable part is repaired.
+        let title = "\u{cd}\u{f5}\u{b7}\u{c6} -  (AsiaFM亚洲粤语\u{e5}\u{8f}?)";
+        assert_eq!(
+            metadata_title(&json!({"icy-title": title})),
+            "王菲 -  (AsiaFM亚洲粤语å?)"
+        );
+        // A lone GBK pair decodes to a single character; guessing one
+        // character from two ambiguous bytes is not worth the risk, so such
+        // runs stay untouched. Rejecting a single-character guess is the safe
+        // side: the raw bytes are shown instead of a wrong character.
+        let lone_pair = "\u{b7}\u{c6} -  (AsiaFM亚洲粤语)";
+        assert_eq!(
+            metadata_title(&json!({"icy-title": lone_pair})),
+            "\u{b7}\u{c6} -  (AsiaFM亚洲粤语)"
+        );
+        let another_lone_pair = "\u{cd}\u{f5} -  (AsiaFM亚洲粤语)";
+        assert_eq!(
+            metadata_title(&json!({"icy-title": another_lone_pair})),
+            "\u{cd}\u{f5} -  (AsiaFM亚洲粤语)"
+        );
+        // Ordinary text and controls elsewhere must not veto a good segment.
+        assert_eq!(
+            metadata_title(&json!({"icy-title": "Íõ·Æ\n - Café（中文电台）"})),
+            "王菲 - Café（中文电台）"
+        );
+    }
+
+    #[test]
+    fn icy_titles_repair_latin1_wrapped_gbk() {
+        // A Zeno stream wraps GBK title bytes in Latin-1 and then UTF-8.
+        let title = "ºÓÍ¼ - ×Ï´¨Â¼";
+        assert_eq!(
+            metadata_title(&json!({"icy-title": title})),
+            "河图 - 紫川录"
+        );
+    }
+
+    #[test]
     fn icy_titles_keep_text_without_a_lossless_latin1_repair() {
         for title in [
             "Radio Swiss Jazz",
             "张柏芝 - 乱了感觉",
             "Café à côté",
-            "BeyoncÃ© - Café",
-            "CafÃ© — Live",
+            "Björk - Jóga",
+            "Motörhead - Ace of Spades",
+            "Sigur Rós - Hoppípolla",
+            "Chloéë",
+            "Chloéë - 中文电台",
+            "Lääke - 中文电台",
+            "Lääke - Jää（中文电台）",
+            "éééé - 中文电台",
+            "éé - àà（中文电台）",
+            "Íõ· - 中文电台",
+            "ÖÐÎÄ", // Also ambiguous with letter-only Latin-1 text.
             "â€™",
         ] {
             assert_eq!(metadata_title(&json!({"icy-title": title})), title);
+            assert_eq!(icy_title_bytes(title.as_bytes()), title);
         }
         assert_eq!(metadata_title(&json!({"icy-title": "中文\x1b\n"})), "中文");
+    }
+
+    #[test]
+    fn icy_titles_repair_utf8_runs_before_removing_c1_bytes() {
+        for (title, expected) in [
+            ("BeyoncÃ© - Café", "Beyoncé - Café"),
+            ("CafÃ© — Live", "Café — Live"),
+            (
+                "é\u{82}\u{9d}ç¾\u{8e}äº\u{91} - 中文电台\x1b\n",
+                "邝美云 - 中文电台",
+            ),
+        ] {
+            assert_eq!(metadata_title(&json!({"icy-title": title})), expected);
+        }
+    }
+
+    #[test]
+    fn icy_title_bytes_preserve_utf8_islands_and_latin1_fallbacks() {
+        let mut raw = b"\xcd\xf5\xb7\xc6 - ".to_vec();
+        raw.extend_from_slice("中文电台".as_bytes());
+        assert_eq!(icy_title_bytes(&raw), "王菲 - 中文电台");
+        let mut adjacent = b"\xcd\xf5\xb7\xc6".to_vec();
+        adjacent.extend_from_slice("中文".as_bytes());
+        assert_eq!(icy_title_bytes(&adjacent), "王菲中文");
+        assert_eq!(icy_title_bytes(b"Beyonc\xe9"), "Beyoncé");
+        assert_eq!(
+            icy_title_bytes(b"\xba\xd3\xcd\xbc - \xd7\xcf\xb4\xa8\xc2\xbc"),
+            "河图 - 紫川录"
+        );
+        assert_eq!(icy_title_bytes(b"Track\x1b\n\xff"), "Trackÿ");
     }
 
     #[test]
