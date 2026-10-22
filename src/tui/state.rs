@@ -1618,6 +1618,10 @@ impl App {
             return;
         }
         let previous_message = std::mem::take(&mut self.message);
+        let pending = self
+            .pending_nav
+            .take()
+            .filter(|(_, time)| time.elapsed() <= Duration::from_secs(1));
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => self.quit = true,
@@ -1635,10 +1639,6 @@ impl App {
             }
             return;
         }
-        let pending = self
-            .pending_nav
-            .take()
-            .filter(|(_, time)| time.elapsed() <= Duration::from_secs(1));
         let gg = pending.is_some_and(|(key, _)| key == 'g') && key.code == KeyCode::Char('g');
         if pending.is_some_and(|(key, _)| key == 'z')
             && matches!(key.code, KeyCode::Char('z' | 't' | 'b'))
@@ -1724,7 +1724,7 @@ impl App {
             KeyCode::Home => self.move_selection(-10000, view),
             KeyCode::Char('g') if gg => self.move_selection(-10000, view),
             KeyCode::Char('g') => self.pending_nav = Some(('g', Instant::now())),
-            KeyCode::Char('z') if self.focus == Focus::List => {
+            KeyCode::Char('z') if self.focus == Focus::List && pending.is_none() => {
                 self.pending_nav = Some(('z', Instant::now()))
             }
             KeyCode::Char('H' | 'M' | 'L') if self.focus == Focus::List => {

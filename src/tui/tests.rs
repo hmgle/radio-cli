@@ -4241,6 +4241,38 @@ fn light_popups_keep_the_cleared_border_column_on_the_light_background() {
 }
 
 #[test]
+fn navigation_prefixes_cancel_on_another_prefix_or_control_key() {
+    let (sender, receiver) = command::channel(4);
+    for sequence in ["gzt", "gzz", "gzb"] {
+        let (mut app, data) = scrollable_list(Source::Stations, 40);
+        app.rects[Focus::List.index()] = ratatui::layout::Rect::new(0, 0, 80, 12);
+        app.list.select(Some(15));
+        *app.list.offset_mut() = 10;
+        for c in sequence.chars() {
+            app.key(key(KeyCode::Char(c)), &data, &sender);
+        }
+        assert_eq!(app.list.offset(), 10, "{sequence}");
+        assert_eq!(app.list.selected(), Some(15), "{sequence}");
+    }
+    for (prefix, suffix) in [('g', 'g'), ('z', 't')] {
+        let (mut app, data) = scrollable_list(Source::Stations, 40);
+        app.rects[Focus::List.index()] = ratatui::layout::Rect::new(0, 0, 80, 12);
+        app.list.select(Some(15));
+        *app.list.offset_mut() = 10;
+        app.key(key(KeyCode::Char(prefix)), &data, &sender);
+        app.key(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            &data,
+            &sender,
+        );
+        app.key(key(KeyCode::Char(suffix)), &data, &sender);
+        assert_eq!(app.list.offset(), 10, "{prefix}, Ctrl-x, {suffix}");
+        assert_eq!(app.list.selected(), Some(15), "{prefix}, Ctrl-x, {suffix}");
+    }
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
 fn viewport_keys_use_visible_rows_and_preserve_selection_when_aligning() {
     let mut data = view();
     data.rows = Arc::new((0..30).map(|n| station(&format!("Row {n}"))).collect());
