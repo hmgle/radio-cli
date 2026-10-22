@@ -3,6 +3,16 @@
 use crate::engine::{PlaybackState, RecordingState, Status};
 use ratatui::style::{Color, Style};
 
+/// Display diagnostics without URL secrets or terminal controls. Keep line
+/// breaks for expanded errors. Stored errors and playback URLs stay intact.
+pub(super) fn diagnostic(text: &str) -> String {
+    crate::redact::urls(text)
+        .lines()
+        .map(crate::clean_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Semantic class of a media state. Colour only reinforces the glyph and the
 /// text label, which remain readable in monochrome output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +66,7 @@ pub(super) fn playback_label(state: &PlaybackState, reason_width: usize) -> Stri
             crate::t!("state_playback_reconnecting_attempt", "attempt" => attempt)
         }
         PlaybackState::Failed { reason } if reason_width > 0 => {
-            crate::t!("playback_failed", "reason" => super::render::fit(reason, reason_width).trim_end())
+            crate::t!("playback_failed", "reason" => super::render::fit(&diagnostic(reason), reason_width).trim_end())
         }
         state => state.label().into(),
     }

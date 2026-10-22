@@ -89,6 +89,32 @@ pub(crate) fn has_url_credentials(text: &str) -> bool {
     !credential_ranges(text).is_empty()
 }
 
+/// Redact only URL credentials, retaining useful hosts, paths and parameter
+/// names. Merge overlapping ranges from nested URLs before replacing them.
+pub(crate) fn urls(text: &str) -> String {
+    let mut ranges = credential_ranges(text);
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for range in ranges {
+        if let Some(last) = merged.last_mut()
+            && range.start <= last.end
+        {
+            last.end = last.end.max(range.end);
+        } else {
+            merged.push(range);
+        }
+    }
+    let mut result = String::new();
+    let mut from = 0;
+    for range in merged {
+        result.push_str(&text[from..range.start]);
+        result.push_str("[redacted]");
+        from = range.end;
+    }
+    result.push_str(&text[from..]);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +183,17 @@ mod tests {
         assert!(has_url_credentials(
             "https://example.com/?next=https://u:p@host/live"
         ));
+    }
+
+    #[test]
+    fn redaction_preserves_context_and_handles_overlapping_nested_urls() {
+        assert_eq!(
+            urls("失败 https://u:pw@host/live?quality=1&%74oken=秘密\nretry"),
+            "失败 https://[redacted]@host/live?quality=1&%74oken=[redacted]\nretry"
+        );
+        assert_eq!(
+            urls("https://host/?token=https://u:pw@nested/?key=secret"),
+            "https://host/?token=[redacted]"
+        );
     }
 }

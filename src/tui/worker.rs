@@ -216,11 +216,11 @@ impl View {
     }
     fn fail_operation(&mut self, message: &str) {
         self.operation_error_id += 1;
-        self.operation_error = message.into();
+        self.operation_error = super::display::diagnostic(message);
         self.log(message);
     }
     fn log(&mut self, message: &str) {
-        let message = crate::clean_text(message);
+        let message = crate::clean_text(&super::display::diagnostic(message));
         Arc::make_mut(&mut self.logs)
             .push_back(format!("{} {message}", chrono::Local::now().format("%H:%M:%S")).into());
         while self.logs.len() > 200 {

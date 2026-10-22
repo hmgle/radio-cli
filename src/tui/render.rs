@@ -454,7 +454,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             frame.render_widget(
                 Paragraph::new(
                     match view.page_status(&app.filter) {
-                        PageStatus::Failed(error) => crate::t!("page_failed", "detail" => fit(error, usize::from(rect.width.saturating_sub(2))).trim_end()),
+                        PageStatus::Failed(error) => crate::t!("page_failed", "detail" => fit(&super::display::diagnostic(error), usize::from(rect.width.saturating_sub(2))).trim_end()),
                         PageStatus::Loading => crate::t!("page_loading").into(),
                         PageStatus::Ready => empty_hint(app).into(),
                     },
@@ -507,9 +507,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                         String::new()
                     },
                     "error" => r.error.as_deref().map(|error| if app.recording_error_expanded {
-                        error.lines().map(crate::clean_text).collect::<Vec<_>>().join("\n")
+                        super::display::diagnostic(error)
                     } else {
-                        crate::t!("recording_expand_error", "detail" => crate::clean_text(error.lines().next().unwrap_or("")))
+                        crate::t!("recording_expand_error", "detail" => super::display::diagnostic(error).lines().next().unwrap_or(""))
                     }).unwrap_or_default()
                 )
             }).unwrap_or_else(|| crate::t!("no_recording_records").into())
@@ -517,7 +517,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             crate::t!("details_loading").into()
         } else if app.inspect_info && view.inspected_error.is_some() {
             // scroll_text sanitizes each line while preserving long diagnostics.
-            view.inspected_error.clone().unwrap()
+            super::display::diagnostic(view.inspected_error.as_deref().unwrap())
         } else if let Some(station) = if app.inspect_info {
             view.inspected.as_ref()
         } else {
@@ -565,7 +565,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         .saturating_sub(usize::from(app.activity_scroll));
     let start = end.saturating_sub(visible);
     let mut logs = vec![Line::from(Span::styled(
-        crate::clean_text(&task),
+        crate::clean_text(&super::display::diagnostic(&task)),
         Style::default().fg(if view.task_active {
             Color::Yellow
         } else {
@@ -577,14 +577,14 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             .iter()
             .skip(start)
             .take(end - start)
-            .map(|line| Line::from(line.as_ref())),
+            .map(|line| Line::from(super::display::diagnostic(line))),
     );
     if rect.height == 1 {
         frame.render_widget(
             Paragraph::new(format!(
                 "5 {} · {}",
-                crate::clean_text(&task),
-                crate::clean_text(&view.status.message)
+                crate::clean_text(&super::display::diagnostic(&task)),
+                crate::clean_text(&super::display::diagnostic(&view.status.message))
             )),
             rect,
         );
@@ -631,7 +631,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             &app.message
         };
         frame.render_widget(
-            Paragraph::new(crate::clean_text(hint))
+            Paragraph::new(super::display::diagnostic(hint))
                 .style(Style::default().fg(Color::Yellow))
                 .wrap(Wrap { trim: true }),
             Rect::new(bottom.x, bottom.y + 1, bottom.width, 2),
@@ -709,11 +709,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                     Span::raw(filter),
                 ]),
                 Line::from(if view.operation_error_id > app.dismissed_error {
-                    crate::t!("operation_failed", "detail" => fit(&view.operation_error, usize::from(bottom.width).saturating_sub(crate::t!("operation_failed", "detail" => "").width())).trim_end())
+                    crate::t!("operation_failed", "detail" => fit(&super::display::diagnostic(&view.operation_error), usize::from(bottom.width).saturating_sub(crate::t!("operation_failed", "detail" => "").width())).trim_end())
                 } else if app.message.is_empty() {
                     context.into()
                 } else {
-                    app.message.clone()
+                    super::display::diagnostic(&app.message)
                 }),
                 Line::from(if let Some(keys) = modal_keys {
                     keys
@@ -792,7 +792,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                     Line::from(crate::t!("filter_keys_clear")),
                 ]
             })
-            .chain((!app.message.is_empty()).then(|| Line::from(crate::clean_text(&app.message))))
+            .chain(
+                (!app.message.is_empty())
+                    .then(|| Line::from(super::display::diagnostic(&app.message))),
+            )
             .collect::<Vec<_>>();
         if *selected < 3 {
             let candidates = app.facet_candidates(view, *selected);
@@ -809,7 +812,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 crate::t!("facets_hint")
             }));
             if let Some(error) = &view.facets_error {
-                text.push(Line::from(crate::clean_text(error)));
+                text.push(Line::from(super::display::diagnostic(error)));
             }
             text.extend(candidates.iter().enumerate().skip(start).take(count).map(
                 |(index, facet)| {
@@ -851,7 +854,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         clear_popup(frame, rect);
         let inner = rect.width.saturating_sub(2);
         let lines = match &app.help_content {
-            Some(content) => wrapped_lines(content, inner),
+            Some(content) => wrapped_lines(&super::display::diagnostic(content), inner),
             None => super::help::lines(crate::messages::locale(), &app.jump_binding, inner),
         };
         let (paragraph, extent) = scroll_lines(lines, rect, &mut app.help_scroll);
@@ -878,7 +881,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             fit(&confirmation.summary, usize::from(inner.width)).trim_end(),
             crate::clean_text(&confirmation.id),
             confirmation.scope,
-            crate::clean_text(&confirmation.error)
+            super::display::diagnostic(&confirmation.error)
         );
         frame.render_widget(
             Paragraph::new(body).wrap(Wrap { trim: false }),
@@ -948,7 +951,7 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
         "uuid" => station.stationuuid,
         "url" => crate::clean_text(station.primary_url()),
         "backups" => if let Some(error) = view.backups_errors.get(&station.stationuuid) {
-            crate::clean_text(error)
+            super::display::diagnostic(error)
         } else {
             view.backups
                 .get(&station.stationuuid)

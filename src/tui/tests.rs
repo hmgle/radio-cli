@@ -3922,6 +3922,35 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
 }
 
 #[test]
+fn diagnostics_hide_url_credentials_without_changing_the_playback_url() {
+    let mut data = view();
+    let url = "https://user:private@host/live?token=confidential&quality=high";
+    data.status.source_url = url.into();
+    data.status.playback_state = crate::engine::PlaybackState::Failed {
+        reason: format!("failed to open {url}"),
+    };
+    data.operation_error_id = 1;
+    data.operation_error = format!("request failed: {url}");
+    data.task = format!("sync failed: {url}");
+    let mut app = App::default();
+    let (sender, _) = command::channel(4);
+    let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let screen = text(&terminal);
+    assert!(!screen.contains("private"));
+    assert!(!screen.contains("confidential"));
+    assert!(screen.contains("[redacted]"));
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let screen = text(&terminal);
+    assert!(!screen.contains("private"));
+    assert!(!screen.contains("confidential"));
+    assert!(screen.contains("host/live?token=[redacted]&quality=high"));
+    assert_eq!(data.status.source_url, url);
+    assert!(data.operation_error.contains("private"));
+}
+
+#[test]
 fn failure_details_sanitize_external_control_text_and_scroll_the_full_tail() {
     let mut data = view();
     data.status.recording_state = crate::engine::RecordingState::Failed {
