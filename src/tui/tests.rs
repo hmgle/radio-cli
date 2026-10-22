@@ -2329,6 +2329,124 @@ fn search_cursor_keys_keep_the_selection_and_do_not_requery() {
 }
 
 #[test]
+fn media_states_are_distinguishable_in_header_list_row_and_details() {
+    use crate::engine::PlaybackState as P;
+    let reason = "HTTP 503 from the upstream station while opening the stream";
+    for (state, glyph, label, color) in [
+        (P::Connecting, "…", "Connecting", Color::Yellow),
+        (
+            P::Reconnecting { attempt: 3 },
+            "↻",
+            "Reconnecting (attempt 3)",
+            Color::Yellow,
+        ),
+        (P::Playing, "▶", "Playing", Color::Green),
+        (P::Paused, "‖", "Paused", Color::Yellow),
+        (
+            P::Failed {
+                reason: reason.into(),
+            },
+            "!",
+            "Playback failed: HTTP 503 from",
+            Color::Red,
+        ),
+    ] {
+        let mut data = view();
+        let current = data.status.station.clone().unwrap();
+        Arc::make_mut(&mut data.rows)[0] = current.clone();
+        Arc::make_mut(&mut data.rows)[0].favorite = true;
+        data.status.playback_state = state.clone();
+        let mut app = App::default();
+        app.list.select(Some(1));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        let rendered = text(&terminal);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("│{glyph} {label}"))),
+            "{state:?} header\n{rendered}"
+        );
+        // The marker sits in its own slot before the favourite star.
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("  {glyph}★ Current Station"))),
+            "{state:?} row\n{rendered}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains(&format!("{glyph}  Another Station"))),
+            "{state:?} marks another station\n{rendered}"
+        );
+        let rect = app.rects[Focus::List.index()];
+        let buffer = terminal.backend().buffer();
+        let marker = (rect.y..rect.bottom())
+            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+            .find(|&(x, y)| buffer[(x, y)].symbol() == glyph && buffer[(x + 1, y)].symbol() == "★")
+            .unwrap_or_else(|| panic!("{state:?} list marker missing\n{rendered}"));
+        assert_eq!(buffer[marker].fg, color, "{state:?}");
+        let details = render::station_details(&current, &data);
+        let first = details.lines().next().unwrap();
+        assert!(
+            first.contains(&format!(" · {glyph} {}", state.label())),
+            "{state:?}\n{details}"
+        );
+    }
+
+    // Idle shows no marker and describes the station as merely selected.
+    let mut data = view();
+    let current = data.status.station.clone().unwrap();
+    Arc::make_mut(&mut data.rows)[0] = current.clone();
+    data.status.playback_state = P::Idle;
+    let mut app = App::default();
+    app.list.select(Some(1));
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let rendered = text(&terminal);
+    assert!(rendered.contains("│Idle · Current Station"), "{rendered}");
+    assert!(rendered.contains("┃     Current Station"), "{rendered}");
+    assert!(
+        render::station_details(&current, &data)
+            .lines()
+            .next()
+            .unwrap()
+            .contains("Selected")
+    );
+}
+
+#[test]
+fn failure_reason_in_the_header_scales_with_the_terminal_width() {
+    let reason = "HTTP 503 from the upstream station while opening the stream";
+    let mut data = view();
+    data.status.playback_state = crate::engine::PlaybackState::Failed {
+        reason: reason.into(),
+    };
+    let mut shown = vec![];
+    for width in [80u16, 120, 200] {
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        let rendered = text(&terminal);
+        let line = rendered
+            .lines()
+            .find(|line| line.contains("Playback failed"))
+            .unwrap_or_else(|| panic!("{width}\n{rendered}"));
+        assert!(line.contains(" · ?"), "{width}: {line}");
+        shown.push(line.matches(|c: char| c.is_ascii_alphanumeric()).count());
+    }
+    assert!(shown[0] < shown[1] && shown[1] < shown[2], "{shown:?}");
+}
+
+#[test]
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.

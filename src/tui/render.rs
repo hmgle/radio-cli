@@ -174,7 +174,11 @@ fn screen_layout(area: Rect, focus: Focus, task_active: bool) -> ScreenLayout {
     }
 }
 
-fn station_row(station: &Station, current: bool, width: u16) -> String {
+fn station_row(
+    station: &Station,
+    marker: Option<(&'static str, Style)>,
+    width: u16,
+) -> Line<'static> {
     let width = usize::from(width);
     let suffix = if station.active {
         ""
@@ -193,14 +197,17 @@ fn station_row(station: &Station, current: bool, width: u16) -> String {
             metadata.push_str(&field);
         }
     }
-    format!(
-        "{}{} {}{}{}",
-        if current { "▶" } else { " " },
-        if station.favorite { "★" } else { " " },
-        fit(&station.name, available),
-        metadata,
-        suffix
-    )
+    let (glyph, style) = marker.unwrap_or((" ", Style::default()));
+    Line::from(vec![
+        Span::styled(glyph, style),
+        Span::raw(format!(
+            "{} {}{}{}",
+            if station.favorite { "★" } else { " " },
+            fit(&station.name, available),
+            metadata,
+            suffix
+        )),
+    ])
 }
 
 /// Returns the area covered by artwork, if any was painted.
@@ -226,14 +233,15 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         && app.filter_edit.is_none()
         && app.confirmation.is_none();
     let active = |focus| normal && app.focus == focus;
-    let playing = match &view.status.playback_state {
-        crate::engine::PlaybackState::Failed { reason } => {
-            format!(
-                "{} · ?",
-                crate::t!("playback_failed", "reason" => fit(reason, 12).trim_end())
-            )
+    let reason_width = (usize::from(area.width) / 4).clamp(12, 40);
+    let playing = {
+        let state = &view.status.playback_state;
+        let status = super::display::playback_status(state, reason_width);
+        if matches!(state, crate::engine::PlaybackState::Failed { .. }) {
+            format!("{status} · ?")
+        } else {
+            status
         }
-        state => state.label().into(),
     };
     let recording = format!(
         "{}{}{}",
@@ -449,18 +457,20 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 })
                 .collect()
         } else {
+            let state = &view.status.playback_state;
+            let marker = super::display::playback_glyph(state)
+                .map(|glyph| (glyph, super::display::playback_tone(state).style()));
             view.stations_for(&app.filter)
                 .iter()
                 .map(|s| {
-                    let current = view.status.playing()
-                        && view
-                            .status
-                            .station
-                            .as_ref()
-                            .is_some_and(|now| now.stationuuid == s.stationuuid);
+                    let current = view
+                        .status
+                        .station
+                        .as_ref()
+                        .is_some_and(|now| now.stationuuid == s.stationuuid);
                     ListItem::new(station_row(
                         s,
-                        current,
+                        marker.filter(|_| current),
                         app.rects[Focus::List.index()].width.saturating_sub(4),
                     ))
                 })
@@ -944,10 +954,14 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
     crate::t!(
         "station_details",
         "name" => value(&station.name),
-        "context" => if current.is_some() && view.status.playing() {
-            crate::t!("station_playing")
-        } else {
-            crate::t!("station_selected")
+        "context" => match current {
+            Some(_) if view.status.playback_state != crate::engine::PlaybackState::Idle => {
+                format!(
+                    " · {}",
+                    super::display::playback_status(&view.status.playback_state, 0)
+                )
+            }
+            _ => crate::t!("station_selected").into(),
         },
         "country" => value(&crate::territories::display_in(crate::messages::locale(), &station.countrycode, &station.country)),
         "language" => value(&station.language),

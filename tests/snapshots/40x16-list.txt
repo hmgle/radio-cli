@@ -1,5 +1,5 @@
 ╭ radio · 4 Player · Current station ──╮
-│Current Station · Playing             │
+│Current Station · ▶ Playing           │
 │Song title                            │
 ╰──────────────────────────────────────╯
 ╭ 1 Sources ───────────────────────────╮

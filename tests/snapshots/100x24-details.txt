@@ -1,5 +1,5 @@
 ╭ radio · 4 Player · Current station ──────────────────────────────────────────────────────────────╮
-│Playing · Current Station · Volume 80%                                                            │
+│▶ Playing · Current Station · Volume 80%                                                          │
 │Recording idle · AAC · 192 kbps (catalog)                                                         │
 │FR · french · Song title                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
