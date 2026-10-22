@@ -2447,6 +2447,40 @@ fn failure_reason_in_the_header_scales_with_the_terminal_width() {
 }
 
 #[test]
+fn recording_stages_show_a_timer_and_the_saved_file_in_the_header() {
+    use crate::engine::RecordingState as R;
+    let mut data = view();
+    data.status.recording_ms = 65_400;
+    data.status.recording_path = "/tmp/radio/Current Station-2026.mp3".into();
+    for (state, expected) in [
+        (R::Recording, "● REC 01:05"),
+        (R::Finalizing, "… Finalizing recording · 01:05"),
+        (
+            R::Done,
+            "Recording saved · 01:05 · Current Station-2026.mp3",
+        ),
+    ] {
+        data.status.recording_state = state.clone();
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| render::draw(frame, &mut app, &data))
+            .unwrap();
+        let rendered = text(&terminal);
+        assert!(rendered.contains(expected), "{state:?}\n{rendered}");
+        assert!(!rendered.contains("/tmp/radio"), "{state:?}\n{rendered}");
+    }
+    // The compact layout keeps the timer within its two-line header.
+    data.status.recording_state = R::Recording;
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    assert!(text(&terminal).contains("01:05"), "{}", text(&terminal));
+}
+
+#[test]
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.

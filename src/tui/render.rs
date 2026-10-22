@@ -233,44 +233,17 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         && app.filter_edit.is_none()
         && app.confirmation.is_none();
     let active = |focus| normal && app.focus == focus;
-    let reason_width = (usize::from(area.width) / 4).clamp(12, 40);
+    let detail_width = (usize::from(area.width) / 4).clamp(12, 40);
     let playing = {
         let state = &view.status.playback_state;
-        let status = super::display::playback_status(state, reason_width);
+        let status = super::display::playback_status(state, detail_width);
         if matches!(state, crate::engine::PlaybackState::Failed { .. }) {
             format!("{status} · ?")
         } else {
             status
         }
     };
-    let recording = format!(
-        "{}{}{}",
-        view.status.recording_state.label(),
-        if matches!(
-            view.status.recording_state,
-            crate::engine::RecordingState::Recording
-        ) {
-            format!(
-                " ● REC {}s{}",
-                view.status.recording_ms / 1000,
-                if view.status.paused() {
-                    crate::t!("player_recording_continues")
-                } else {
-                    ""
-                }
-            )
-        } else {
-            String::new()
-        },
-        if matches!(
-            view.status.recording_state,
-            crate::engine::RecordingState::Failed { .. }
-        ) {
-            crate::t!("player_error_details")
-        } else {
-            ""
-        }
-    );
+    let recording = super::display::recording_header(&view.status, detail_width);
     let volume = format!(
         "{}%{}",
         view.status.volume,

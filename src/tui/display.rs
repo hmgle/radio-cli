@@ -1,6 +1,6 @@
 //! Display-only formatting shared by lists, details and the player header.
 
-use crate::engine::PlaybackState;
+use crate::engine::{PlaybackState, RecordingState, Status};
 use ratatui::style::{Color, Style};
 
 /// Semantic class of a media state. Colour only reinforces the glyph and the
@@ -68,6 +68,39 @@ pub(super) fn playback_status(state: &PlaybackState, reason_width: usize) -> Str
     match playback_glyph(state) {
         Some(glyph) => format!("{glyph} {label}"),
         None => label,
+    }
+}
+
+/// The recording segment of the player header. The timer is `MM:SS`; once
+/// recording stops it stays at the final length, and a saved file shows its
+/// name (cut to `name_width` cells). The full path is in the recordings list.
+pub(super) fn recording_header(status: &Status, name_width: usize) -> String {
+    let label = status.recording_state.label();
+    let timer = duration(status.recording_ms);
+    match &status.recording_state {
+        RecordingState::Recording => format!(
+            "{label} ● REC {timer}{}",
+            if status.paused() {
+                crate::t!("player_recording_continues")
+            } else {
+                ""
+            }
+        ),
+        RecordingState::Finalizing => format!("… {label} · {timer}"),
+        RecordingState::Done => {
+            let file = std::path::Path::new(&status.recording_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            if file.is_empty() {
+                format!("{label} · {timer}")
+            } else {
+                let file = super::render::fit(file, name_width);
+                format!("{label} · {timer} · {}", file.trim_end())
+            }
+        }
+        RecordingState::Failed { .. } => format!("{label}{}", crate::t!("player_error_details")),
+        RecordingState::Idle | RecordingState::Probing => label.into(),
     }
 }
 
@@ -170,6 +203,76 @@ mod tests {
             .map(|tone| format!("{:?}", tone.style()))
             .collect();
         assert_eq!(styles.len(), 3);
+    }
+
+    #[test]
+    fn recording_header_shows_a_readable_timer_that_freezes_after_stopping() {
+        use crate::engine::PlaybackState;
+        let mut status = Status {
+            station: None,
+            title: String::new(),
+            message: String::new(),
+            playback_state: PlaybackState::Playing,
+            volume: 80,
+            muted: false,
+            recording_state: RecordingState::Idle,
+            recording_ms: 0,
+            recording_path: String::new(),
+            source_url: String::new(),
+        };
+        status.recording_ms = 3_725_900;
+        status.recording_path = "/music/radio/Jazz FM-2026.mp3".into();
+
+        status.recording_state = RecordingState::Idle;
+        assert_eq!(recording_header(&status, 20), RecordingState::Idle.label());
+        status.recording_state = RecordingState::Probing;
+        assert_eq!(
+            recording_header(&status, 20),
+            RecordingState::Probing.label()
+        );
+
+        status.recording_state = RecordingState::Recording;
+        let text = recording_header(&status, 20);
+        assert!(text.contains("● REC 1:02:05"), "{text}");
+        assert!(!text.contains("3725"), "{text}");
+        assert!(!text.contains(crate::t!("player_recording_continues")));
+        status.playback_state = PlaybackState::Paused;
+        assert!(recording_header(&status, 20).ends_with(crate::t!("player_recording_continues")));
+
+        status.recording_state = RecordingState::Finalizing;
+        status.recording_ms = 65_400;
+        let text = recording_header(&status, 20);
+        assert!(text.starts_with("… "), "{text}");
+        assert!(text.contains(RecordingState::Finalizing.label()), "{text}");
+        assert!(text.ends_with("· 01:05"), "{text}");
+
+        status.recording_state = RecordingState::Done;
+        let text = recording_header(&status, 40);
+        assert_eq!(
+            text,
+            format!(
+                "{} · 01:05 · Jazz FM-2026.mp3",
+                RecordingState::Done.label()
+            )
+        );
+        let cut = recording_header(&status, 8);
+        assert!(
+            !cut.contains("2026.mp3") && cut.contains("Jazz FM"),
+            "{cut}"
+        );
+        assert!(!cut.contains('/'), "{cut}");
+        status.recording_path.clear();
+        assert_eq!(
+            recording_header(&status, 40),
+            format!("{} · 01:05", RecordingState::Done.label())
+        );
+
+        status.recording_state = RecordingState::Failed {
+            reason: "disk full".into(),
+        };
+        let text = recording_header(&status, 20);
+        assert!(text.ends_with(crate::t!("player_error_details")), "{text}");
+        assert!(!text.contains("disk full"), "{text}");
     }
 
     #[test]
