@@ -7,7 +7,7 @@ use crate::model::Station;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
@@ -94,40 +94,11 @@ fn fit_clean(text: &str, width: usize) -> String {
 }
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
-    let image = draw_content(frame, app, view);
-    let theme = app.theme;
-    if theme == crate::config::Theme::Default {
-        return;
-    }
-    let width = usize::from(frame.area().width);
-    for (index, cell) in frame.buffer_mut().content.iter_mut().enumerate() {
-        // Artwork colors are picture data, not interface colors.
-        if let Some(image) = image
-            && image.contains(ratatui::layout::Position::new(
-                (index % width) as u16,
-                (index / width) as u16,
-            ))
-        {
-            continue;
-        }
-        if theme == crate::config::Theme::Mono {
-            cell.fg = Color::Reset;
-            cell.bg = Color::Reset;
-        } else {
-            let selected = cell.bg == Color::Cyan;
-            cell.fg = if selected {
-                Color::White
-            } else {
-                match cell.fg {
-                    Color::Cyan => Color::Blue,
-                    Color::Yellow => Color::Magenta,
-                    Color::Gray | Color::DarkGray | Color::White | Color::Reset => Color::Black,
-                    color => color,
-                }
-            };
-            cell.bg = if selected { Color::Blue } else { Color::White };
-        }
-    }
+    let area = frame.area();
+    frame
+        .buffer_mut()
+        .set_style(area, super::styles::base(app.theme));
+    draw_content(frame, app, view);
 }
 
 struct ScreenLayout {
@@ -784,7 +755,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     }
     if let Some((selected, values)) = &app.filter_edit {
         let rect = popup(area, 72, 18);
-        clear_popup(frame, rect);
+        clear_popup(frame, rect, app.theme);
         let names = [
             crate::t!("filter_country"),
             crate::t!("filter_language"),
@@ -894,7 +865,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     }
     if app.help {
         let rect = popup(area, 88, area.height.saturating_sub(2));
-        clear_popup(frame, rect);
+        clear_popup(frame, rect, app.theme);
         let inner = rect.width.saturating_sub(2);
         let lines = match &app.help_content {
             Some(content) => wrapped_lines(&super::display::diagnostic(content), inner),
@@ -921,7 +892,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     }
     if let Some(confirmation) = &app.confirmation {
         let rect = popup(area, 72, area.height.saturating_sub(2));
-        clear_popup(frame, rect);
+        clear_popup(frame, rect, app.theme);
         let inner = rect.inner(ratatui::layout::Margin::new(1, 1));
         frame.render_widget(
             panel(app.theme, crate::t!("confirm_delete").into(), true),
@@ -1151,16 +1122,17 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 /// terminal. Clearing the adjacent column resets any wide character there and
 /// lets the border through. The right border needs no such treatment: its left
 /// neighbour always lies inside the cleared popup.
-fn clear_popup(frame: &mut Frame, rect: Rect) {
-    frame.render_widget(
-        Clear,
-        Rect::new(
-            rect.x.saturating_sub(1),
-            rect.y,
-            rect.width.saturating_add(1),
-            rect.height,
-        ),
+fn clear_popup(frame: &mut Frame, rect: Rect, theme: crate::config::Theme) {
+    let cleared = Rect::new(
+        rect.x.saturating_sub(1),
+        rect.y,
+        rect.width.saturating_add(1),
+        rect.height,
     );
+    frame.render_widget(Clear, cleared);
+    frame
+        .buffer_mut()
+        .set_style(cleared, super::styles::base(theme));
 }
 
 pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {

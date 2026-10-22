@@ -3942,6 +3942,26 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
 }
 
 #[test]
+fn light_popups_keep_the_cleared_border_column_on_the_light_background() {
+    let data = view();
+    let mut app = App::default();
+    app.theme = crate::config::Theme::Light;
+    app.help = true;
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    // The popup clears one extra column to avoid wide-character diff skips.
+    // That column must inherit the theme background too.
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer
+            .content
+            .iter()
+            .all(|cell| cell.bg == ratatui::style::Color::White
+                || cell.bg == ratatui::style::Color::Blue)
+    );
+}
+
+#[test]
 fn viewport_keys_use_visible_rows_and_preserve_selection_when_aligning() {
     let mut data = view();
     data.rows = Arc::new((0..30).map(|n| station(&format!("Row {n}"))).collect());
