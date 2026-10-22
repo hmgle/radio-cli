@@ -3942,6 +3942,41 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
 }
 
 #[test]
+fn viewport_keys_use_visible_rows_and_preserve_selection_when_aligning() {
+    let mut data = view();
+    data.rows = Arc::new((0..30).map(|n| station(&format!("Row {n}"))).collect());
+    let mut app = App::default();
+    app.rects[Focus::List.index()] = ratatui::layout::Rect::new(0, 0, 80, 12);
+    *app.list.offset_mut() = 8;
+    let (sender, _receiver) = command::channel(4);
+    for (key_char, expected) in [('H', 8), ('M', 12), ('L', 17)] {
+        app.key(key(KeyCode::Char(key_char)), &data, &sender);
+        assert_eq!(app.list.selected(), Some(expected));
+    }
+    for (suffix, expected) in [('t', 17), ('z', 13), ('b', 8)] {
+        app.key(key(KeyCode::Char('z')), &data, &sender);
+        app.key(key(KeyCode::Char(suffix)), &data, &sender);
+        assert_eq!(app.list.offset(), expected);
+        assert_eq!(app.list.selected(), Some(17));
+    }
+    // Short final viewport and a resized-away list stay bounded.
+    *app.list.offset_mut() = 28;
+    app.key(key(KeyCode::Char('L')), &data, &sender);
+    assert_eq!(app.list.selected(), Some(29));
+    app.rects[Focus::List.index()].height = 0;
+    app.key(key(KeyCode::Char('H')), &data, &sender);
+    assert_eq!(app.list.selected(), Some(29));
+    // Configured locate sequences consume their keys before viewport actions.
+    app.jump_binding = "zz".into();
+    app.key(key(KeyCode::Char('z')), &data, &sender);
+    app.key(key(KeyCode::Char('z')), &data, &sender);
+    assert!(matches!(
+        _receiver.try_recv(),
+        Ok(Command::LocatePlaying { .. })
+    ));
+}
+
+#[test]
 fn scrolling_logs_keeps_the_visible_entries_as_messages_arrive() {
     let mut data = view();
     data.logs = Arc::new(

@@ -269,6 +269,8 @@ Ctrl-h/j/k/l or Ctrl-arrows\tSwitch panels by direction
 [ / ]\tSwitch category (each remembers its page and row)
 j/k, Up / Down\tMove the selection or scroll (in Sources: switch category)
 gg / G, Home / End\tFirst/last item
+H / M / L\tSelect the top/middle/bottom visible list row
+zt / zz / zb\tPlace the selected list row at the top/middle/bottom
 Ctrl-u / Ctrl-d\tMove ten items
 Ctrl-e / Ctrl-y\tMove or scroll one line down / up
 PgUp / PgDn, Ctrl-b / Ctrl-f\tList: previous/next database page · other panels: scroll ten lines

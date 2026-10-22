@@ -502,7 +502,7 @@ pub(super) struct App {
     pub too_small: bool,
     size: (u16, u16),
     pub dismissed_error: u64,
-    pending_g: bool,
+    pending_nav: Option<(char, Instant)>,
     rows_revision: u64,
     selected_id: Option<String>,
     restore_selection: Option<String>,
@@ -569,7 +569,7 @@ impl Default for App {
             too_small: false,
             size: (0, 0),
             dismissed_error: 0,
-            pending_g: false,
+            pending_nav: None,
             rows_revision: 0,
             selected_id: None,
             restore_selection: None,
@@ -659,7 +659,7 @@ impl App {
             self.confirmation = None;
             self.message.clear();
             // Preserve editor/filter drafts and deferred searches until visible.
-            self.pending_g = false;
+            self.pending_nav = None;
             self.jump_progress = 0;
             self.jump_last = None;
             self.last_click = None;
@@ -1044,6 +1044,38 @@ impl App {
         self.activity_seen_scroll = self.activity_scroll;
     }
     /// PgUp/PgDn: turn the catalog page in the list, scroll ten lines elsewhere.
+    fn viewport(&mut self, key: KeyCode, view: &View, align: bool) {
+        if self.focus != Focus::List || !view.page_ready(&self.filter) {
+            return;
+        }
+        let height = usize::from(self.rects[Focus::List.index()].height.saturating_sub(2));
+        let len = self.length(view);
+        if height == 0 || len == 0 {
+            return;
+        }
+        if align {
+            let selected = self.list.selected().unwrap_or(0).min(len - 1);
+            let above = match key {
+                KeyCode::Char('t') => 0,
+                KeyCode::Char('b') => height - 1,
+                _ => (height - 1) / 2,
+            };
+            *self.list.offset_mut() = selected.saturating_sub(above);
+        } else {
+            let first = self.list.offset().min(len - 1);
+            let last = (first + height - 1).min(len - 1);
+            let index = match key {
+                KeyCode::Char('H') => first,
+                KeyCode::Char('L') => last,
+                _ => first + (last - first) / 2,
+            };
+            self.list.select(Some(index));
+            self.selected_id = self.selection_id(view);
+            self.inspect_info = false;
+            self.details_scroll = 0;
+        }
+    }
+
     fn page(&mut self, forward: bool, view: &View, sender: &CommandSender) {
         if self.focus != Focus::List {
             self.move_selection(if forward { 10 } else { -10 }, view);
@@ -1257,7 +1289,7 @@ impl App {
             self.jump_progress = 0;
         }
         if sequence.get(self.jump_progress) == Some(&stroke) {
-            self.pending_g = false;
+            self.pending_nav = None;
             self.jump_progress += 1;
             self.jump_last = Some(Instant::now());
             if self.jump_progress == sequence.len() {
@@ -1564,8 +1596,17 @@ impl App {
             }
             return;
         }
-        let gg = self.pending_g && key.code == KeyCode::Char('g');
-        self.pending_g = false;
+        let pending = self
+            .pending_nav
+            .take()
+            .filter(|(_, time)| time.elapsed() <= Duration::from_secs(1));
+        let gg = pending.is_some_and(|(key, _)| key == 'g') && key.code == KeyCode::Char('g');
+        if pending.is_some_and(|(key, _)| key == 'z')
+            && matches!(key.code, KeyCode::Char('z' | 't' | 'b'))
+        {
+            self.viewport(key.code, view, true);
+            return;
+        }
         match key.code {
             KeyCode::Char(':') => {
                 self.mode = Mode::Command;
@@ -1643,7 +1684,13 @@ impl App {
             KeyCode::Char('l') | KeyCode::Right => self.focus_direction(1, 0),
             KeyCode::Home => self.move_selection(-10000, view),
             KeyCode::Char('g') if gg => self.move_selection(-10000, view),
-            KeyCode::Char('g') => self.pending_g = true,
+            KeyCode::Char('g') => self.pending_nav = Some(('g', Instant::now())),
+            KeyCode::Char('z') if self.focus == Focus::List => {
+                self.pending_nav = Some(('z', Instant::now()))
+            }
+            KeyCode::Char('H' | 'M' | 'L') if self.focus == Focus::List => {
+                self.viewport(key.code, view, false)
+            }
             KeyCode::End | KeyCode::Char('G') => self.move_selection(10000, view),
             KeyCode::PageDown => self.page(true, view, sender),
             KeyCode::PageUp => self.page(false, view, sender),
