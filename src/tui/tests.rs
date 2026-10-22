@@ -1763,6 +1763,32 @@ fn recording_refresh_preserves_selected_identity() {
 }
 
 #[test]
+fn recording_rows_and_details_show_localized_status_duration_and_size() {
+    let recording: crate::model::Recording = serde_json::from_value(serde_json::json!({
+        "id":"r","stationuuid":"s","station_name":"Night FM","source_url_resolved":"https://example.com",
+        "started_at":"2026-01-01","stopped_at":null,"media_duration_ms":65_400,"codec":"mp3",
+        "container":"mp3","path":"/tmp/test","size_bytes":1_536_000,"status":"interrupted","error":null
+    }))
+    .unwrap();
+    let mut data = view();
+    data.recordings = vec![recording].into();
+    data.recordings_revision = 1;
+    let mut app = App::default();
+    app.source = Source::Recordings;
+    app.reconcile(&data);
+    let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let screen = text(&terminal);
+    assert!(screen.contains(crate::t!("recording_status_interrupted")));
+    assert!(screen.contains("01:05"));
+    assert!(screen.contains("1.5 MiB"));
+    assert!(screen.contains(&crate::t!("size_bytes", "count" => 1_536_000)));
+    assert!(!screen.contains("interrupted"));
+}
+
+#[test]
 fn recordings_list_marks_reconnected_recordings() {
     let recording = |id: &str, reconnects: u64| {
         serde_json::from_value(serde_json::json!({

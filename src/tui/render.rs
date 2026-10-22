@@ -448,11 +448,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                     let width = usize::from(app.rects[Focus::List.index()].width.saturating_sub(4));
                     let status = format!(
                         " · {}{}",
-                        r.status,
+                        super::display::recording_status(&r.status),
                         if r.reconnects > 0 {
-                            crate::t!("recording_gap_marker")
+                            format!(" · {}", crate::t!("recording_gap_marker"))
                         } else {
-                            ""
+                            String::new()
                         }
                     );
                     let path = if width >= 70 {
@@ -525,15 +525,15 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 crate::t!(
                     "recording_details",
                     "name" => value(&r.station_name),
-                    "status" => r.status,
+                    "status" => super::display::recording_status(&r.status),
                     "codec" => r.codec,
                     "container" => r.container,
                     "duration" => r.media_duration_ms
-                        .map(|ms| format!("{:.1}s", ms as f64 / 1000.))
+                        .map(super::display::duration)
                         .unwrap_or_else(|| crate::t!("value_unknown").into()),
-                    "size" => r.size_bytes,
+                    "size" => super::display::size(r.size_bytes),
                     "started" => r.started_at,
-                    "stopped" => r.stopped_at.as_deref().unwrap_or(crate::t!("recording_in_progress")),
+                    "stopped" => super::display::recording_stop_time(&r.status, r.stopped_at.as_deref()),
                     "uuid" => r.stationuuid,
                     "url" => crate::clean_text(&r.source_url_resolved),
                     "path" => crate::clean_text(&r.path),

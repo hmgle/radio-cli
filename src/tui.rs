@@ -1,6 +1,7 @@
 mod artwork;
 mod capabilities;
 mod command;
+mod display;
 mod output;
 mod render;
 mod state;
