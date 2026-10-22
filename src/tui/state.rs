@@ -866,6 +866,31 @@ impl App {
             Focus::Player => {}
         }
     }
+    /// PgUp/PgDn: turn the catalog page in the list, scroll ten lines elsewhere.
+    fn page(&mut self, forward: bool, view: &View, sender: &CommandSender) {
+        if self.focus != Focus::List {
+            self.move_selection(if forward { 10 } else { -10 }, view);
+            return;
+        }
+        if !view.page_ready(&self.filter) {
+            return;
+        }
+        let total = if self.source == Source::Recordings {
+            view.recordings_total
+        } else {
+            view.total
+        };
+        let next = self.filter.offset.saturating_add(self.filter.limit);
+        if forward && next < total {
+            self.filter.offset = next;
+        } else if !forward {
+            self.filter.offset = self.filter.offset.saturating_sub(self.filter.limit);
+        } else {
+            return;
+        }
+        self.reset_selection();
+        self.flush_search(sender);
+    }
     fn execute_line(&mut self, view: &View, sender: &CommandSender) {
         match command::parse(
             &self.editor.text,
@@ -1098,7 +1123,7 @@ impl App {
         } else if control {
             matches!(
                 key.code,
-                KeyCode::Char('h' | 'j' | 'k' | 'l' | 'u' | 'd')
+                KeyCode::Char('h' | 'j' | 'k' | 'l' | 'u' | 'd' | 'e' | 'y' | 'f' | 'b')
                     | KeyCode::Left
                     | KeyCode::Right
                     | KeyCode::Up
@@ -1294,6 +1319,10 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => self.focus_direction(0, -1),
                 KeyCode::Char('u') => self.move_selection(-10, view),
                 KeyCode::Char('d') => self.move_selection(10, view),
+                KeyCode::Char('e') => self.move_selection(1, view),
+                KeyCode::Char('y') => self.move_selection(-1, view),
+                KeyCode::Char('f') => self.page(true, view, sender),
+                KeyCode::Char('b') => self.page(false, view, sender),
                 _ => {}
             }
             return;
@@ -1359,28 +1388,8 @@ impl App {
             KeyCode::Char('g') if gg => self.move_selection(-10000, view),
             KeyCode::Char('g') => self.pending_g = true,
             KeyCode::End | KeyCode::Char('G') => self.move_selection(10000, view),
-            KeyCode::PageDown | KeyCode::PageUp if self.focus == Focus::List => {
-                if !view.page_ready(&self.filter) {
-                    return;
-                }
-                let total = if self.source == Source::Recordings {
-                    view.recordings_total
-                } else {
-                    view.total
-                };
-                let next = self.filter.offset.saturating_add(self.filter.limit);
-                if key.code == KeyCode::PageDown && next < total {
-                    self.filter.offset = next;
-                } else if key.code == KeyCode::PageUp {
-                    self.filter.offset = self.filter.offset.saturating_sub(self.filter.limit);
-                } else {
-                    return;
-                }
-                self.reset_selection();
-                self.flush_search(sender);
-            }
-            KeyCode::PageDown => self.move_selection(10, view),
-            KeyCode::PageUp => self.move_selection(-10, view),
+            KeyCode::PageDown => self.page(true, view, sender),
+            KeyCode::PageUp => self.page(false, view, sender),
             KeyCode::Enter
                 if self.focus == Focus::List && view.page_error(&self.filter).is_some() =>
             {

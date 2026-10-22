@@ -137,7 +137,8 @@ TUI keys:
 | `F` | Country/region code, language, tag, and minimum-bitrate filters |
 | `[` / `]` | Stations / favorites / recent / recordings categories |
 | `gg` / `G` | First / last item in the list |
-| `PgUp` / `PgDn` | Page through the station list |
+| `PgUp` / `PgDn`, `Ctrl-b` / `Ctrl-f` | Page through the station list |
+| `Ctrl-e` / `Ctrl-y` | Move down / up one line in the focused panel |
 | `?` | Open help or current failure details |
 | `q` / `Ctrl-C` | Finalize recordings and quit |
 

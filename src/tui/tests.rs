@@ -2201,6 +2201,95 @@ fn auto_repeat_moves_and_edits_but_never_triggers_actions() {
 }
 
 #[test]
+fn ctrl_aliases_scroll_and_page_by_focus_without_leaking_into_inputs() {
+    let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    let mut data = view();
+    Arc::make_mut(&mut data.rows).resize(30, station("row"));
+    data.total = 500;
+    let (tx, rx) = command::channel(16);
+
+    // List: Ctrl-e/y move one row, Ctrl-f/b turn catalog pages like PgDn/PgUp.
+    let mut app = App::default();
+    app.focus = Focus::List;
+    app.list.select(Some(5));
+    app.key(ctrl('e'), &data, &tx);
+    assert_eq!(app.list.selected(), Some(6));
+    app.key(ctrl('y'), &data, &tx);
+    app.key(ctrl('y'), &data, &tx);
+    assert_eq!(app.list.selected(), Some(4));
+    assert!(rx.try_recv().is_err());
+    app.key(ctrl('f'), &data, &tx);
+    assert_eq!(app.filter.offset, app.filter.limit);
+    assert!(rx.try_recv().is_ok());
+    data.filter = app.filter.clone();
+    app.key(ctrl('b'), &data, &tx);
+    assert_eq!(app.filter.offset, 0);
+    assert!(rx.try_recv().is_ok());
+
+    // Details and Activity scroll; Sources and Player have nothing to scroll.
+    app.focus = Focus::Details;
+    for (code, expected) in [('e', 1), ('f', 11), ('y', 10), ('b', 0), ('b', 0)] {
+        app.key(ctrl(code), &data, &tx);
+        assert_eq!(app.details_scroll, expected, "Ctrl-{code}");
+    }
+    app.focus = Focus::Activity;
+    app.activity_scroll = 30;
+    for (code, expected) in [('e', 29), ('f', 19), ('y', 20), ('b', 30)] {
+        app.key(ctrl(code), &data, &tx);
+        assert_eq!(app.activity_scroll, expected, "Ctrl-{code}");
+    }
+    for focus in [Focus::Sources, Focus::Player] {
+        app.focus = focus;
+        for code in ['e', 'y', 'f', 'b'] {
+            app.key(ctrl(code), &data, &tx);
+        }
+        assert_eq!((app.focus, app.source), (focus, Source::Stations));
+    }
+    assert!(rx.try_recv().is_err());
+
+    // A held key still scrolls when the terminal reports repeats.
+    app.focus = Focus::Details;
+    app.details_scroll = 0;
+    app.key(
+        KeyEvent::new_with_kind(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL,
+            crossterm::event::KeyEventKind::Repeat,
+        ),
+        &data,
+        &tx,
+    );
+    assert_eq!(app.details_scroll, 1);
+
+    // A configured locate binding keeps precedence over the aliases.
+    let mut located = view();
+    Arc::make_mut(&mut located.rows).resize(30, station("row"));
+    Arc::make_mut(&mut located.rows).push(located.status.station.clone().unwrap());
+    let mut app = App::default();
+    app.jump_binding = "<Ctrl-e>".into();
+    app.list.select(Some(0));
+    app.key(ctrl('e'), &located, &tx);
+    assert_eq!(app.list.selected(), Some(30));
+
+    // Text inputs and the help overlay never run the aliases.
+    for open in ['/', ':', '?', 'F'] {
+        let mut app = App::default();
+        app.list.select(Some(5));
+        app.key(key(KeyCode::Char(open)), &data, &tx);
+        let _ = rx.try_recv();
+        for code in ['e', 'y', 'f', 'b'] {
+            app.key(ctrl(code), &data, &tx);
+        }
+        if open != '/' {
+            assert_eq!(app.list.selected(), Some(5), "after {open}");
+        }
+        assert_eq!((app.help_scroll, app.filter.offset), (0, 0), "after {open}");
+        assert!(app.editor.text.is_empty(), "after {open}");
+        assert!(rx.try_recv().is_err(), "after {open}");
+    }
+}
+
+#[test]
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.
