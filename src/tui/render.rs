@@ -1045,7 +1045,7 @@ pub(super) fn field_lines(content: &str, width: usize) -> Vec<Line<'static>> {
         } else {
             label_width + 1
         };
-        if stacked {
+        if stacked && !label.is_empty() {
             result.extend(
                 super::text::wrap_words(&label, width)
                     .into_iter()

@@ -4429,6 +4429,27 @@ fn details_name_the_origin_and_backup_request_phase() {
 }
 
 #[test]
+fn backup_continuations_do_not_insert_blank_labels() {
+    let urls = ["https://a.test/one", "https://b.test/two"];
+    let content = format!("Backups:\t{}\n\t{}", urls[0], urls[1]);
+    for width in [12, 38, 44, 60] {
+        let lines: Vec<_> = render::field_lines(&content, width)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            lines.iter().all(|line| !line.trim().is_empty()),
+            "{width}: {lines:?}"
+        );
+        let values: String = lines
+            .iter()
+            .map(|line| line.strip_prefix("Backups:").unwrap_or(line).trim())
+            .collect();
+        assert_eq!(values, urls.concat(), "{width}");
+    }
+}
+
+#[test]
 fn station_fields_align_or_stack_and_keep_the_whole_address() {
     let url = "https://example.com/very/long/path?quality=high&language=中文&another=value";
     let content = format!("Catalog\nCountry:\tFrance\nLanguage:\tFrench\n\nAddresses\nURL:\t{url}");
