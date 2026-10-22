@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Keep small terminals usable, isolate deletion confirmations, and make list
+  query failures visible with bounded retries and stale-result protection.
+- Edit and measure complete Unicode grapheme clusters, handle bracketed paste,
+  and ignore repeat events for one-shot actions when the terminal identifies them.
+- Unify playback markers and recording timers, and allow locating the last
+  requested station after playback fails without replaying it.
+- Build localized keyboard help from structured sections, give diagnostic
+  popups specific titles, and scroll long content through its measured extent.
+- Expire ordinary notices, name copy and favorite targets, restore cancelled
+  search positions, and remember each source's page and row for the session.
+- Group and align station details, identify their source, show backup lookup
+  states, and reuse wrapped content when calculating artwork space.
+- Exclude commands containing URL credentials from command history with a
+  notice. Redact credentials in TUI diagnostics and explain OSC 52 truncation.
+- Anchor scrolled task logs, count new messages, and add H/M/L and zt/zz/zb
+  viewport navigation with a one-second sequence timeout.
+- Resolve interface theme styles before painting widgets, preserve artwork
+  colors in light mode, and keep monochrome terminal output free of SGR.
+
 ## 0.7.0 — 2026-10-21
 
 - Cache distinct station facets and index normalized stream URLs, removing

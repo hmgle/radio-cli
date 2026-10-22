@@ -137,6 +137,8 @@ TUI keys:
 | `F` | Country/region code, language, tag, and minimum-bitrate filters |
 | `[` / `]` | Stations / favorites / recent / recordings categories; each remembers its page and row for the session |
 | `gg` / `G` | First / last item in the list |
+| `H` / `M` / `L` | Select the top / middle / bottom visible list row |
+| `zt` / `zz` / `zb` | Place the selected row at the top / middle / bottom of the viewport |
 | `PgUp` / `PgDn`, `Ctrl-b` / `Ctrl-f` | Page through the station list |
 | `Ctrl-e` / `Ctrl-y` | Move down / up one line in the focused panel |
 | `?` | Open help or current failure details (`h` inside failure details or command usage switches to the keyboard help; scroll with `j`/`k`, `PgUp`/`PgDn`, `g`/`G`, `Ctrl-e`/`Ctrl-y`/`Ctrl-b`/`Ctrl-f`) |
@@ -336,6 +338,10 @@ Command history retains 100 entries across sessions; commands containing URL
 credentials (user info or secret query parameters) still run but are not saved.
 `:help record` shows command usage and `:set language en|zh-CN` changes migrated
 messages for this session.
+Diagnostics hide URL credentials; playback and explicit URL copying retain the
+original address. OSC 52 copy requests exceeding 4096 bytes report truncation.
+Details identify the selected, inspected, or current station and show backup
+lookup status. Scrolled task logs keep their position and count new messages.
 
 Recording space preflight prefers probed audio bitrate, then container bitrate,
 then catalog bitrate. With no duration or no known bitrate, it checks only the
