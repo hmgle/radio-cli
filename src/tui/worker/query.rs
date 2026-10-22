@@ -731,6 +731,53 @@ mod tests {
     }
 
     #[test]
+    fn external_commit_bypasses_page_retry_backoff() {
+        for asynchronous in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+            config.prepare().unwrap();
+            let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            let path = dir.path().join("radio.db");
+            let row = Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: "favorite".into(),
+                active: true,
+                ..Station::default()
+            };
+            engine.store.upsert(&row).unwrap();
+            let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+            let reader = asynchronous.then(|| Worker::start(&path, &view).unwrap());
+            if let Some(reader) = &reader {
+                view.lock().unwrap().queries = Some(reader.sender.clone());
+            }
+            let filter = Filter {
+                limit: 100,
+                ..Filter::default()
+            };
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            wait(&view, |v| v.page_ready(&filter));
+            assert!(!view.lock().unwrap().rows[0].favorite);
+            let before = engine.store.revision().unwrap();
+            {
+                let mut data = view.lock().unwrap();
+                data.fail_page(&filter, "Transient query failure".into());
+                data.page_retry_at = Some(Instant::now() + Duration::from_secs(30));
+            }
+            let external = Store::open(&path).unwrap();
+            external.favorite(&row.stationuuid, true).unwrap();
+            assert_ne!(engine.store.revision().unwrap(), before);
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            assert!(
+                view.lock().unwrap().page_error(&filter).is_none(),
+                "external commit ignored while retry deadline is pending"
+            );
+            wait(&view, |v| v.page_ready(&filter));
+            assert!(view.lock().unwrap().rows[0].favorite);
+            assert!(view.lock().unwrap().page_retry_at.is_none());
+        }
+    }
+
+    #[test]
     fn owner_revision_failure_retries_the_pending_request_without_a_store_change() {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         let dir = tempfile::tempdir().unwrap();
@@ -754,6 +801,8 @@ mod tests {
         ] {
             worker::execute(command, &mut engine, &mut filter, &mut job, &view).unwrap();
             let revision = engine.store.revision().unwrap();
+            // Isolate retry intent from the preference write's revision change.
+            view.lock().unwrap().store_revision = Some(revision);
             engine
                 .store
                 .test_connection()
@@ -772,6 +821,28 @@ mod tests {
                 }));
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             assert!(view.lock().unwrap().page_error(&filter).is_some());
+            let retry_state = {
+                let data = view.lock().unwrap();
+                (
+                    data.page_retry_at,
+                    data.page_retry_attempt,
+                    data.logs_revision,
+                    data.revision,
+                )
+            };
+            for _ in 0..3 {
+                worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+                let data = view.lock().unwrap();
+                assert_eq!(
+                    (
+                        data.page_retry_at,
+                        data.page_retry_attempt,
+                        data.logs_revision,
+                        data.revision
+                    ),
+                    retry_state
+                );
+            }
             engine
                 .store
                 .test_connection()

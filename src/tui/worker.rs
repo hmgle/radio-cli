@@ -57,6 +57,8 @@ pub(super) struct View {
     refresh_requested: bool,
     page_retry_at: Option<Instant>,
     page_retry_attempt: u32,
+    // Keep failure history across automatic retries for log deduplication and
+    // backoff counting; a Loading page does not mean the failure has recovered.
     page_failure: Option<(Filter, String)>,
     pub immediate_revision: u64,
     pub recordings_revision: u64,
@@ -385,19 +387,17 @@ pub(super) fn refresh_if_needed(
     view: &Arc<Mutex<View>>,
     recording_ended: bool,
 ) -> Result<()> {
-    let data = view.lock().unwrap();
-    if !data.refresh_requested
-        && !recording_ended
-        && data.page_retry_at.is_some_and(|at| Instant::now() < at)
-    {
-        return Ok(());
-    }
-    drop(data);
+    // Probe revisions on every tick so external commits bypass page backoff.
     let revision = match engine.store.revision() {
         Ok(revision) => revision,
         Err(error) => {
             let mut data = view.lock().unwrap();
-            data.fail_page(filter, format!("{error:#}"));
+            if data.refresh_requested
+                || recording_ended
+                || data.page_retry_at.is_none_or(|at| Instant::now() >= at)
+            {
+                data.fail_page(filter, format!("{error:#}"));
+            }
             return Ok(());
         }
     };
