@@ -1,5 +1,31 @@
 # 验证记录
 
+## 0.8.0 release candidate — 2026-10-22
+
+- Linux all-target/all-feature tests: 345 passed, zero failures (lib 245, cli 29,
+  media 34, storage 24, tui 7, directory 6); storage 与 catalog_perf 的 3 个
+  ignored 基准不计入。格式化与严格 all-target/all-feature Clippy 在锁定依赖下通过。
+  注意：`tests/cli.rs` 的辅助函数只隔离 `--data-dir`，不断开默认配置路径，因此本机
+  `~/.config/radio-cli/config.toml` 设 `language = "zh-CN"` 时，两条断言英文文案的
+  CLI 用例会失败。本次运行将 `XDG_CONFIG_HOME` 指向空目录（与 CI 无用户配置的条件
+  一致）后全部通过。
+- The explicit release benchmark passes with 50,000 synthetic stations and
+  search P95 30.18 ms, below the 100 ms budget. This is one local observation,
+  not a comparative performance claim.
+- `bash -n scripts/package-release.sh` passes and `radio --version` reports
+  `radio 0.8.0`. Linux x86_64 musl packaging passes architecture and
+  static-linkage checks plus version and doctor smoke checks from the extracted
+  archive; the archive carries nonempty guides, English completions, the manual
+  and `BUILDINFO`, and `SHA256SUMS` covers the produced tarball.
+- Release archives still require the final GitHub CI gates for Linux, native
+  macOS Apple Silicon and Intel, Rust 1.88 and RustSec auditing, plus the musl
+  packaging and extracted-archive smoke checks. Those jobs were not run for this
+  candidate. Native package checks do not imply Developer ID signing,
+  notarization or physical listening.
+
+验证日期：2026-10-22。环境：Debian Linux x86_64，内核 6.12.113+deb13-amd64，
+Intel Core i5-8365U（8 个逻辑 CPU），Rust 1.97.1、FFmpeg 7.1.5、mpv 0.40.0。
+
 ## 0.7.0 release candidate — 2026-10-21
 
 - Linux all-target/all-feature tests: 234 passed, zero failures; the separate
