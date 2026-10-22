@@ -127,6 +127,8 @@ pub(super) enum Mode {
 
 /// Largest command, search or filter line the editor accepts, in bytes.
 const EDITOR_LIMIT: usize = 2048;
+/// How long a plain notice stays in place of the context hint.
+const MESSAGE_TTL: Duration = Duration::from_secs(4);
 
 #[derive(Default)]
 pub(super) struct Editor {
@@ -412,6 +414,7 @@ pub(super) struct App {
     pub list: ListState,
     pub editor: Editor,
     pub message: String,
+    message_clock: Option<(String, Instant)>,
     pub search_due: Option<Instant>,
     original_query: String,
     pub filter_edit: Option<(usize, [String; 4])>,
@@ -470,6 +473,7 @@ impl Default for App {
             list,
             editor: Editor::default(),
             message: String::new(),
+            message_clock: None,
             search_due: None,
             original_query: String::new(),
             filter_edit: None,
@@ -520,6 +524,37 @@ impl App {
             self.last_click = None;
         }
         self.rects = rects;
+    }
+    /// Clears an ordinary notice after `MESSAGE_TTL` of being on screen and
+    /// reports whether it did. Notices that belong to an open dialog or an
+    /// unfinished locate stay until their owner clears them, and the clock only
+    /// starts once the notice is actually visible.
+    pub fn expire_message(&mut self, now: Instant) -> bool {
+        let visible = self.mode == Mode::Normal
+            && !self.help
+            && !self.too_small
+            && self.confirmation.is_none()
+            && self.filter_edit.is_none()
+            && self.pending_jump.is_none()
+            && self.jump_selection.is_none();
+        if self.message.is_empty() || !visible {
+            self.message_clock = None;
+            return false;
+        }
+        match &self.message_clock {
+            Some((text, since)) if *text == self.message => {
+                if now.saturating_duration_since(*since) < MESSAGE_TTL {
+                    return false;
+                }
+                self.message.clear();
+                self.message_clock = None;
+                true
+            }
+            _ => {
+                self.message_clock = Some((self.message.clone(), now));
+                false
+            }
+        }
     }
     pub fn update_size(&mut self, width: u16, height: u16) {
         if self.size != (width, height) {
@@ -1080,6 +1115,7 @@ impl App {
     /// interpreted as shortcuts and never submits anything.
     pub fn paste(&mut self, text: &str) {
         self.last_click = None;
+        self.message_clock = None;
         if self.too_small || self.confirmation.is_some() || (self.mode == Mode::Normal && self.help)
         {
             return;
@@ -1151,6 +1187,8 @@ impl App {
     }
     pub fn key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
         self.last_click = None;
+        // A repeated identical notice must get a fresh lifetime.
+        self.message_clock = None;
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
             || self.too_small && key.code == KeyCode::Char('q')
         {

@@ -113,6 +113,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             app.update_size(size.width, size.height);
             let snapshot = view.lock().unwrap().snapshot();
             app.reconcile(&snapshot);
+            dirty |= app.expire_message(Instant::now());
             if let Some(artwork) = &mut artwork {
                 let size = terminal.size()?;
                 let screen = ratatui::layout::Rect::new(0, 0, size.width, size.height);

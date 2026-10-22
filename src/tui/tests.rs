@@ -1968,6 +1968,106 @@ fn ignored_keys_explain_why_nothing_happened() {
 }
 
 #[test]
+fn plain_notices_expire_while_dialogs_and_active_tasks_keep_theirs() {
+    let ttl = Duration::from_secs(4);
+    let ms = Duration::from_millis(1);
+    let start = Instant::now();
+    let data = view();
+    let (sender, receiver) = command::channel(8);
+    let mut app = App::default();
+
+    // The lifetime starts when the notice is first seen, and ends exactly once.
+    app.message = "Copied".into();
+    assert!(!app.expire_message(start));
+    assert!(!app.expire_message(start + ttl - ms));
+    assert_eq!(app.message, "Copied");
+    assert!(app.expire_message(start + ttl));
+    assert!(app.message.is_empty());
+    assert!(!app.expire_message(start + ttl * 2));
+
+    // A repeated identical notice is a new notice with a fresh lifetime.
+    app.message = "Copied".into();
+    app.expire_message(start);
+    app.key(key(KeyCode::Char('j')), &data, &sender);
+    assert!(app.message.is_empty());
+    app.message = "Copied".into();
+    assert!(!app.expire_message(start + ttl));
+    assert!(!app.expire_message(start + ttl * 2 - ms));
+    assert!(app.expire_message(start + ttl * 2));
+
+    // Anything owned by a dialog or an unfinished task stays, and its lifetime
+    // only starts once it is back on screen.
+    let later = start + ttl * 10;
+    let held = |app: &mut App, setup: &dyn Fn(&mut App), teardown: &dyn Fn(&mut App)| {
+        app.message = "Pending".into();
+        setup(app);
+        assert!(!app.expire_message(later));
+        assert!(!app.expire_message(later + ttl * 10));
+        assert_eq!(app.message, "Pending");
+        teardown(app);
+        assert!(!app.expire_message(later + ttl * 10), "clock restarts");
+        assert!(app.expire_message(later + ttl * 11));
+        assert!(app.message.is_empty());
+    };
+    held(&mut app, &|app| app.mode = Mode::Command, &|app| {
+        app.mode = Mode::Normal
+    });
+    held(&mut app, &|app| app.help = true, &|app| app.help = false);
+    held(
+        &mut app,
+        &|app| app.filter_edit = Some((0, Default::default())),
+        &|app| app.filter_edit = None,
+    );
+    held(&mut app, &|app| app.too_small = true, &|app| {
+        app.too_small = false
+    });
+
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    app.editor
+        .set(&format!("station remove {}", data.rows[0].stationuuid));
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(app.confirmation.is_some());
+    app.message = "Confirm removal".into();
+    assert!(!app.expire_message(later));
+    assert!(!app.expire_message(later + ttl * 10));
+    assert_eq!(app.message, "Confirm removal");
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(app.confirmation.is_none());
+
+    // An unfinished locate keeps its progress notice until it resolves.
+    app.jump_binding = "<F6>".into();
+    let mut data = view();
+    data.status.station = Some(station("Elsewhere"));
+    app.key(key(KeyCode::F(6)), &data, &sender);
+    assert_eq!(app.message, crate::t!("jump_loading"));
+    assert!(!app.expire_message(later));
+    assert!(!app.expire_message(later + ttl * 10));
+    assert_eq!(app.message, crate::t!("jump_loading"));
+    while receiver.try_recv().is_ok() {}
+}
+
+#[test]
+fn an_expired_notice_gives_the_bottom_bar_back_to_the_context_hint() {
+    let data = view();
+    let (sender, _receiver) = command::channel(4);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert_eq!(app.message, crate::t!("clipboard_sent"));
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    let draw = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
+        terminal
+            .draw(|frame| render::draw(frame, app, &data))
+            .unwrap();
+        text(terminal)
+    };
+    assert!(draw(&mut app, &mut terminal).contains(crate::t!("clipboard_sent")));
+    let start = Instant::now();
+    assert!(!app.expire_message(start));
+    assert!(app.expire_message(start + Duration::from_secs(4)));
+    assert!(!draw(&mut app, &mut terminal).contains(crate::t!("clipboard_sent")));
+}
+
+#[test]
 fn rendered_text_never_splits_grapheme_clusters() {
     let family = "👨\u{200d}👩\u{200d}👧";
     let fitted = render::fit(&format!("{family} hello"), 5);
