@@ -2706,8 +2706,10 @@ fn small_terminal_blocks_actions_and_defers_search_until_visible() {
         app.editor.set("station remove frozen-id");
         app.key(key(KeyCode::Enter), &data, &sender);
         assert!(app.confirmation.is_some());
+        app.message = "Confirm removal of frozen-id".into();
         app.update_size(width, height);
         assert!(app.confirmation.is_none());
+        assert!(app.message.is_empty());
         app.search_due = Some(Instant::now());
         for code in [
             KeyCode::Enter,
@@ -3021,6 +3023,7 @@ fn persistent_operation_error_has_details_and_explicit_dismissal() {
     data.operation_error_id = 1;
     data.operation_error = "delete failed: cannot remove file".into();
     let mut app = App::default();
+    app.message = "Deletion submitted".into();
     let (sender, receiver) = command::channel(10);
     let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
@@ -3032,6 +3035,7 @@ fn persistent_operation_error_has_details_and_explicit_dismissal() {
             .unwrap()
             .contains(&data.operation_error)
     );
+    assert!(app.help_content.as_deref().unwrap().contains(&app.message));
     app.key(key(KeyCode::Esc), &data, &sender);
     assert_eq!(app.dismissed_error, 0);
     app.key(key(KeyCode::Esc), &data, &sender);

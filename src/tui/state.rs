@@ -512,6 +512,8 @@ impl App {
         self.too_small = width < 40 || height < 16;
         if self.too_small {
             self.confirmation = None;
+            self.message.clear();
+            // Preserve editor/filter drafts and deferred searches until visible.
             self.pending_g = false;
             self.jump_progress = 0;
             self.jump_last = None;
@@ -1220,6 +1222,9 @@ impl App {
                     errors.push(format!("录音失败\n{reason}"));
                 }
                 self.help_title = (!errors.is_empty()).then_some(crate::t!("error_details_title"));
+                if !errors.is_empty() && !self.message.is_empty() {
+                    errors.push(self.message.clone());
+                }
                 self.help_content = (!errors.is_empty())
                     .then(|| format!("{}\n\nEsc / ? 关闭；j/k 滚动。", errors.join("\n\n")));
                 self.help = true;
