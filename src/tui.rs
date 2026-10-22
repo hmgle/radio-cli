@@ -13,7 +13,10 @@ mod worker;
 use crate::{config::Config, engine::Engine};
 use anyhow::{Result, bail};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -51,7 +54,12 @@ impl Screen {
 impl Drop for Screen {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+        let _ = execute!(
+            io::stdout(),
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -82,6 +90,8 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         let _screen = Screen::enter(mouse)?;
         let mut pending = std::collections::VecDeque::new();
         let mut artwork = artwork::Controller::new(artwork_config, theme, &mut pending);
+        // Enabled only after startup probing, which reads raw terminal replies itself.
+        execute!(io::stdout(), EnableBracketedPaste)?;
         let writer = output::TerminalWriter::new(io::stdout(), theme == crate::config::Theme::Mono);
         let mut terminal = Terminal::new(CrosstermBackend::new(writer))?;
         execute!(
@@ -159,6 +169,10 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                         io::stdout().write_all(&output::clipboard_sequence(&value))?;
                         io::stdout().flush()?;
                     }
+                    dirty = true;
+                }
+                Event::Paste(text) => {
+                    app.paste(&text);
                     dirty = true;
                 }
                 Event::Mouse(mouse) => {

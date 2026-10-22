@@ -2045,6 +2045,90 @@ fn editor_moves_and_deletes_whole_grapheme_clusters() {
 }
 
 #[test]
+fn pasted_text_edits_the_open_input_without_submitting_or_acting() {
+    let mut editor = super::state::Editor::default();
+    for (pasted, expected) in [
+        ("play abc", "play abc"),
+        ("a\nb\r\nc\rd\te", "a b c d e"),
+        ("x\u{1b}[31my\u{7f}z\u{0}", "x[31myz"),
+        ("粘贴 👨\u{200d}👩\u{200d}👧", "粘贴 👨\u{200d}👩\u{200d}👧"),
+        ("\n", " "),
+        ("", ""),
+    ] {
+        editor.begin("");
+        editor.paste(pasted);
+        assert_eq!(editor.text, expected, "{pasted:?}");
+        assert_eq!(editor.cursor, expected.len());
+    }
+
+    editor.begin("ab");
+    editor.cursor = 1;
+    editor.paste("XY");
+    assert_eq!((editor.text.as_str(), editor.cursor), ("aXYb", 3));
+
+    // The shared line limit applies, and a cluster is dropped rather than cut.
+    let family = "👨\u{200d}👩\u{200d}👧";
+    editor.begin(&"a".repeat(2030));
+    editor.paste(&format!("{family}{family}"));
+    assert_eq!(editor.text.len(), 2030 + family.len());
+    assert!(editor.text.ends_with(family));
+    editor.begin(&"a".repeat(2040));
+    editor.paste(family);
+    assert_eq!(editor.text.len(), 2040);
+    editor.begin("");
+    editor.paste(&"b".repeat(100_000));
+    assert_eq!(editor.text.len(), 2048);
+}
+
+#[test]
+fn paste_reaches_command_search_and_filter_fields_but_never_shortcuts() {
+    let data = view();
+    let (sender, receiver) = command::channel(10);
+
+    let mut app = App::default();
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    app.paste("station add pasted\nhttps://example.com/p\n");
+    assert_eq!(app.mode, Mode::Command);
+    assert_eq!(app.editor.text, "station add pasted https://example.com/p ");
+    assert!(receiver.try_recv().is_err());
+
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('/')), &data, &sender);
+    app.paste("jazz\nfm");
+    assert_eq!(app.mode, Mode::Search);
+    assert_eq!(app.filter.query, "jazz fm");
+    assert!(app.search_due.is_some());
+
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    app.key(key(KeyCode::Tab), &data, &sender);
+    app.paste("fr\nench");
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[1], "fr ench");
+    assert_eq!(app.filter_input.text, "fr ench");
+
+    // Normal mode, help, confirmation and tiny terminals ignore the payload.
+    let mut app = App::default();
+    app.paste("q:r m\nn");
+    assert!(!app.quit);
+    assert_eq!(app.message, crate::t!("paste_ignored"));
+    assert!(receiver.try_recv().is_err());
+    app.message.clear();
+    app.help = true;
+    app.paste("q?x");
+    assert!(app.help && app.message.is_empty());
+    app.help = false;
+    app.update_size(20, 10);
+    app.paste("q");
+    assert!(!app.quit && app.message.is_empty());
+    app.update_size(100, 24);
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    app.editor.set("");
+    app.update_size(20, 10);
+    app.paste("hidden");
+    assert!(app.editor.text.is_empty());
+}
+
+#[test]
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.

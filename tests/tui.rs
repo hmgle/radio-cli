@@ -348,6 +348,26 @@ fn direct_url_command_plays_and_inspects_without_saving_a_station() {
 }
 
 #[test]
+fn bracketed_paste_fills_the_command_line_and_never_runs_shortcuts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let config_path = dir.path().join("config.toml");
+    fs::write(&config_path, "language = \"en\"\nauto_sync_days = 0\n").unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&config_path));
+    tui.wait_output(|o| o.windows(8).any(|bytes| bytes == b"\x1b[?2004h"));
+    // Pasted text in the list context must not quit or start anything.
+    tui.send("\x1b[200~q\nrnm\x1b[201~");
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("Paste ignored"));
+    // A pasted line break is only a space; the line is submitted by a real Enter.
+    tui.send(":\x1b[200~station add 粘贴台\nhttps://example.com/paste\x1b[201~");
+    tui.send("\r");
+    tui.wait(|| store.count().unwrap() == 1);
+    assert_eq!(store.search(&Filter::default()).unwrap()[0].name, "粘贴台");
+    tui.quit();
+}
+
+#[test]
 fn shrinking_cancels_deletion_and_blocks_invisible_commands() {
     let dir = tempfile::tempdir().unwrap();
     let config = support::config(dir.path());

@@ -125,6 +125,9 @@ pub(super) enum Mode {
     Command,
 }
 
+/// Largest command, search or filter line the editor accepts, in bytes.
+const EDITOR_LIMIT: usize = 2048;
+
 #[derive(Default)]
 pub(super) struct Editor {
     pub station_ids: Vec<String>,
@@ -270,13 +273,42 @@ impl Editor {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                     && !c.is_control()
-                    && self.text.len() < 2048 =>
+                    && self.text.len() < EDITOR_LIMIT =>
             {
                 self.text.insert(self.cursor, c);
                 self.cursor += c.len_utf8();
             }
             _ => {}
         }
+    }
+    /// Insert pasted text at the cursor. Line breaks and tabs become spaces so a
+    /// paste can never submit the line, other control characters are dropped,
+    /// and the result honors the same size limit as typing.
+    pub fn paste(&mut self, text: &str) {
+        let mut clean = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\r' => {
+                    chars.next_if_eq(&'\n');
+                    clean.push(' ');
+                }
+                '\n' | '\t' => clean.push(' '),
+                c if c.is_control() => {}
+                c => clean.push(c),
+            }
+            if clean.len() >= EDITOR_LIMIT {
+                break;
+            }
+        }
+        let room = EDITOR_LIMIT.saturating_sub(self.text.len());
+        let clean = super::text::prefix_bytes(&clean, room);
+        if clean.is_empty() {
+            return;
+        }
+        self.completion = None;
+        self.text.insert_str(self.cursor, clean);
+        self.cursor += clean.len();
     }
     fn complete(&mut self, reverse: bool) {
         if let Some((choices, index)) = &mut self.completion {
@@ -1006,6 +1038,39 @@ impl App {
         }
         false
     }
+    fn search_edited(&mut self) {
+        self.filter.query = self.editor.text.clone();
+        self.filter.offset = 0;
+        self.reset_selection();
+        self.search_due = Some(Instant::now() + Duration::from_millis(200));
+    }
+    /// Bracketed paste only ever edits an open text input; it is never
+    /// interpreted as shortcuts and never submits anything.
+    pub fn paste(&mut self, text: &str) {
+        self.last_click = None;
+        if self.too_small || self.confirmation.is_some() || (self.mode == Mode::Normal && self.help)
+        {
+            return;
+        }
+        if self.mode != Mode::Normal {
+            self.editor.paste(text);
+            if self.mode == Mode::Search {
+                self.search_edited();
+            }
+            self.message.clear();
+        } else if let Some((selected, values)) = &mut self.filter_edit {
+            if self.filter_input.text != values[*selected] {
+                self.filter_input.set(&values[*selected]);
+            }
+            self.filter_input.paste(text);
+            values[*selected] = self.filter_input.text.clone();
+            self.facet_prefix = self.filter_input.text.clone();
+            self.facet_due = Some(Instant::now() + Duration::from_millis(200));
+            self.facet_index = None;
+        } else {
+            self.message = crate::t!("paste_ignored").into();
+        }
+    }
     pub fn key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
         self.last_click = None;
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
@@ -1079,10 +1144,7 @@ impl App {
             }
             self.editor.key(key, self.mode == Mode::Command);
             if self.mode == Mode::Search {
-                self.filter.query = self.editor.text.clone();
-                self.filter.offset = 0;
-                self.reset_selection();
-                self.search_due = Some(Instant::now() + Duration::from_millis(200));
+                self.search_edited();
             }
             self.message.clear();
             return;

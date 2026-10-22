@@ -65,6 +65,18 @@ pub(super) fn wrap(text: &str, width: usize) -> Vec<&str> {
     lines
 }
 
+/// Longest prefix of whole graphemes that fits in `limit` bytes.
+pub(super) fn prefix_bytes(text: &str, limit: usize) -> &str {
+    let mut end = 0;
+    for (index, grapheme) in text.grapheme_indices(true) {
+        if index + grapheme.len() > limit {
+            break;
+        }
+        end = index + grapheme.len();
+    }
+    &text[..end]
+}
+
 /// Byte offset of the grapheme boundary before `index`, or 0.
 pub(super) fn prev_boundary(text: &str, index: usize) -> usize {
     text.grapheme_indices(true)
