@@ -9,8 +9,9 @@ requests are welcome.
   Keep shared Unix behavior portable and isolate platform-specific operations.
   Native Windows support is outside the current scope.
 - `README.md` and `README.zh-CN.md` are the user-facing entry points. Public
-  user guides are the paired files under `docs/`; design and validation notes
-  are internal unless explicitly designated public.
+  user guides are the paired files under `docs/`; `docs/tui.md` is the internal
+  TUI design reference, and other design and validation notes are internal
+  unless explicitly designated public.
 - Keep English and Chinese public docs structurally synchronized in the same
   pull request. Do not hardcode release versions in install commands; derive
   archive names from `SHA256SUMS` or link to the releases page.

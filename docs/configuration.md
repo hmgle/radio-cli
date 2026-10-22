@@ -209,6 +209,8 @@ Accepted forms:
 - One to four printable, non-whitespace characters, for example `"gp"`.
 - One named key in angle brackets, optionally with modifiers, for example
   `"<F6>"`, `"<Ctrl-p>"`, `"<Alt-p>"`, or `"<Shift-P>"`.
+  Named keys are `F1`–`F12`, `Space`, `Home`, `End`, `Enter`, `Tab`, and the
+  arrow keys, or any single character. `"<Shift-Tab>"` is accepted as BackTab.
 - `""` disables the shortcut.
 
 The default is `"''"`: press two single quotes within one second. Ctrl-C remains
@@ -230,7 +232,8 @@ radio-cli does not rewrite the handwritten config file or `config.example.toml`.
 Mutable state belongs to the selected data directory:
 
 - `radio.db` stores the catalog, favorites, history, recording index, runtime
-  volume, last-station preference, and sync metadata.
+  volume, last-station preference, and sync metadata. History retains the last
+  1,000 successful plays.
 - `command-history.json` keeps up to 100 TUI commands. Commands containing URL
   credentials are not saved.
 - `artwork/` is a bounded, disposable image cache.

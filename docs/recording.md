@@ -98,8 +98,9 @@ the only copy of the partial file.
 
 ## Reconnects and incomplete captures
 
-Truncated HTTP/ICY connections are retried with bounded backoff, and HLS segment
-re-fetch failures count as reconnects. A reconnect can leave a gap in live audio.
+Truncated HTTP/ICY connections use FFmpeg's reconnect support with an exponential
+delay capped at 2 seconds, and HLS segment re-fetch failures count as reconnects.
+A reconnect can leave a gap in live audio.
 A completed recording retains the reconnect count and displays a warning because
 the media may contain gaps.
 

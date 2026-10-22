@@ -65,7 +65,7 @@ brew install mpv ffmpeg
 
 ```sh
 target=x86_64-unknown-linux-musl   # 或 aarch64-apple-darwin / x86_64-apple-darwin
-archive=$(awk -v t="$target" '$2 ~ "-" t ".tar.gz$" {print $2; exit}' SHA256SUMS)
+archive=$(awk -v t="$target" '$2 ~ "-" t ".tar.gz$" {sub(/^\*/, "", $2); print $2; exit}' SHA256SUMS)
 test -n "$archive" || { echo "SHA256SUMS 中未找到 $target 的归档" >&2; exit 1; }
 grep -F -- "$archive" SHA256SUMS | sha256sum -c -
 tar -xzf "$archive"
@@ -139,7 +139,7 @@ FFmpeg、ffprobe、录音目录和剩余空间。
 | 搜索 | `/` | 搜索；`Enter` 确认，`Esc` 恢复原视图 |
 | 搜索 | `F` | 国家/地区、语言、标签和最低码率筛选 |
 | 搜索 | `Ctrl-U` | 筛选弹窗内清空搜索与筛选 |
-| 录音 | `D` / `o` / `e` | 确认删除 / 打开目录 / 显示错误详情 |
+| 录音 | `D` / `o` / `e` | 删除（`y` 确认；`Enter` / `n` / `Esc` / `q` 取消）/ 打开目录 / 显示错误详情 |
 | 定位 | 可配置 | 定位正在播放的电台；默认一秒内连按两次 `''` |
 
 鼠标默认启用：可点击面板或行，500 ms 内双击行播放，用滚轮导航。
@@ -147,6 +147,9 @@ FFmpeg、ffprobe、录音目录和剩余空间。
 录音来源不提供目录搜索：`/`、`F` 和收藏键在该来源中不可用；按 `n` 会切回电台列表并随机播放。
 tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
 弹窗、文本输入和删除确认使用各自的按键；在 TUI 内按 `?` 查看完整的上下文帮助。
+列表查询失败后会自动退避重试，间隔从 500 ms 指数增长到 30 秒；`F5` 可绕过等待。
+普通一次性提示约 4 秒后自动消失。`y` 和 `Y` 通过 OSC 52 复制，是否生效取决于终端和复用器；
+超过 4,096 字节会截断并提示。
 `y` 和 `Y` 通过 OSC 52 复制，是否生效取决于终端和复用器。
 
 ### TUI 内置命令
@@ -368,13 +371,15 @@ mpv 测试使用空音频输出，找不到 mpv 时跳过，可用
 
 | 文档 | 内容 |
 | --- | --- |
-| [配置参考](docs/configuration.zh-CN.md) | 全部配置项、路径、语言、恢复、artwork、快捷键 |
+| [配置参考](docs/configuration.zh-CN.md) | 全部配置项、路径、语言、恢复、Artwork、快捷键 |
 | [录音指南](docs/recording.zh-CN.md) | 格式、文件、恢复、重连、空间检查 |
 | [故障排查](docs/troubleshooting.zh-CN.md) | 常见故障、代理、设备、退出码 |
 | [JSON 输出契约](docs/json-contract.zh-CN.md) | JSON 结构、错误码与进程退出码 |
 | [更新日志](CHANGELOG.md)（英文） | 版本说明与兼容性变化 |
 | [贡献指南](CONTRIBUTING.md)（英文） | 开发、测试和发行归档 |
 | [安全策略](SECURITY.md)（英文） | 支持版本和漏洞报告 |
+
+`docs/` 中的配对指南均提供英文和简体中文版本。
 
 ## 许可证
 

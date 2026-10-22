@@ -71,7 +71,7 @@ it without hardcoding a release version:
 
 ```sh
 target=x86_64-unknown-linux-musl   # or aarch64-apple-darwin / x86_64-apple-darwin
-archive=$(awk -v t="$target" '$2 ~ "-" t ".tar.gz$" {print $2; exit}' SHA256SUMS)
+archive=$(awk -v t="$target" '$2 ~ "-" t ".tar.gz$" {sub(/^\*/, "", $2); print $2; exit}' SHA256SUMS)
 test -n "$archive" || { echo "archive for $target not found in SHA256SUMS" >&2; exit 1; }
 grep -F -- "$archive" SHA256SUMS | sha256sum -c -
 tar -xzf "$archive"
@@ -147,7 +147,7 @@ recording directory, and free space.
 | Search | `/` | Search; `Enter` confirms, `Esc` restores the previous view |
 | Search | `F` | Country, language, tag, and minimum-bitrate filters |
 | Search | `Ctrl-U` | In the filter popup, clear search and filters |
-| Recordings | `D` / `o` / `e` | Delete with confirmation / open folder / show error details |
+| Recordings | `D` / `o` / `e` | Delete (`y` confirms; `Enter` / `n` / `Esc` / `q` cancel) / open folder / show error details |
 | Navigation | Configurable | Locate the playing station; defaults to pressing `''` twice within one second |
 
 Mouse support is enabled by default: click a panel or row, double-click a row
@@ -158,8 +158,11 @@ favorite keys are unavailable there; press `n` to switch back to stations and
 play a random match. In tmux, `Ctrl-b` is consumed as the prefix, so use
 `PgUp` / `PgDn` for page navigation. Popups, text input, and confirmation
 prompts use their own keys; press `?` inside the TUI for the full
-context-sensitive reference. `y` and `Y` copy through OSC 52, whose support
-depends on the terminal and multiplexer.
+context-sensitive reference. A failed list query retries automatically with
+exponential backoff from 500 ms to 30 seconds; `F5` bypasses the wait. Transient
+notices clear after about four seconds. `y` and `Y` copy through OSC 52, whose
+support depends on the terminal and multiplexer; requests over 4,096 bytes are
+truncated and reported.
 
 ### In-TUI commands
 
@@ -389,13 +392,15 @@ and the deterministic catalog benchmark.
 
 | Document | Contents |
 | --- | --- |
-| [Configuration](docs/configuration.md) | Every setting, paths, language, resume, artwork, keybindings |
+| [Configuration](docs/configuration.md) | Every setting, paths, language, resume, Artwork, keybindings |
 | [Recording](docs/recording.md) | Formats, files, recovery, reconnects, disk checks |
 | [Troubleshooting](docs/troubleshooting.md) | Common failures, proxies, devices, exit codes |
 | [JSON contract](docs/json-contract.md) | JSON shapes and process exit codes |
 | [Changelog](CHANGELOG.md) | Release notes and compatibility changes |
 | [Contributing](CONTRIBUTING.md) | Development, tests, and release archives |
 | [Security](SECURITY.md) | Supported versions and vulnerability reporting |
+
+The paired guides under `docs/` include English and Simplified Chinese versions.
 
 ## License
 

@@ -87,7 +87,10 @@ URLs, random stations, or a directory refresh. Resolve the local problem and
 start playback again.
 
 For network stream failures, radio-cli tries backup addresses, bounded live
-reconnects, and a catalog refresh as appropriate. Reconnects can leave gaps in
+reconnects, and a catalog refresh as appropriate. Established live streams
+reconnect after 1, 3, and 7 seconds, at most three times per outage; successful
+playback renews that budget, with a rolling limit of six reconnects per minute.
+Reconnects can leave gaps in
 the audio even when the request eventually recovers. A finite or flapping source
 may still fail after retries are exhausted.
 
@@ -177,7 +180,9 @@ variable forces the mono theme. Use `theme = "light"` on a light terminal
 background if the default theme has poor contrast.
 
 The TUI adapts to narrow and short terminals. When space is very limited, some
-panels collapse or details move to a shared area. The built-in `?` help lists the
+panels collapse or details move to a shared area. The smallest terminal is
+40×16; at least 100×20 uses the three-column main area, and below 20 rows the
+tasks panel collapses to a summary. The built-in `?` help lists the
 keys available in the current context. Use a larger terminal if controls or
 labels do not fit.
 
