@@ -6,8 +6,8 @@
 │>All       Saved    Recent    Files   │
 ╰──────────────────────────────────────╯
 ┏ ▶ [2/3] Details · 2 back · j/k scroll┓
-┃Selected Station · Selected /         ┃
-┃inspected station                     ┃
+┃Selected Station                      ┃
+┃Details: Selected list row            ┃
 ┃                                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 5 Catalog ready · Playing               

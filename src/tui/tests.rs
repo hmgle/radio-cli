@@ -112,7 +112,7 @@ fn station_details_localize_territory_codes_without_changing_catalog_values() {
         row.country = original.into();
         row.countrycode = code.into();
         row.state = "Catalog subdivision".into();
-        let details = render::station_details(&row, &data);
+        let details = render::station_details(&App::default(), &row, &data);
         let chinese = crate::territories::display_in(crate::messages::Locale::ZhCn, code, original);
         assert_eq!(chinese, expected);
         let country = crate::territories::display_in(crate::messages::Locale::En, code, original);
@@ -3298,7 +3298,7 @@ fn media_states_are_distinguishable_in_header_list_row_and_details() {
             .find(|&(x, y)| buffer[(x, y)].symbol() == glyph && buffer[(x + 1, y)].symbol() == "★")
             .unwrap_or_else(|| panic!("{state:?} list marker missing\n{rendered}"));
         assert_eq!(buffer[marker].fg, color, "{state:?}");
-        let details = render::station_details(&current, &data);
+        let details = render::station_details(&App::default(), &current, &data);
         let first = details.lines().next().unwrap();
         assert!(
             first.contains(&format!(" · {glyph} {}", state.label())),
@@ -3321,11 +3321,8 @@ fn media_states_are_distinguishable_in_header_list_row_and_details() {
     assert!(rendered.contains("│Idle · Current Station"), "{rendered}");
     assert!(rendered.contains("┃     Current Station"), "{rendered}");
     assert!(
-        render::station_details(&current, &data)
-            .lines()
-            .next()
-            .unwrap()
-            .contains("Selected")
+        render::station_details(&App::default(), &current, &data)
+            .contains(crate::t!("details_origin_selected"))
     );
 }
 
@@ -3942,6 +3939,41 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
     assert!(
         matches!(command::parse("set language en",None,None,&Filter::default()).unwrap(),Parsed::Worker(Command::SetLanguage(language)) if language == "en")
     );
+}
+
+#[test]
+fn details_name_the_origin_and_backup_request_phase() {
+    let mut data = view();
+    let mut app = App::default();
+    let row = data.rows[0].clone();
+    let details = render::station_details(&app, &row, &data);
+    assert!(details.contains(crate::t!("details_origin_selected")));
+    assert!(details.contains(crate::t!("backups_not_requested")));
+    let (sender, _) = command::channel(4);
+    app.request_selected_backups(&data, &sender);
+    // A disconnected queue must not claim a pending request.
+    assert!(
+        render::station_details(&app, &row, &data).contains(crate::t!("backups_not_requested"))
+    );
+    let (sender, _receiver) = command::channel(4);
+    app.request_selected_backups(&data, &sender);
+    assert!(render::station_details(&app, &row, &data).contains(crate::t!("backups_loading")));
+    Arc::make_mut(&mut data.backups).insert(row.stationuuid.clone(), vec![]);
+    assert!(render::station_details(&app, &row, &data).contains(crate::t!("backups_none")));
+    Arc::make_mut(&mut data.backups_errors).insert(row.stationuuid.clone(), "query failed".into());
+    assert!(render::station_details(&app, &row, &data).contains("query failed"));
+    for (line, origin) in [
+        (
+            format!("info {}", row.stationuuid),
+            crate::t!("details_origin_info"),
+        ),
+        ("current".into(), crate::t!("details_origin_playing")),
+    ] {
+        app.key(key(KeyCode::Char(':')), &data, &sender);
+        app.editor.set(&line);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(render::station_details(&app, &row, &data).contains(origin));
+    }
 }
 
 #[test]

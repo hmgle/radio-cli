@@ -6,7 +6,8 @@
 │>All                 Saved              Recent              Files             │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ┏ ▶ [2/3] Details · 2 back · j/k scroll ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃Selected Station · Selected / inspected station                               ┃
+┃Selected Station                                                              ┃
+┃Details: Selected list row                                                    ┃
 ┃                                                                              ┃
 ┃Catalog                                                                       ┃
 ┃Country:             France (FR)                                              ┃
@@ -16,7 +17,6 @@
 ┃Codec:               MP3 (catalog)                                            ┃
 ┃HLS:                 No                                                       ┃
 ┃Tags:                Unknown                                                  ┃
-┃Favorite:            No · Catalog: Active                                     ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 5 Catalog ready · Playing                                                       
  NORMAL · Details /  All countries All languages All tags ≥0k            [Clear]

@@ -485,6 +485,7 @@ pub(super) struct App {
     pub popup: ScrollExtent,
     pub details_scroll: u16,
     pub inspect_info: bool,
+    pub inspect_playing: bool,
     pub info_request: u64,
     pub activity_scroll: u16,
     pub rects: [Rect; 5],
@@ -545,6 +546,7 @@ impl Default for App {
             popup: ScrollExtent::default(),
             details_scroll: 0,
             inspect_info: false,
+            inspect_playing: false,
             info_request: 0,
             activity_scroll: 0,
             rects: [Rect::default(); 5],
@@ -830,9 +832,15 @@ impl App {
             self.facet_due = None;
         }
     }
-    fn request_info(&mut self, uuid: String, sender: &CommandSender) {
+    pub(super) fn backups_pending(&self, uuid: &str, revision: u64) -> bool {
+        self.backups_request
+            .as_ref()
+            .is_some_and(|(id, rev, _, _)| id == uuid && *rev == revision)
+    }
+    fn request_info(&mut self, uuid: String, playing: bool, sender: &CommandSender) {
         self.info_request = self.info_request.wrapping_add(1);
         self.inspect_info = self.send(sender, Command::Info(uuid, self.info_request));
+        self.inspect_playing = playing;
         self.focus = Focus::Details;
         self.details_scroll = 0;
     }
@@ -1112,7 +1120,11 @@ impl App {
                             return withheld;
                         }
                         if let Command::Info(uuid, _) = command {
-                            self.request_info(uuid, sender);
+                            let playing =
+                                shell_words::split(&self.editor.text).is_ok_and(|words| {
+                                    words.first().is_some_and(|name| name == "current")
+                                });
+                            self.request_info(uuid, playing, sender);
                             return withheld;
                         }
                         if matches!(command, Command::Random(_))
@@ -1609,7 +1621,7 @@ impl App {
             KeyCode::Enter if self.focus == Focus::Sources => self.focus = Focus::List,
             KeyCode::Enter if self.focus == Focus::Player => {
                 if let Some(station) = &view.status.station {
-                    self.request_info(station.stationuuid.clone(), sender);
+                    self.request_info(station.stationuuid.clone(), true, sender);
                 }
             }
             KeyCode::Enter if self.focus == Focus::List => {

@@ -523,7 +523,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         } else {
             app.selected(view)
         } {
-            station_details(station, view)
+            station_details(app, station, view)
         } else {
             crate::t!("details_empty").into()
         };
@@ -920,7 +920,7 @@ fn empty_hint(app: &App) -> &'static str {
     }
 }
 
-pub(super) fn station_details(station: &Station, view: &View) -> String {
+pub(super) fn station_details(app: &App, station: &Station, view: &View) -> String {
     let current = view
         .status
         .station
@@ -929,6 +929,9 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
     crate::t!(
         "station_details",
         "name" => value(&station.name),
+        "origin" => if !app.inspect_info { crate::t!("details_origin_selected") }
+            else if app.inspect_playing { crate::t!("details_origin_playing") }
+            else { crate::t!("details_origin_info") },
         "context" => match current {
             Some(_) if view.status.playback_state != crate::engine::PlaybackState::Idle => {
                 format!(
@@ -936,7 +939,7 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
                     super::display::playback_status(&view.status.playback_state, 0)
                 )
             }
-            _ => crate::t!("station_selected").into(),
+            _ => String::new(),
         },
         "country" => value(&crate::territories::display_in(crate::messages::locale(), &station.countrycode, &station.country)),
         "language" => value(&station.language),
@@ -961,12 +964,19 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
             view.backups
                 .get(&station.stationuuid)
                 .map(|urls| {
+                    if urls.is_empty() {
+                        return crate::t!("backups_none").into();
+                    }
                     urls.iter()
                         .map(|u| crate::clean_text(u))
                         .collect::<Vec<_>>()
                         .join("\n\t")
                 })
-                .unwrap_or_default()
+                .unwrap_or_else(|| if app.backups_pending(&station.stationuuid, view.rows_revision) {
+                    crate::t!("backups_loading").into()
+                } else {
+                    crate::t!("backups_not_requested").into()
+                })
         },
         "request" => if current.is_some() {
             crate::t!("current_request_url", "url" => crate::clean_text(&view.status.source_url))
@@ -979,8 +989,13 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
 
 /// Structured details use tab-separated label/value pairs from the locale,
 /// exactly once for painting and for reserving the artwork area.
-pub(super) fn station_lines(station: &Station, view: &View, width: u16) -> Vec<Line<'static>> {
-    let content = station_details(station, view);
+pub(super) fn station_lines(
+    app: &App,
+    station: &Station,
+    view: &View,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let content = station_details(app, station, view);
     field_lines(&content, usize::from(width.max(1)))
 }
 
