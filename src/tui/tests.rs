@@ -1192,10 +1192,10 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
             .unwrap()
             .logs
             .iter()
-            .any(|s| s.contains("正在运行"))
+            .any(|s| s.contains(crate::t!("catalog_task_busy")))
     );
     sender.send(Command::Cancel).unwrap();
-    wait_for(|| view.lock().unwrap().task.contains("正在取消"));
+    wait_for(|| view.lock().unwrap().task == crate::t!("catalog_task_cancelling"));
     release_tx.send(()).unwrap();
     wait_for(|| !view.lock().unwrap().task_active);
     assert!(store.meta("last_sync").unwrap().is_none());
@@ -1210,6 +1210,15 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
             .any(|s| s.stationuuid == replacement.stationuuid)
     });
     assert!(!store.station(&old.stationuuid).unwrap().active);
+    {
+        let data = view.lock().unwrap();
+        assert_eq!(data.task, crate::t!("catalog_sync_done", "count" => 1));
+        assert_no_cjk(&data.task);
+        assert_no_cjk(&data.operation_error);
+        for line in data.logs.iter() {
+            assert_no_cjk(line);
+        }
+    }
     stop.store(true, Ordering::Relaxed);
     drop(sender);
     handle.join().unwrap().unwrap();
@@ -1402,7 +1411,8 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
     app.focus = Focus::Details;
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
-    assert!(text(&terminal).contains("详情查询失败"));
+    assert!(text(&terminal).contains("Details query failed"));
+    assert_no_cjk(&text(&terminal));
     assert!(!text(&terminal).contains("old detail"));
     let before = engine.store.revision().unwrap();
     let external = Store::open(&dir.path().join("radio.db")).unwrap();
@@ -1448,7 +1458,8 @@ fn tui_recording_rejects_a_different_station() {
         &shared,
     )
     .unwrap_err();
-    assert!(error.to_string().contains("仅录制当前播放电台"));
+    assert_eq!(error.to_string(), crate::t!("tui_record_current_only"));
+    assert_no_cjk(&error.to_string());
     assert!(!engine.status.recording());
     engine.status.station = None;
     assert!(
@@ -1906,6 +1917,14 @@ fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
 #[test]
 fn english_panels_and_editors_use_consistent_interface_language() {
     let mut data = view();
+    data.task_active = true;
+    data.task = crate::t!("catalog_sync_progress", "count" => 7);
+    Arc::make_mut(&mut data.logs).push_back(crate::t!("catalog_sync_started").into());
+    data.inspected_error = Some(crate::t!("station_details_failed", "detail" => "Database busy"));
+    Arc::make_mut(&mut data.backups_errors).insert(
+        data.rows[0].stationuuid.clone(),
+        crate::t!("backups_query_failed", "detail" => "Database busy"),
+    );
     data.recordings = vec![
         serde_json::from_value(serde_json::json!({
             "id":"saved", "stationuuid":"s", "station_name":"Saved audio",
@@ -1941,6 +1960,15 @@ fn english_panels_and_editors_use_consistent_interface_language() {
         app.filter_edit = Some((0, Default::default()));
         terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
         assert_no_cjk(&text(&terminal));
+        app.filter_edit = None;
+        app.focus = Focus::Details;
+        app.inspect_info = true;
+        app.info_request = data.inspected_request;
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_no_cjk(&text(&terminal));
+        if width >= 80 {
+            assert!(text(&terminal).contains("Details query failed"));
+        }
     }
     data.status.station = None;
     data.status.title.clear();
@@ -2473,7 +2501,11 @@ fn failed_backup_query_retries_without_a_selection_or_row_change() {
     terminal
         .draw(|frame| render::draw(frame, &mut app, &failed))
         .unwrap();
-    assert!(text(&terminal).contains("备用地址查询失败"));
+    assert!(text(&terminal).contains("Backup URL query failed"));
+    assert_no_cjk(&text(&terminal));
+    for line in failed.logs.iter() {
+        assert_no_cjk(line);
+    }
     for seconds in [2, 6, 14, 30, 60, 90] {
         app.request_selected_backups_at(&failed, &tx, now + Duration::from_secs(seconds - 1));
         assert!(rx.try_recv().is_err(), "retry must respect backoff");

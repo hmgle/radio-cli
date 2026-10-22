@@ -623,9 +623,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     let bottom = layout.bottom;
     if app.mode != Mode::Normal {
         let label = if app.mode == Mode::Command {
-            "COMMAND :"
+            crate::t!("mode_command")
         } else {
-            "SEARCH /"
+            crate::t!("mode_search")
         };
         let input = Rect::new(bottom.x, bottom.y, bottom.width, 1);
         let (input_width, cursor_start) = input_geometry(label, input.width);
@@ -678,7 +678,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             ))
         };
         let context = context_hint(app.source, app.focus);
-        let badge = format!(" NORMAL · {} ", app.focus.label());
+        let badge = format!(" {} · {} ", crate::t!("mode_normal"), app.focus.label());
         let clear_width = if app.source == Source::Recordings {
             0
         } else {

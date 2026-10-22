@@ -416,9 +416,9 @@ pub(super) fn refresh_if_needed(
 fn favorite_changed(view: &Arc<Mutex<View>>, uuid: &str, add: bool) -> Result<()> {
     let mut data = view.lock().unwrap();
     data.log(if add {
-        "已收藏电台"
+        crate::t!("station_favorited")
     } else {
-        "已取消收藏"
+        crate::t!("station_unfavorited")
     });
     if let Some(station) = data.inspected.as_mut().filter(|s| s.stationuuid == uuid) {
         station.favorite = add;
@@ -437,7 +437,7 @@ fn load_backups(store: &Store, uuid: &str, view: &Arc<Mutex<View>>) {
             Arc::make_mut(&mut data.backups).insert(uuid.to_owned(), backups);
         }
         Err(error) => {
-            let message = format!("备用地址查询失败，将重试: {error:#}");
+            let message = crate::t!("backups_query_failed", "detail" => format!("{error:#}"));
             if data.backups_errors.get(uuid) == Some(&message) {
                 return;
             }
@@ -490,7 +490,7 @@ pub(super) fn execute(
         }
         Command::Facets { selected, prefix } => {
             if selected >= 3 {
-                bail!("无效的筛选字段");
+                bail!(crate::t!("invalid_filter_field"));
             }
             let mut data = view.lock().unwrap();
             data.facets_request = Some((selected, prefix));
@@ -567,9 +567,7 @@ pub(super) fn execute(
                     .as_ref()
                     .is_none_or(|s| s.stationuuid != uuid)
                 {
-                    bail!(
-                        "TUI 仅录制当前播放电台；请先播放目标电台，或退出后用 radio record UUID 独立录音"
-                    );
+                    bail!(crate::t!("tui_record_current_only"));
                 }
                 engine.record_current(duration, dir.as_deref())?;
             } else {
@@ -578,10 +576,9 @@ pub(super) fn execute(
         }
         Command::Add { name, url, backups } => {
             let station = crate::service::add_station(&mut engine.store, name, url, &backups)?;
-            view.lock().unwrap().log(&format!(
-                "已添加 {} ({})",
-                station.name, station.stationuuid
-            ));
+            view.lock().unwrap().log(
+                &crate::t!("station_added", "name" => station.name, "uuid" => station.stationuuid),
+            );
             request_refresh(view);
         }
         Command::Station(action) => {
@@ -600,21 +597,18 @@ pub(super) fn execute(
                         url,
                         &backup_url,
                     )?;
-                    format!("已更新 {} ({uuid})", station.name)
+                    crate::t!("station_updated", "name" => station.name, "uuid" => uuid)
                 }
                 StationAction::Remove {
                     uuid,
                     keep_references,
                 } => {
                     let kept = engine.store.remove_custom(&uuid, keep_references)?;
-                    format!(
-                        "已删除自定义电台 {uuid}{}",
-                        if kept { "；引用名称保留" } else { "" }
-                    )
+                    crate::t!("station_removed", "uuid" => uuid, "references" => if kept { crate::t!("station_references_kept") } else { "" })
                 }
                 StationAction::Backups { uuid, add, remove } => {
                     let backups = engine.store.update_backups(&uuid, &add, &remove)?;
-                    format!("备用地址 {uuid}: {}", backups.join(" · "))
+                    crate::t!("station_backups_updated", "uuid" => uuid, "urls" => backups.join(" · "))
                 }
                 _ => unreachable!("station list/add use their existing commands"),
             };
@@ -623,7 +617,7 @@ pub(super) fn execute(
         }
         Command::Sync(accept_shrink) => {
             if job.is_some() {
-                bail!("目录任务正在运行；使用 :sync-cancel 取消");
+                bail!(crate::t!("catalog_task_busy"));
             }
             *job = Some(CatalogJob::start(
                 engine.config.clone(),
@@ -632,17 +626,17 @@ pub(super) fn execute(
             )?);
             let mut data = view.lock().unwrap();
             data.task_active = true;
-            data.task = "同步中 · 已获取 0 台".into();
-            data.log("开始后台同步目录");
+            data.task = crate::t!("catalog_sync_progress", "count" => 0);
+            data.log(crate::t!("catalog_sync_started"));
         }
         Command::Cancel => {
             let Some(job) = job else {
-                bail!("没有正在运行的目录任务");
+                bail!(crate::t!("catalog_task_missing"));
             };
             job.cancel.store(true, Ordering::Relaxed);
             let mut data = view.lock().unwrap();
-            data.task = "正在取消 · 等待当前请求结束…".into();
-            data.log("已请求取消目录任务");
+            data.task = crate::t!("catalog_task_cancelling").into();
+            data.log(crate::t!("catalog_task_cancel_requested"));
         }
         Command::Recordings(value) => {
             if let Err(error) = engine.store.set_meta("pref_source", "recordings") {
@@ -671,19 +665,22 @@ pub(super) fn execute(
             data.inspected_error = None;
             match result {
                 Ok(station) => data.inspected = Some(station),
-                Err(error) => data.inspected_error = Some(format!("详情查询失败: {error:#}")),
+                Err(error) => {
+                    data.inspected_error =
+                        Some(crate::t!("station_details_failed", "detail" => format!("{error:#}")))
+                }
             }
             data.revision += 1;
         }
         Command::Doctor => {
             if engine.diagnostics.is_some() {
-                bail!("诊断任务正在运行");
+                bail!(crate::t!("diagnostics_busy"));
             }
             let config = engine.config.clone();
             engine.diagnostics = Some(Background::start("radio-doctor", move |cancel| {
                 crate::cli::doctor_report(&config, &cancel)
             })?);
-            view.lock().unwrap().log("开始后台诊断");
+            view.lock().unwrap().log(crate::t!("diagnostics_started"));
         }
     }
     Ok(())
@@ -703,7 +700,7 @@ pub(super) fn run(
     if let Err(error) = engine.resume_last_station() {
         view.lock()
             .unwrap()
-            .log(&format!("恢复播放失败: {error:#}"));
+            .log(&crate::t!("resume_playback_failed", "detail" => format!("{error:#}")));
     }
     let empty = engine.store.count()? == 0;
     let expired = auto_sync_due(&engine.store, engine.config.settings.auto_sync_days)?;
@@ -711,9 +708,9 @@ pub(super) fn run(
         let mut data = view.lock().unwrap();
         data.task_active = true;
         data.task = if empty {
-            "获取热门电台…"
+            crate::t!("catalog_bootstrap_started")
         } else {
-            "目录已过期，后台同步中…"
+            crate::t!("catalog_auto_sync_started")
         }
         .into();
         let message = data.task.clone();
@@ -739,10 +736,7 @@ pub(super) fn run(
             let finished = if let Some(active) = job.as_ref() {
                 let mut data = view.lock().unwrap();
                 if !active.cancel.load(Ordering::Relaxed) && !active.bootstrap {
-                    let text = format!(
-                        "同步中 · 已获取 {} 台",
-                        active.progress.load(Ordering::Relaxed)
-                    );
+                    let text = crate::t!("catalog_sync_progress", "count" => active.progress.load(Ordering::Relaxed));
                     if data.task != text {
                         data.task = text;
                         data.revision += 1;
@@ -751,7 +745,7 @@ pub(super) fn run(
                 match active.result.try_recv() {
                     Ok(result) => Some(result),
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        Some(Err(anyhow::anyhow!("目录任务异常退出")))
+                        Some(Err(anyhow::anyhow!(crate::t!("catalog_task_exited"))))
                     }
                     Err(mpsc::TryRecvError::Empty) => None,
                 }
@@ -764,16 +758,17 @@ pub(super) fn run(
                 let mut data = view.lock().unwrap();
                 data.task_active = false;
                 data.task = match result {
-                    Ok(n) => format!(
-                        "{}完成：{n} 台",
+                    Ok(n) => {
                         if active.bootstrap {
-                            "热门目录"
+                            crate::t!("catalog_bootstrap_done", "count" => n)
                         } else {
-                            "同步"
+                            crate::t!("catalog_sync_done", "count" => n)
                         }
-                    ),
-                    Err(_) if cancelled => "目录任务已取消，保留原目录".into(),
-                    Err(error) => format!("目录任务失败: {error:#}"),
+                    }
+                    Err(_) if cancelled => crate::t!("catalog_task_cancelled").into(),
+                    Err(error) => {
+                        crate::t!("catalog_task_failed", "detail" => format!("{error:#}"))
+                    }
                 };
                 let text = data.task.clone();
                 data.log(&text);
@@ -795,7 +790,9 @@ pub(super) fn run(
                             ));
                         }
                     }
-                    Err(error) => data.log(&format!("诊断失败: {error:#}")),
+                    Err(error) => {
+                        data.log(&crate::t!("diagnostics_failed", "detail" => format!("{error:#}")))
+                    }
                 }
             }
             engine.artwork.demand = view.lock().unwrap().artwork_station.clone();
