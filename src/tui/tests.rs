@@ -3806,6 +3806,29 @@ fn commands_with_url_credentials_stay_out_of_the_command_history() {
 }
 
 #[test]
+fn copying_a_long_url_reports_truncation_only_above_the_byte_limit() {
+    let mut data = view();
+    let mut app = App::default();
+    let (sender, _) = command::channel(4);
+    for length in [4095, 4096, 4097] {
+        let station = &mut Arc::make_mut(&mut data.rows)[0];
+        station.url = format!("https://host/{}", "x".repeat(length - 13));
+        station.url_resolved = station.url.clone();
+        let name = station.name.clone();
+        app.key(key(KeyCode::Char('Y')), &data, &sender);
+        let url = app.clipboard.as_ref().unwrap();
+        assert_eq!(url.len(), length);
+        let notice = crate::t!("clipboard_station_url", "name" => name);
+        let expected = if length > 4096 {
+            crate::t!("clipboard_truncated", "notice" => notice)
+        } else {
+            notice
+        };
+        assert_eq!(app.message, expected);
+    }
+}
+
+#[test]
 fn copy_notices_name_the_row_that_was_copied() {
     let mut data = view();
     let mut app = App::default();

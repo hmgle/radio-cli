@@ -1726,8 +1726,12 @@ impl App {
                 };
                 match copied {
                     Some((value, notice)) => {
+                        self.message = if super::output::clipboard_truncated(&value) {
+                            crate::t!("clipboard_truncated", "notice" => notice)
+                        } else {
+                            notice
+                        };
                         self.clipboard = Some(value);
-                        self.message = notice;
                     }
                     None => {
                         self.clipboard = None;

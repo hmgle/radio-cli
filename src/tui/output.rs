@@ -1,8 +1,14 @@
 use std::io::{self, Write};
 
+pub(super) const CLIPBOARD_LIMIT: usize = 4096;
+
+pub(super) fn clipboard_truncated(value: &str) -> bool {
+    value.len() > CLIPBOARD_LIMIT
+}
+
 pub(super) fn clipboard_sequence(value: &str) -> Vec<u8> {
     use base64::Engine;
-    let mut end = value.len().min(4096);
+    let mut end = value.len().min(CLIPBOARD_LIMIT);
     while !value.is_char_boundary(end) {
         end -= 1;
     }
