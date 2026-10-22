@@ -1030,13 +1030,16 @@ pub(super) fn field_lines(content: &str, width: usize) -> Vec<Line<'static>> {
     let mut result = Vec::new();
     for line in content.lines() {
         let Some((label, value)) = line.split_once('\t') else {
+            let line = crate::clean_text(line);
             result.extend(
-                super::text::wrap_words(line, width)
+                super::text::wrap_words(&line, width)
                     .into_iter()
                     .map(|line| Line::from(line.to_owned())),
             );
             continue;
         };
+        let label = crate::clean_text(label);
+        let value = crate::clean_text(value);
         let indent = if stacked {
             2.min(width.saturating_sub(1))
         } else {
@@ -1044,7 +1047,7 @@ pub(super) fn field_lines(content: &str, width: usize) -> Vec<Line<'static>> {
         };
         if stacked {
             result.extend(
-                super::text::wrap_words(label, width)
+                super::text::wrap_words(&label, width)
                     .into_iter()
                     .map(|label| {
                         Line::from(Span::styled(
@@ -1056,13 +1059,13 @@ pub(super) fn field_lines(content: &str, width: usize) -> Vec<Line<'static>> {
         }
         let available = width.saturating_sub(indent).max(1);
         let values = if value.contains("://") {
-            super::text::wrap_url(value, available)
+            super::text::wrap_url(&value, available)
         } else {
-            super::text::wrap_words(value, available)
+            super::text::wrap_words(&value, available)
         };
         for (index, value) in values.into_iter().enumerate() {
             let prefix = if !stacked && index == 0 {
-                format!("{label}{}", " ".repeat(indent - super::text::width(label)))
+                format!("{label}{}", " ".repeat(indent - super::text::width(&label)))
             } else {
                 " ".repeat(indent)
             };

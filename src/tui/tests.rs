@@ -4130,6 +4130,11 @@ fn station_fields_align_or_stack_and_keep_the_whole_address() {
             assert_eq!(lines[1].find("France"), lines[2].find("French"));
         }
     }
+    let lines = render::field_lines("Title\x1b[2J\nU\x1b[31mUID:\tbad\x1b[31m-id\x07", 60);
+    let rendered = lines.iter().map(ToString::to_string).collect::<String>();
+    assert!(!rendered.contains('\x1b'));
+    assert!(!rendered.contains('\x07'));
+    assert!(rendered.contains("bad[31m-id"));
 }
 
 #[test]
