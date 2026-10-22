@@ -1,5 +1,7 @@
-//! Finds credentials embedded in URLs, so they can be kept out of places the
+//! Finds credentials embedded in absolute URLs, so they can be kept out of places the
 //! user did not ask to store them in.
+//! Detection requires `://`; relative references (including `//host/path`)
+//! and bare query strings are outside this scanner's scope.
 
 use std::ops::Range;
 
@@ -172,6 +174,18 @@ mod tests {
         ] {
             assert!(secrets(text).is_empty(), "{text}");
             assert!(!has_url_credentials(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn scheme_relative_references_are_outside_the_scanners_scope() {
+        for text in [
+            "//user:pass@host/live",
+            "//host/live?token=secret",
+            "play //user:pass@host/live?key=secret",
+        ] {
+            assert!(!has_url_credentials(text));
+            assert_eq!(urls(text), text);
         }
     }
 
