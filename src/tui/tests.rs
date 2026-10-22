@@ -614,6 +614,7 @@ fn context_hints_match_source_and_focus_actions() {
             }
         }
         app.focus = Focus::List;
+        app.message.clear();
         let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
         terminal
             .draw(|frame| render::draw(frame, &mut app, &data))
@@ -1925,6 +1926,45 @@ fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
         .unwrap();
     assert!(text(&terminal).contains("FFmpeg disk failure details"));
     assert!(text(&terminal).contains(&crate::t!("recording_reconnected", "count" => 2)));
+}
+
+#[test]
+fn ignored_keys_explain_why_nothing_happened() {
+    let mut data = view();
+    data.rows = Vec::new().into();
+    let mut app = App::default();
+    let (sender, receiver) = command::channel(10);
+    for code in ['y', 'Y', 'f'] {
+        app.key(key(KeyCode::Char(code)), &data, &sender);
+        assert_eq!(app.message, crate::t!("no_station_selected"));
+        assert!(app.clipboard.is_none());
+        assert!(receiver.try_recv().is_err());
+        app.message.clear();
+    }
+
+    app.source = Source::Recordings;
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert_eq!(app.message, crate::t!("no_recording_selected"));
+    for (code, expected) in [
+        ('f', crate::t!("recordings_no_favorite")),
+        ('F', crate::t!("recordings_no_search")),
+        ('/', crate::t!("recordings_no_search")),
+    ] {
+        app.key(key(KeyCode::Char(code)), &data, &sender);
+        assert_eq!(app.message, expected);
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.filter_edit.is_none());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    // A successful copy still replaces the notice with its own confirmation.
+    app.source = Source::Stations;
+    let data = view();
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert_eq!(app.message, crate::t!("clipboard_sent"));
+    app.source = Source::Stations;
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    assert!(app.filter_edit.is_some());
 }
 
 #[test]

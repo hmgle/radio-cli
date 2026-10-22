@@ -1333,8 +1333,11 @@ impl App {
             KeyCode::Char('f') if self.source != Source::Recordings => {
                 if let Some(s) = self.selected(view) {
                     self.send(sender, Command::ToggleFavorite(s.stationuuid.clone()));
+                } else {
+                    self.message = crate::t!("no_station_selected").into();
                 }
             }
+            KeyCode::Char('f') => self.message = crate::t!("recordings_no_favorite").into(),
             KeyCode::Char('F') if self.source != Source::Recordings => {
                 self.filter_input
                     .set(self.filter.country.as_deref().unwrap_or(""));
@@ -1351,6 +1354,9 @@ impl App {
                         self.filter.min_bitrate.to_string(),
                     ],
                 ))
+            }
+            KeyCode::Char('/') | KeyCode::Char('F') => {
+                self.message = crate::t!("recordings_no_search").into();
             }
             KeyCode::F(5) => {
                 self.flush_search(sender);
@@ -1389,6 +1395,13 @@ impl App {
                 };
                 if self.clipboard.is_some() {
                     self.message = crate::t!("clipboard_sent").into();
+                } else {
+                    self.message = if self.source == Source::Recordings {
+                        crate::t!("no_recording_selected")
+                    } else {
+                        crate::t!("no_station_selected")
+                    }
+                    .into();
                 }
             }
             KeyCode::Char(' ') => {
