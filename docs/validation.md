@@ -17,11 +17,17 @@
   static-linkage checks plus version and doctor smoke checks from the extracted
   archive; the archive carries nonempty guides, English completions, the manual
   and `BUILDINFO`, and `SHA256SUMS` covers the produced tarball.
-- Release archives still require the final GitHub CI gates for Linux, native
-  macOS Apple Silicon and Intel, Rust 1.88 and RustSec auditing, plus the musl
-  packaging and extracted-archive smoke checks. Those jobs were not run for this
-  candidate. Native package checks do not imply Developer ID signing,
-  notarization or physical listening.
+- Release GitHub CI gates all pass for this candidate (run 39814611849 on
+  `main`): Linux tests, Rust 1.88 MSRV, RustSec audit, x86_64 musl packaging,
+  native macOS Apple Silicon and Intel clippy/tests/packaging, and the verified
+  release-archives job. The Intel macOS job first failed on two real-mpv tests
+  (`live_stream_reconnects_across_outages_without_duplicate_history`,
+  `engine_uses_explicit_backup_without_merging_names`) with 10-second startup
+  timeouts; the same tests pass on Linux, on Apple Silicon and locally, and the
+  re-run of that job passed, so it is runner timing flakiness rather than a
+  regression. Published archives come from the CI artifact and were verified
+  against `SHA256SUMS`. Native package checks do not imply Developer ID
+  signing, notarization or physical listening.
 
 验证日期：2026-10-22。环境：Debian Linux x86_64，内核 6.12.113+deb13-amd64，
 Intel Core i5-8365U（8 个逻辑 CPU），Rust 1.97.1、FFmpeg 7.1.5、mpv 0.40.0。
