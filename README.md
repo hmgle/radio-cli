@@ -139,7 +139,7 @@ TUI keys:
 | `gg` / `G` | First / last item in the list |
 | `PgUp` / `PgDn`, `Ctrl-b` / `Ctrl-f` | Page through the station list |
 | `Ctrl-e` / `Ctrl-y` | Move down / up one line in the focused panel |
-| `?` | Open help or current failure details |
+| `?` | Open help or current failure details (scroll with `j`/`k`, `PgUp`/`PgDn`, `g`/`G`, `Ctrl-e`/`Ctrl-y`/`Ctrl-b`/`Ctrl-f`) |
 | `q` / `Ctrl-C` | Finalize recordings and quit |
 
 The focused panel uses a bright cyan bold border, a `▶` marker, and a number; the bottom bar shows the mode and the focused panel's actions. Mouse clicks switch panels and select rows; double-click a station row to play it. The wheel navigates. The top bar continuously shows the current station, codec, bitrate, volume, and recording status; the details panel shows country/region, language, tags, UUID, address, and more. Bitrate and codec are labeled as catalog data and unknown values are explicitly shown as unknown; the current playback info does not change with list selection.

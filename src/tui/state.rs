@@ -130,6 +130,34 @@ const EDITOR_LIMIT: usize = 2048;
 /// How long a plain notice stays in place of the context hint.
 const MESSAGE_TTL: Duration = Duration::from_secs(4);
 
+/// Wrapped length and visible height of a scrolling text area, as measured by
+/// the most recent frame; the scroll offset may never pass `max`.
+#[derive(Clone, Copy, Default)]
+pub(super) struct ScrollExtent {
+    pub total: usize,
+    pub visible: usize,
+}
+impl ScrollExtent {
+    pub fn max(self) -> usize {
+        self.total.saturating_sub(self.visible)
+    }
+    /// The 1-based first and last visible line, or `None` when everything fits.
+    pub fn span(self, scroll: u16) -> Option<(usize, usize)> {
+        (self.max() > 0).then(|| {
+            let first = usize::from(scroll).min(self.max());
+            (first + 1, (first + self.visible).min(self.total))
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PopupMove {
+    Lines(isize),
+    Pages(isize),
+    Top,
+    Bottom,
+}
+
 #[derive(Default)]
 pub(super) struct Editor {
     pub station_ids: Vec<String>,
@@ -427,6 +455,7 @@ pub(super) struct App {
     pub help_content: Option<String>,
     pub help_title: Option<&'static str>,
     pub help_scroll: u16,
+    pub popup: ScrollExtent,
     pub details_scroll: u16,
     pub inspect_info: bool,
     pub info_request: u64,
@@ -486,6 +515,7 @@ impl Default for App {
             help_content: None,
             help_title: None,
             help_scroll: 0,
+            popup: ScrollExtent::default(),
             details_scroll: 0,
             inspect_info: false,
             info_request: 0,
@@ -524,6 +554,25 @@ impl App {
             self.last_click = None;
         }
         self.rects = rects;
+    }
+    /// Moves the text popup within the bounds measured by the last frame. Until a
+    /// frame has measured it the bound is open and the renderer clamps afterwards.
+    fn move_popup(&mut self, movement: PopupMove) {
+        let limit = usize::from(u16::MAX);
+        let max = if self.popup.visible == 0 {
+            limit
+        } else {
+            self.popup.max().min(limit)
+        };
+        let page = isize::try_from(self.popup.visible.max(1)).unwrap_or(isize::MAX);
+        let current = usize::from(self.help_scroll);
+        let next = match movement {
+            PopupMove::Lines(count) => current.saturating_add_signed(count),
+            PopupMove::Pages(count) => current.saturating_add_signed(count.saturating_mul(page)),
+            PopupMove::Top => 0,
+            PopupMove::Bottom => max,
+        };
+        self.help_scroll = next.min(max) as u16;
     }
     /// Clears an ordinary notice after `MESSAGE_TTL` of being on screen and
     /// reports whether it did. Notices that belong to an open dialog or an
@@ -1160,7 +1209,7 @@ impl App {
                     | KeyCode::Down
                     | KeyCode::PageUp
                     | KeyCode::PageDown
-            )
+            ) || control && matches!(key.code, KeyCode::Char('e' | 'y' | 'f' | 'b'))
         } else if self.filter_edit.is_some() {
             !commits && !(control && key.code == KeyCode::Char('u'))
         } else if control {
@@ -1269,18 +1318,19 @@ impl App {
             return;
         }
         if self.help {
+            let control = key.modifiers.contains(KeyModifiers::CONTROL);
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => self.help = false,
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.help_scroll = self.help_scroll.saturating_add(1).min(4096)
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.help_scroll = self.help_scroll.saturating_sub(1)
-                }
-                KeyCode::PageDown => {
-                    self.help_scroll = self.help_scroll.saturating_add(10).min(4096)
-                }
-                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                KeyCode::Char('e') if control => self.move_popup(PopupMove::Lines(1)),
+                KeyCode::Char('y') if control => self.move_popup(PopupMove::Lines(-1)),
+                KeyCode::Char('f') if control => self.move_popup(PopupMove::Pages(1)),
+                KeyCode::Char('b') if control => self.move_popup(PopupMove::Pages(-1)),
+                KeyCode::Down | KeyCode::Char('j') => self.move_popup(PopupMove::Lines(1)),
+                KeyCode::Up | KeyCode::Char('k') => self.move_popup(PopupMove::Lines(-1)),
+                KeyCode::PageDown => self.move_popup(PopupMove::Pages(1)),
+                KeyCode::PageUp => self.move_popup(PopupMove::Pages(-1)),
+                KeyCode::Home | KeyCode::Char('g') => self.move_popup(PopupMove::Top),
+                KeyCode::End | KeyCode::Char('G') => self.move_popup(PopupMove::Bottom),
                 _ => {}
             }
             return;

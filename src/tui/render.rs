@@ -1,5 +1,5 @@
 use super::{
-    state::{App, Focus, Mode, Source},
+    state::{App, Focus, Mode, ScrollExtent, Source},
     worker::{PageStatus, View},
 };
 use crate::model::Station;
@@ -540,7 +540,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             active(Focus::Details),
         );
         frame.render_widget(
-            scroll_text(&text, text_rect, &mut app.details_scroll).block(block),
+            scroll_text(&text, text_rect, &mut app.details_scroll)
+                .0
+                .block(block),
             text_rect,
         );
         if let Some((image, rect)) = image {
@@ -840,20 +842,23 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     if app.help {
         let rect = popup(area, 88, area.height.saturating_sub(2));
         clear_popup(frame, rect);
-        frame.render_widget(
-            scroll_text(
-                &app.help_content
-                    .clone()
-                    .unwrap_or_else(|| help_text(crate::messages::locale(), &app.jump_binding)),
-                rect,
-                &mut app.help_scroll,
-            )
-            .block(panel(
-                app.help_title.unwrap_or(crate::t!("help_title")).into(),
-                true,
-            )),
-            rect,
-        );
+        let content = app
+            .help_content
+            .clone()
+            .unwrap_or_else(|| help_text(crate::messages::locale(), &app.jump_binding));
+        let (paragraph, extent) = scroll_text(&content, rect, &mut app.help_scroll);
+        app.popup = extent;
+        let title = app.help_title.unwrap_or(crate::t!("help_title"));
+        let mut block = panel(title.into(), true);
+        if let Some((first, last)) = extent.span(app.help_scroll) {
+            let position = format!(" {first}-{last}/{} ", extent.total);
+            // The title and a border cell on each side come first; drop the
+            // position rather than overlap them on narrow terminals.
+            if title.width() + 4 + position.width() + 2 <= usize::from(rect.width) {
+                block = block.title(Line::from(position).right_aligned());
+            }
+        }
+        frame.render_widget(paragraph.block(block), rect);
     }
     if let Some(confirmation) = &app.confirmation {
         let rect = popup(area, 72, area.height.saturating_sub(2));
@@ -991,12 +996,14 @@ pub(super) fn wrapped_lines(text: &str, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> Paragraph<'a> {
+fn scroll_text<'a>(text: &'a str, rect: Rect, scroll: &mut u16) -> (Paragraph<'a>, ScrollExtent) {
     let lines = wrapped_lines(text, rect.width.saturating_sub(2));
-    let visible = usize::from(rect.height.saturating_sub(2));
-    let maximum = lines.len().saturating_sub(visible).min(u16::MAX as usize) as u16;
-    *scroll = (*scroll).min(maximum);
-    Paragraph::new(lines).scroll((*scroll, 0))
+    let extent = ScrollExtent {
+        total: lines.len(),
+        visible: usize::from(rect.height.saturating_sub(2)),
+    };
+    *scroll = (*scroll).min(extent.max().min(usize::from(u16::MAX)) as u16);
+    (Paragraph::new(lines).scroll((*scroll, 0)), extent)
 }
 fn popup(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2));

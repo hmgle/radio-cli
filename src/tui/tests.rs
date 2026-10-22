@@ -2068,6 +2068,110 @@ fn an_expired_notice_gives_the_bottom_bar_back_to_the_context_hint() {
 }
 
 #[test]
+fn help_popup_pages_by_its_visible_height_and_reaches_both_ends() {
+    let data = view();
+    let (sender, receiver) = command::channel(4);
+    let mut app = App::default();
+    app.help = true;
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    let draw = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
+        terminal
+            .draw(|frame| render::draw(frame, app, &data))
+            .unwrap();
+        text(terminal)
+    };
+    let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    let screen = draw(&mut app, &mut terminal);
+    let extent = app.popup;
+    assert!(extent.visible > 0 && extent.total > extent.visible * 2);
+    let (page, max) = (extent.visible as u16, extent.max() as u16);
+    assert!(screen.contains(&format!(" 1-{}/{} ", extent.visible, extent.total)));
+
+    for (event, expected) in [
+        (key(KeyCode::PageDown), page),
+        (ctrl('f'), page * 2),
+        (ctrl('b'), page),
+        (key(KeyCode::PageUp), 0),
+        (ctrl('b'), 0),
+        (ctrl('e'), 1),
+        (ctrl('e'), 2),
+        (ctrl('y'), 1),
+        (key(KeyCode::End), max),
+        (key(KeyCode::PageDown), max),
+        (key(KeyCode::Char('j')), max),
+        (key(KeyCode::Char('g')), 0),
+        (key(KeyCode::Char('G')), max),
+        (key(KeyCode::Home), 0),
+    ] {
+        app.key(event, &data, &sender);
+        assert_eq!(app.help_scroll, expected, "after {event:?}");
+    }
+    assert!(app.help);
+    assert!(receiver.try_recv().is_err(), "scroll keys never leak");
+
+    app.key(key(KeyCode::End), &data, &sender);
+    let screen = draw(&mut app, &mut terminal);
+    assert!(screen.contains(&format!(
+        " {}-{}/{} ",
+        usize::from(max) + 1,
+        extent.total,
+        extent.total
+    )));
+    let help = render::help_text(crate::messages::locale(), &app.jump_binding);
+    let last = render::wrapped_lines(&help, 86).pop().unwrap().to_string();
+    assert!(screen.contains(last.trim_end()), "last help line: {last}");
+
+    // A narrow terminal drops the position rather than overlapping the title.
+    let mut narrow = Terminal::new(TestBackend::new(40, 16)).unwrap();
+    app.help_scroll = 0;
+    let screen = draw(&mut app, &mut narrow);
+    assert!(!screen.contains(&format!("/{}", app.popup.total)));
+}
+
+#[test]
+fn long_popup_text_has_no_operation_cap_and_follows_the_terminal_size() {
+    let data = view();
+    let (sender, _receiver) = command::channel(4);
+    let mut app = App::default();
+    app.help = true;
+    app.help_content = Some(
+        (1..=5000)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    let draw = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
+        terminal
+            .draw(|frame| render::draw(frame, app, &data))
+            .unwrap();
+        text(terminal)
+    };
+    draw(&mut app, &mut terminal);
+    app.key(key(KeyCode::End), &data, &sender);
+    let screen = draw(&mut app, &mut terminal);
+    assert!(screen.contains("line 5000"), "the tail must be reachable");
+    assert!(app.help_scroll > 4096);
+    assert_eq!(usize::from(app.help_scroll), app.popup.max());
+
+    // Growing the terminal clamps the offset to the new maximum and pages follow it.
+    let mut taller = Terminal::new(TestBackend::new(100, 60)).unwrap();
+    draw(&mut app, &mut taller);
+    assert_eq!(usize::from(app.help_scroll), app.popup.max());
+    assert_eq!(app.popup.visible, 56);
+    let before = app.help_scroll;
+    app.key(key(KeyCode::PageUp), &data, &sender);
+    assert_eq!(app.help_scroll, before - 56);
+
+    // Content that fits again needs no scrolling and shows no position.
+    app.help_content = Some("a\nb".into());
+    let screen = draw(&mut app, &mut taller);
+    assert_eq!(app.help_scroll, 0);
+    assert!(app.popup.span(0).is_none());
+    assert!(!screen.contains("1-2/2"));
+}
+
+#[test]
 fn rendered_text_never_splits_grapheme_clusters() {
     let family = "👨\u{200d}👩\u{200d}👧";
     let fitted = render::fit(&format!("{family} hello"), 5);
