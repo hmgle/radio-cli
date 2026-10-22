@@ -257,7 +257,7 @@ Tab / Shift-Tab\tSwitch panels
 1–5\tFocus a panel
 Left / Right or h / l\tSwitch panels sideways
 Ctrl-h/j/k/l or Ctrl-arrows\tSwitch panels by direction
-[ / ]\tSwitch category
+[ / ]\tSwitch category (each remembers its page and row)
 j/k, Up / Down\tMove the selection or scroll (in Sources: switch category)
 gg / G, Home / End\tFirst/last item
 Ctrl-u / Ctrl-d\tMove ten items

@@ -428,6 +428,13 @@ struct SearchOrigin {
     edited: bool,
 }
 
+/// Where a source's list was when the user switched away from it; kept for the
+/// session only and unrelated to the `resume` setting.
+struct SourcePosition {
+    filter: Filter,
+    selected_id: Option<String>,
+}
+
 pub(super) struct App {
     last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
@@ -471,7 +478,7 @@ pub(super) struct App {
     pub rects: [Rect; 5],
     pub filter_summary: Rect,
     pub source_rows: [Rect; 4],
-    positions: [usize; 4],
+    positions: [Option<SourcePosition>; 4],
     pub quit: bool,
     pub too_small: bool,
     size: (u16, u16),
@@ -531,7 +538,7 @@ impl Default for App {
             rects: [Rect::default(); 5],
             filter_summary: Rect::default(),
             source_rows: [Rect::default(); 4],
-            positions: [0; 4],
+            positions: Default::default(),
             quit: false,
             too_small: false,
             size: (0, 0),
@@ -875,19 +882,40 @@ impl App {
     ) {
         self.restore_selection = None;
         self.jump_selection = None;
-        self.positions[self.source.index()] = self.list.selected().unwrap_or(0);
+        self.positions[self.source.index()] = Some(SourcePosition {
+            filter: self.filter.clone(),
+            selected_id: self.selected_id.clone(),
+        });
         self.source = source;
-        self.list = ListState::default().with_selected(Some(self.positions[source.index()]));
-        self.selected_id = None;
-        self.details_scroll = 0;
-        self.inspect_info = false;
         self.filter.favorites = source == Source::Favorites;
         self.filter.history = source == Source::History;
         self.filter.recordings = source == Source::Recordings;
-        self.filter.offset = page.as_ref().map_or(0, |p| p.offset);
-        if let Some(page) = page {
-            self.filter.limit = usize::from(page.limit);
+        // An explicit page starts at its first row; otherwise the source comes
+        // back where it was, as long as it is still the same query.
+        let mut remembered = None;
+        match page {
+            Some(page) => {
+                self.filter.offset = page.offset;
+                self.filter.limit = usize::from(page.limit);
+            }
+            None => {
+                remembered = self.positions[source.index()].take().filter(|saved| {
+                    let same = |filter: &Filter| Filter {
+                        offset: 0,
+                        ..filter.clone()
+                    };
+                    same(&saved.filter) == same(&self.filter)
+                });
+                self.filter.offset = remembered.as_ref().map_or(0, |saved| saved.filter.offset);
+            }
         }
+        self.selected_id = remembered.and_then(|saved| saved.selected_id);
+        self.list = ListState::default().with_selected(Some(0));
+        // The first page to arrive looks the row up by its ID, even if the
+        // revision counter happens to match the previous source's.
+        self.rows_revision = u64::MAX;
+        self.details_scroll = 0;
+        self.inspect_info = false;
         self.flush_search(sender);
     }
     fn focus_direction(&mut self, dx: i32, dy: i32) {

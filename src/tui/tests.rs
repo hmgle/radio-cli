@@ -3107,6 +3107,135 @@ fn confirming_a_search_keeps_the_new_query_and_starts_at_the_first_page() {
     assert!(rx.try_recv().is_err());
 }
 
+fn searched_offsets(rx: &command::CommandReceiver) -> Vec<usize> {
+    rx.try_iter()
+        .filter_map(|c| match c {
+            Command::Search(filter) => Some(filter.offset),
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_sources_come_back_where_they_were(mut app: App) {
+    let (tx, rx) = command::channel(16);
+    let home = app.source;
+    let other = Source::ALL[(home.index() + 1) % 4];
+    app.filter.offset = 200;
+    let rows = vec![station("A"), station("B"), station("C")];
+    let data = paged_view(&app, rows.clone());
+    app.reconcile(&data);
+    app.key(key(KeyCode::Char('j')), &data, &tx);
+    app.key(key(KeyCode::Char('j')), &data, &tx);
+    assert_eq!(app.selected(&data).unwrap().name, "C");
+
+    app.key(key(KeyCode::Char(']')), &data, &tx);
+    assert_eq!((app.source, app.filter.offset), (other, 0));
+    let (x, y) = (station("X"), station("Y"));
+    let theirs = paged_view(&app, vec![x.clone(), y.clone()]);
+    app.reconcile(&theirs);
+    app.key(key(KeyCode::Char('j')), &theirs, &tx);
+    assert_eq!(app.selected(&theirs).unwrap().name, "Y");
+
+    app.key(key(KeyCode::Char('[')), &theirs, &tx);
+    assert_eq!((app.source, app.filter.offset), (home, 200));
+    assert_eq!(searched_offsets(&rx), vec![0, 200]);
+    // Every page here carries the same revision number: the row is still
+    // found by its ID, and the page may have shifted meanwhile.
+    let back = paged_view(
+        &app,
+        vec![
+            station("New"),
+            rows[0].clone(),
+            rows[1].clone(),
+            rows[2].clone(),
+        ],
+    );
+    app.reconcile(&back);
+    assert_eq!(app.selected(&back).unwrap().name, "C");
+
+    app.key(key(KeyCode::Char(']')), &back, &tx);
+    assert_eq!((app.source, app.filter.offset), (other, 0));
+    let again = paged_view(&app, vec![station("W"), x, y]);
+    app.reconcile(&again);
+    assert_eq!(app.selected(&again).unwrap().name, "Y");
+}
+
+#[test]
+fn sources_come_back_to_their_page_and_row_in_either_resume_state() {
+    use crate::config::ResumeMode;
+    assert_sources_come_back_where_they_were(App::default());
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let saved = station("Saved");
+    store.upsert(&saved).unwrap();
+    store.favorite(&saved.stationuuid, true).unwrap();
+    store.set_meta("pref_source", "favorites").unwrap();
+    store
+        .set_meta("pref_last_station", &saved.stationuuid)
+        .unwrap();
+    for mode in [ResumeMode::Disabled, ResumeMode::Selection] {
+        let app = App::restore(&store, mode).unwrap();
+        assert_eq!(
+            app.source,
+            if mode == ResumeMode::Disabled {
+                Source::Stations
+            } else {
+                Source::Favorites
+            }
+        );
+        assert_sources_come_back_where_they_were(app);
+    }
+}
+
+#[test]
+fn a_vanished_row_or_a_changed_query_falls_back_to_the_first_row_or_page() {
+    let (tx, rx) = command::channel(16);
+    let mut app = App::default();
+    app.filter.offset = 200;
+    let rows = vec![station("A"), station("B"), station("C")];
+    let data = paged_view(&app, rows.clone());
+    app.reconcile(&data);
+    app.key(key(KeyCode::Char('j')), &data, &tx);
+    app.key(key(KeyCode::Char(']')), &data, &tx);
+    app.reconcile(&paged_view(&app, vec![station("X")]));
+    app.key(key(KeyCode::Char('[')), &data, &tx);
+    assert_eq!(app.filter.offset, 200);
+    // "B" was removed while the user was elsewhere.
+    let back = paged_view(&app, vec![rows[0].clone(), rows[2].clone()]);
+    app.reconcile(&back);
+    assert_eq!(app.list.selected(), Some(0));
+
+    // Another query in the other source makes the old page meaningless.
+    app.key(key(KeyCode::Char(']')), &back, &tx);
+    app.reconcile(&paged_view(&app, vec![station("X")]));
+    app.key(key(KeyCode::Char('/')), &back, &tx);
+    app.key(key(KeyCode::Char('q')), &back, &tx);
+    app.key(key(KeyCode::Enter), &back, &tx);
+    app.key(key(KeyCode::Char('[')), &back, &tx);
+    assert_eq!((app.filter.query.as_str(), app.filter.offset), ("q", 0));
+    assert_eq!(searched_offsets(&rx).last(), Some(&0));
+}
+
+#[test]
+fn an_explicit_page_beats_the_remembered_one() {
+    let (tx, _rx) = command::channel(16);
+    let mut app = App::default();
+    let data = paged_view(&app, vec![station("A"), station("B")]);
+    app.reconcile(&data);
+    app.key(key(KeyCode::Char(']')), &data, &tx);
+    app.filter.offset = 100;
+    app.key(key(KeyCode::Char('[')), &data, &tx);
+    assert_eq!(app.source, Source::Stations);
+
+    app.mode = Mode::Command;
+    app.editor.set("favorites list --limit 100 --offset 50");
+    app.key(key(KeyCode::Enter), &data, &tx);
+    assert_eq!(app.source, Source::Favorites);
+    assert_eq!((app.filter.offset, app.filter.limit), (50, 100));
+    assert_eq!(app.list.selected(), Some(0));
+}
+
 #[test]
 fn media_states_are_distinguishable_in_header_list_row_and_details() {
     use crate::engine::PlaybackState as P;

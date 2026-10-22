@@ -135,7 +135,7 @@ TUI keys:
 | `+`, `-` | Volume |
 | `/` | Incremental search; Enter confirms, Esc restores the previous query, page and selection |
 | `F` | Country/region code, language, tag, and minimum-bitrate filters |
-| `[` / `]` | Stations / favorites / recent / recordings categories |
+| `[` / `]` | Stations / favorites / recent / recordings categories; each remembers its page and row for the session |
 | `gg` / `G` | First / last item in the list |
 | `PgUp` / `PgDn`, `Ctrl-b` / `Ctrl-f` | Page through the station list |
 | `Ctrl-e` / `Ctrl-y` | Move down / up one line in the focused panel |

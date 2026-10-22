@@ -256,7 +256,7 @@ Tab / Shift-Tab\t切换面板
 1–5\t直达面板
 Left / Right 或 h / l\t左右切换面板
 Ctrl-h/j/k/l 或 Ctrl-方向键\t按方向切换面板
-[ / ]\t切换目录分类
+[ / ]\t切换目录分类（各分类记住自己的页和选中行）
 j/k、方向键\t移动选中项或滚动（来源面板中切换分类）
 gg / G, Home / End\t首项/末项
 Ctrl-u / Ctrl-d\t移动十项
