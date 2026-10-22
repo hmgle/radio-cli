@@ -150,7 +150,6 @@ tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
 列表查询失败后会自动退避重试，间隔从 500 ms 指数增长到 30 秒；`F5` 可绕过等待。
 普通一次性提示约 4 秒后自动消失。`y` 和 `Y` 通过 OSC 52 复制，是否生效取决于终端和复用器；
 超过 4,096 字节会截断并提示。
-`y` 和 `Y` 通过 OSC 52 复制，是否生效取决于终端和复用器。
 
 ### TUI 内置命令
 
@@ -371,7 +370,7 @@ mpv 测试使用空音频输出，找不到 mpv 时跳过，可用
 
 | 文档 | 内容 |
 | --- | --- |
-| [配置参考](docs/configuration.zh-CN.md) | 全部配置项、路径、语言、恢复、Artwork、快捷键 |
+| [配置参考](docs/configuration.zh-CN.md) | 全部配置项、路径、语言、恢复、artwork、快捷键 |
 | [录音指南](docs/recording.zh-CN.md) | 格式、文件、恢复、重连、空间检查 |
 | [故障排查](docs/troubleshooting.zh-CN.md) | 常见故障、代理、设备、退出码 |
 | [JSON 输出契约](docs/json-contract.zh-CN.md) | JSON 结构、错误码与进程退出码 |

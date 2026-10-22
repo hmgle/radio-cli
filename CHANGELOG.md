@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-10-22
 
 - Reorganize the public documentation into synchronized English and Chinese
   entry points, add detailed configuration, recording, troubleshooting, and JSON

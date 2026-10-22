@@ -392,7 +392,7 @@ and the deterministic catalog benchmark.
 
 | Document | Contents |
 | --- | --- |
-| [Configuration](docs/configuration.md) | Every setting, paths, language, resume, Artwork, keybindings |
+| [Configuration](docs/configuration.md) | Every setting, paths, language, resume, artwork, keybindings |
 | [Recording](docs/recording.md) | Formats, files, recovery, reconnects, disk checks |
 | [Troubleshooting](docs/troubleshooting.md) | Common failures, proxies, devices, exit codes |
 | [JSON contract](docs/json-contract.md) | JSON shapes and process exit codes |
