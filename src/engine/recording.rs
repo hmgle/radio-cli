@@ -95,7 +95,7 @@ impl RecordingController {
             session.status.recording_state = RecordingState::Probing;
             session.status.recording_ms = 0;
             session.status.recording_path.clear();
-            session.status.message = "正在后台检测录音编码…".into();
+            session.status.message = crate::t!("recording_probing").into();
             Ok(())
         } else {
             self.start_recording(
@@ -273,7 +273,7 @@ impl RecordingController {
                 task.cancel();
                 self.retiring_probes.push(task);
             }
-            session.status.message = "录音检测已取消".into();
+            session.status.message = crate::t!("recording_probe_cancelled").into();
             session.status.recording_state = RecordingState::Idle;
         }
         if let Some(recorder) = self.recorder.take() {
@@ -287,7 +287,7 @@ impl RecordingController {
                     let store = Store::open(&config.data_dir.join("radio.db"))?;
                     recorder.finish_cancellable(&config, &store, reason.as_deref(), &cancel)
                 })?);
-                session.status.message = "录音正在后台收尾…".into();
+                session.status.message = crate::t!("recording_finalizing_background").into();
             } else {
                 let record = recorder.finish(&session.config, &session.store, reason)?;
                 self.recording_finished(session, playback, record);
@@ -351,7 +351,8 @@ impl RecordingController {
                         session.status.recording_state = RecordingState::Failed {
                             reason: format!("{error:#}"),
                         };
-                        session.status.message = format!("录音启动失败: {error:#}");
+                        session.status.message =
+                            crate::t!("recording_start_failed", "error" => format!("{error:#}"));
                     }
                 }
             }
@@ -365,7 +366,7 @@ impl RecordingController {
                         reason: format!("{error:#}"),
                     };
                     session.status.message =
-                        format!("录音收尾失败，可用 recordings recover 重试: {error:#}")
+                        crate::t!("recording_finalize_failed", "error" => format!("{error:#}"))
                 }
             }
         }

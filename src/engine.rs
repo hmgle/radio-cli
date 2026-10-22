@@ -371,7 +371,7 @@ impl Engine {
                     bail!(DomainError::new(ErrorCode::Cancelled));
                 }
                 crate::service::delete_recording(&Store::open(&path)?, &id, index_only)?;
-                Ok(format!("已删除录音 {id}"))
+                Ok(crate::t!("recording_deleted", "id" => id))
             },
         )?);
         Ok(())
@@ -384,7 +384,7 @@ impl Engine {
         let dir = self.config.recording_dir.clone();
         self.library_task = Some(Background::start("radio-open-recordings", move |cancel| {
             crate::service::open_recordings(&dir, &cancel)?;
-            Ok(format!("已打开 {}", dir.display()))
+            Ok(crate::t!("recordings_opened", "path" => dir.display()))
         })?);
         Ok(())
     }
@@ -425,7 +425,9 @@ impl Engine {
             self.library_task = None;
             self.status.message = match result {
                 Ok(message) => message,
-                Err(error) => format!("录音操作失败: {error:#}"),
+                Err(error) => {
+                    crate::t!("recording_operation_failed", "error" => format!("{error:#}"))
+                }
             };
         }
         self.playback
