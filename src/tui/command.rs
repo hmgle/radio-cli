@@ -389,7 +389,7 @@ Space 暂停  m 静音  n 随机  f 收藏选中项  r 录音  +/- 音量\n\
 y 复制 UUID/录音 ID · Y 复制 URL/文件路径（OSC 52）\n\
 /  搜索模式（Enter 确认，Esc 恢复原搜索）\n\
 F  筛选对话框（键入过滤 · ↑/↓ 候选 · Tab 字段）\n\
-Ctrl-U 清空筛选     F5 刷新     ?  帮助     q / Ctrl-C 退出\n\n\
+筛选窗 Ctrl-U 清空搜索与筛选     F5 刷新     ?  帮助     q / Ctrl-C 退出\n\n\
 COMMAND 命令模式\n\
 : 输入命令；Enter 执行；Esc 返回普通模式；Ctrl-c 收尾并退出\n\
 Tab / Shift-Tab 补全；↑/↓ 历史；←/→ 编辑光标\n\

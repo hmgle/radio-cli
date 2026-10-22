@@ -221,7 +221,7 @@ loads local candidates in the background; arrows select and fill a value.
 At TUI startup, a previously synced catalog older than `auto_sync_days`
 (default: 7) refreshes in the background; set this to 0 to disable it.
 Cancellation and shrink protection also apply to automatic sync. Clear
-filters with Ctrl-U in `F`, or click the bottom filter summary. Search text
+filters with Ctrl-U in `F`, or click the explicit Clear label in the bottom bar. Search text
 remains a literal substring; quote multiword CLI arguments in your shell.
 Advanced query operators such as `-tag:` are reserved for a future change.
 

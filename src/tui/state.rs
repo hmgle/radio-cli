@@ -101,6 +101,14 @@ impl Source {
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|s| *s == self).unwrap()
     }
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Stations => crate::t!("source_stations_short"),
+            Self::Favorites => crate::t!("source_favorites_short"),
+            Self::History => crate::t!("source_history_short"),
+            Self::Recordings => crate::t!("source_recordings_short"),
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Stations => "全部电台",
@@ -324,9 +332,9 @@ impl Confirmation {
                 true,
                 index_only,
                 if index_only {
-                    "confirm_index_scope"
+                    crate::t!("confirm_index_scope")
                 } else {
-                    "confirm_recording_scope"
+                    crate::t!("confirm_recording_scope")
                 },
             ),
             Command::Station(crate::cli::StationAction::Remove {
@@ -337,9 +345,9 @@ impl Confirmation {
                 false,
                 keep_references,
                 if keep_references {
-                    "confirm_station_keep_scope"
+                    crate::t!("confirm_station_keep_scope")
                 } else {
-                    "confirm_station_scope"
+                    crate::t!("confirm_station_scope")
                 },
             ),
             _ => unreachable!("only deletion needs confirmation"),
@@ -414,6 +422,7 @@ pub(super) struct App {
     facet_due: Option<Instant>,
     pub help: bool,
     pub help_content: Option<String>,
+    pub help_title: Option<&'static str>,
     pub help_scroll: u16,
     pub details_scroll: u16,
     pub inspect_info: bool,
@@ -471,6 +480,7 @@ impl Default for App {
             facet_due: None,
             help: false,
             help_content: None,
+            help_title: None,
             help_scroll: 0,
             details_scroll: 0,
             inspect_info: false,
@@ -504,6 +514,12 @@ impl App {
             restore_selection,
             ..Self::default()
         })
+    }
+    pub fn set_rects(&mut self, rects: [Rect; 5]) {
+        if self.rects != rects {
+            self.last_click = None;
+        }
+        self.rects = rects;
     }
     pub fn update_size(&mut self, width: u16, height: u16) {
         if self.size != (width, height) {
@@ -883,11 +899,13 @@ impl App {
                     Parsed::HelpText(text) => {
                         self.help = true;
                         self.help_content = Some(text);
+                        self.help_title = Some(crate::t!("command_help_title"));
                         self.help_scroll = 0;
                     }
                     Parsed::Quit => self.quit = true,
                     Parsed::Help => {
                         self.help_content = None;
+                        self.help_title = None;
                         self.help = true;
                         self.help_scroll = 0;
                     }
@@ -1215,6 +1233,9 @@ impl App {
             }
             KeyCode::Char('?') => {
                 let mut errors = vec![];
+                if view.operation_error_id > self.dismissed_error {
+                    errors.push(view.operation_error.clone());
+                }
                 if let crate::engine::PlaybackState::Failed { reason } = &view.status.playback_state
                 {
                     errors.push(format!("播放失败\n{reason}"));
@@ -1224,6 +1245,7 @@ impl App {
                 {
                     errors.push(format!("录音失败\n{reason}"));
                 }
+                self.help_title = (!errors.is_empty()).then_some(crate::t!("error_details_title"));
                 self.help_content = (!errors.is_empty())
                     .then(|| format!("{}\n\nEsc / ? 关闭；j/k 滚动。", errors.join("\n\n")));
                 self.help = true;
@@ -1280,6 +1302,7 @@ impl App {
                 if self.focus == Focus::List && view.page_error(&self.filter).is_some() =>
             {
                 self.help_content = view.page_error(&self.filter).map(str::to_owned);
+                self.help_title = Some(crate::t!("error_details_title"));
                 self.help = true;
                 self.help_scroll = 0;
             }
@@ -1406,11 +1429,21 @@ impl App {
         if self.too_small
             || !self.mouse_enabled
             || self.mode != Mode::Normal
-            || self.help
-            || self.filter_edit.is_some()
             || self.confirmation.is_some()
         {
             self.last_click = None;
+            return;
+        }
+        if self.help || self.filter_edit.is_some() {
+            self.last_click = None;
+            let code = match event.kind {
+                MouseEventKind::ScrollDown => Some(KeyCode::Down),
+                MouseEventKind::ScrollUp => Some(KeyCode::Up),
+                _ => None,
+            };
+            if let Some(code) = code {
+                self.key(KeyEvent::new(code, KeyModifiers::NONE), view, sender);
+            }
             return;
         }
         let previous = match event.kind {
@@ -1462,37 +1495,48 @@ impl App {
                             self.selected_id = self.selection_id(view);
                             self.details_scroll = 0;
                             self.inspect_info = false;
-                            if let Some(station) = self.selected(view)
+                            if let Some(id) = self.selection_id(view)
                                 && event.column > rect.x
                                 && event.column < rect.right().saturating_sub(1)
                             {
-                                let uuid = station.stationuuid.clone();
-                                if previous.is_some_and(|(at, x, y, id, revision)| {
+                                let uuid = format!("{}:{id}", self.source.preference());
+                                let revision = if self.source == Source::Recordings {
+                                    view.recordings_revision
+                                } else {
+                                    view.rows_revision
+                                };
+                                if previous.is_some_and(|(at, x, y, id, previous_revision)| {
                                     now.saturating_duration_since(at) <= Duration::from_millis(500)
                                         && (x, y) == (event.column, event.row)
                                         && id == uuid
-                                        && revision == view.rows_revision
+                                        && previous_revision == revision
                                 }) {
-                                    self.send(sender, Command::Play(uuid));
+                                    self.send(
+                                        sender,
+                                        if self.source == Source::Recordings {
+                                            Command::PlayRecording(id)
+                                        } else {
+                                            Command::Play(id)
+                                        },
+                                    );
                                 } else {
-                                    self.last_click = Some((
-                                        now,
-                                        event.column,
-                                        event.row,
-                                        uuid,
-                                        view.rows_revision,
-                                    ));
+                                    self.last_click =
+                                        Some((now, event.column, event.row, uuid, revision));
                                 }
                             }
                         }
                     }
                 }
             }
-            MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollDown
+                if matches!(focus, Focus::List | Focus::Details | Focus::Activity) =>
+            {
                 self.focus = focus;
                 self.move_selection(3, view);
             }
-            MouseEventKind::ScrollUp => {
+            MouseEventKind::ScrollUp
+                if matches!(focus, Focus::List | Focus::Details | Focus::Activity) =>
+            {
                 self.focus = focus;
                 self.move_selection(-3, view);
             }

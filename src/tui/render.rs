@@ -119,9 +119,102 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     }
 }
 
+struct ScreenLayout {
+    rects: [Rect; 5],
+    bottom: Rect,
+    shared: bool,
+    task_main: bool,
+}
+fn screen_layout(area: Rect, focus: Focus, task_active: bool) -> ScreenLayout {
+    let mut rects = [Rect::default(); 5];
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(if area.width >= 100 && area.height >= 20 {
+                5
+            } else {
+                4
+            }),
+            Constraint::Min(3),
+            Constraint::Length(
+                if area.height >= 20 && (task_active || focus == Focus::Activity) {
+                    4
+                } else {
+                    1
+                },
+            ),
+            Constraint::Length(3),
+        ])
+        .split(area);
+    rects[Focus::Player.index()] = vertical[0];
+    rects[Focus::Activity.index()] = vertical[2];
+    if area.width >= 100 && area.height >= 20 {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(18),
+                Constraint::Percentage(48),
+                Constraint::Min(25),
+            ])
+            .split(vertical[1]);
+        rects[Focus::Sources.index()] = columns[0];
+        rects[Focus::List.index()] = columns[1];
+        rects[Focus::Details.index()] = columns[2];
+    } else {
+        let sources = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .split(vertical[1]);
+        rects[Focus::Sources.index()] = sources[0];
+        // Narrow screens devote the content region to the list; 3 opens details.
+        rects[Focus::List.index()] = sources[1];
+        rects[Focus::Details.index()] = sources[1];
+    }
+    let task_main = area.height < 20 && focus == Focus::Activity;
+    if task_main {
+        rects[Focus::Activity.index()] = rects[Focus::List.index()];
+        rects[Focus::List.index()] = Rect::default();
+        rects[Focus::Details.index()] = Rect::default();
+    }
+    ScreenLayout {
+        rects,
+        bottom: vertical[3],
+        shared: area.width < 100 || area.height < 20,
+        task_main,
+    }
+}
+
+fn station_row(station: &Station, current: bool, width: u16) -> String {
+    let width = usize::from(width);
+    let suffix = if station.active {
+        ""
+    } else {
+        crate::t!("station_inactive_short")
+    };
+    let mut available = width.saturating_sub(3 + suffix.width());
+    let mut metadata = String::new();
+    for field in [
+        format!(" [{}]", fit(&station.countrycode, 2)),
+        format!(" {}", bitrate(station)),
+        format!(" {}", codec(station)),
+    ] {
+        if available >= 16 + field.width() {
+            available -= field.width();
+            metadata.push_str(&field);
+        }
+    }
+    format!(
+        "{}{} {}{}{}",
+        if current { "▶" } else { " " },
+        if station.favorite { "★" } else { " " },
+        fit(&station.name, available),
+        metadata,
+        suffix
+    )
+}
+
 fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     let area = frame.area();
-    app.rects = [Rect::default(); 5];
     app.source_rows = [Rect::default(); 4];
     app.filter_summary = Rect::default();
     app.update_size(area.width, area.height);
@@ -134,47 +227,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         );
         return;
     }
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if area.width >= 100 && area.height >= 20 {
-                5
-            } else {
-                4
-            }),
-            Constraint::Min(3),
-            Constraint::Length(if view.task_active || app.focus == Focus::Activity {
-                4
-            } else {
-                1
-            }),
-            Constraint::Length(3),
-        ])
-        .split(area);
-    app.rects[Focus::Player.index()] = vertical[0];
-    app.rects[Focus::Activity.index()] = vertical[2];
-    if area.width >= 100 && area.height >= 20 {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(18),
-                Constraint::Percentage(48),
-                Constraint::Min(25),
-            ])
-            .split(vertical[1]);
-        app.rects[Focus::Sources.index()] = columns[0];
-        app.rects[Focus::List.index()] = columns[1];
-        app.rects[Focus::Details.index()] = columns[2];
-    } else {
-        let sources = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(vertical[1]);
-        app.rects[Focus::Sources.index()] = sources[0];
-        // Narrow screens devote the content region to the list; 3 opens details.
-        app.rects[Focus::List.index()] = sources[1];
-        app.rects[Focus::Details.index()] = sources[1];
-    }
+    let layout = screen_layout(area, app.focus, view.task_active);
+    app.set_rects(layout.rects);
     let normal = app.mode == Mode::Normal
         && !app.help
         && app.filter_edit.is_none()
@@ -246,9 +300,49 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             volume, recording
         )
     };
-    let player_text = if area.width < 100 || area.height < 20 {
-        let lines = player_text.lines().collect::<Vec<_>>();
-        format!("{}\n{}", lines[0], lines[1..].join(" · "))
+    let player_text = if layout.shared {
+        let width = usize::from(area.width.saturating_sub(2));
+        let state = format!(" · {playing}");
+        let volume = format!(" · {volume}");
+        let name = view
+            .status
+            .station
+            .as_ref()
+            .map(|s| value(&s.name))
+            .unwrap_or_else(|| crate::t!("player_idle").into());
+        let volume = if width >= 60 { volume } else { String::new() };
+        let first = format!(
+            "{}{}{}",
+            fit(&name, width.saturating_sub(state.width() + volume.width())).trim_end(),
+            state,
+            volume
+        );
+        let recording = if width < 60
+            && matches!(
+                view.status.recording_state,
+                crate::engine::RecordingState::Idle
+            ) {
+            if view.status.muted {
+                crate::t!("player_muted").into()
+            } else {
+                String::new()
+            }
+        } else {
+            format!(
+                " · {}",
+                fit(&recording, width.saturating_sub(19)).trim_end()
+            )
+        };
+        let title = if view.status.title.is_empty() {
+            crate::t!("player_no_title").into()
+        } else {
+            value(&view.status.title)
+        };
+        format!(
+            "{first}\n{}{}",
+            fit(&title, width.saturating_sub(recording.width())).trim_end(),
+            recording
+        )
     } else {
         player_text
     };
@@ -299,7 +393,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             let rect = columns[source.index()];
             app.source_rows[source.index()] = rect;
             frame.render_widget(
-                Paragraph::new(source.label()).style(if app.source == source {
+                Paragraph::new(format!(
+                    "{}{}",
+                    if app.source == source { ">" } else { " " },
+                    source.short_label()
+                ))
+                .style(if app.source == source {
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD)
@@ -310,18 +409,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             );
         }
     }
-    let show_details = app.rects[Focus::List.index()] != app.rects[Focus::Details.index()]
-        || app.focus == Focus::Details;
-    if app.rects[Focus::List.index()] != app.rects[Focus::Details.index()]
-        || app.focus != Focus::Details
-    {
+    let show_details = !layout.task_main && (!layout.shared || app.focus == Focus::Details);
+    if !layout.task_main && (!layout.shared || app.focus != Focus::Details) {
         let title = format!(
             "{} {} · {}/{} 项 · 页 {}",
-            if area.width < 100 {
-                "[2/3] 列表"
-            } else {
-                "2"
-            },
+            if layout.shared { "[2/3] 列表" } else { "2" },
             app.source.label(),
             app.length(view),
             if app.source == Source::Recordings {
@@ -337,17 +429,26 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             view.recordings
                 .iter()
                 .map(|r| {
-                    ListItem::new(format!(
-                        "{} · {}{} · {}",
-                        value(&r.station_name),
+                    let width = usize::from(app.rects[Focus::List.index()].width.saturating_sub(4));
+                    let status = format!(
+                        " · {}{}",
                         r.status,
                         if r.reconnects > 0 {
-                            format!(" · {}", crate::t!("recording_gap_marker"))
+                            crate::t!("recording_gap_marker")
                         } else {
-                            String::new()
-                        },
-                        crate::clean_text(&r.path)
-                    ))
+                            ""
+                        }
+                    );
+                    let path = if width >= 70 {
+                        format!(" · {}", fit(&r.path, 24).trim_end())
+                    } else {
+                        String::new()
+                    };
+                    let name = fit(
+                        &r.station_name,
+                        width.saturating_sub(status.width() + path.width()),
+                    );
+                    ListItem::new(format!("{name}{status}{path}"))
                 })
                 .collect()
         } else {
@@ -360,18 +461,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                             .station
                             .as_ref()
                             .is_some_and(|now| now.stationuuid == s.stationuuid);
-                    ListItem::new(format!(
-                        "{}{} {} [{}] {} {}{}",
-                        if current { "▶" } else { " " },
-                        if s.favorite { "★" } else { " " },
-                        fit_clean(
-                            &value(&s.name),
-                            usize::from(app.rects[Focus::List.index()].width.saturating_sub(37))
-                        ),
-                        fit(&s.countrycode, 2),
-                        fit_clean(&bitrate(s), 10),
-                        fit_clean(&codec(s), 7),
-                        if s.active { "" } else { " [已失效]" }
+                    ListItem::new(station_row(
+                        s,
+                        current,
+                        app.rects[Focus::List.index()].width.saturating_sub(4),
                     ))
                 })
                 .collect()
@@ -459,7 +552,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             super::artwork::image(app, view, area).map(|(image, rect)| (image.clone(), rect));
         let text_rect = app.rects[Focus::Details.index()];
         let block = panel(
-            if area.width < 100 {
+            if layout.shared {
                 "[2/3] 详情 · 2 返回 · j/k 滚动"
             } else {
                 "3 详情 · j/k 滚动"
@@ -524,7 +617,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         );
     }
 
-    let bottom = vertical[3];
+    let bottom = layout.bottom;
     if app.mode != Mode::Normal {
         let label = if app.mode == Mode::Command {
             "COMMAND :"
@@ -563,9 +656,6 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             Rect::new(bottom.x, bottom.y + 1, bottom.width, 2),
         );
     } else {
-        if app.source != Source::Recordings {
-            app.filter_summary = Rect::new(bottom.x, bottom.y, bottom.width, 1);
-        }
         let filter = if app.source == Source::Recordings {
             "本地录音 · 不使用电台筛选".into()
         } else {
@@ -579,33 +669,61 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             ))
         };
         let context = context_hint(app.source, app.focus);
+        let badge = format!(" NORMAL · {} ", app.focus.label());
+        let clear_width = if app.source == Source::Recordings {
+            0
+        } else {
+            crate::t!("clear_filters_label").width()
+        };
+        let filter = fit(
+            &filter,
+            usize::from(bottom.width).saturating_sub(badge.width() + clear_width),
+        );
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
                     Span::styled(
-                        format!(" NORMAL · {} ", app.focus.label()),
+                        badge,
                         Style::default().bg(Color::Cyan).fg(Color::Black),
                     ),
                     Span::raw(filter),
                 ]),
                 Line::from(if view.operation_error_id > app.dismissed_error {
-                    crate::t!("operation_failed", "detail" => fit(&view.operation_error, usize::from(bottom.width.saturating_sub(25))).trim_end())
+                    crate::t!("operation_failed", "detail" => fit(&view.operation_error, usize::from(bottom.width).saturating_sub(crate::t!("operation_failed", "detail" => "").width())).trim_end())
                 } else if app.message.is_empty() {
                     context.into()
                 } else {
                     app.message.clone()
                 }),
-                Line::from(
-                    "Tab/Shift-Tab 焦点 · 1–5 面板 · [/] 分类 · : 命令 · / 搜索 · ? 帮助 · q 退出",
-                ),
+                Line::from(if bottom.width < 80 {
+                    crate::t!("keys_compact")
+                } else if app.source == Source::Recordings {
+                    crate::t!("keys_recordings")
+                } else { crate::t!("keys_global") }),
             ]),
             bottom,
         );
     }
+    if app.mode == Mode::Normal && app.source != Source::Recordings {
+        let label = crate::t!("clear_filters_label");
+        let width = label.width() as u16;
+        if width <= bottom.width / 2 {
+            let rect = Rect::new(bottom.right() - width, bottom.y, width, 1);
+            if app.confirmation.is_none() && !app.help && app.filter_edit.is_none() {
+                app.filter_summary = rect;
+            }
+            frame.render_widget(Paragraph::new(label), rect);
+        }
+    }
     if let Some((selected, values)) = &app.filter_edit {
         let rect = popup(area, 72, 18);
         clear_popup(frame, rect);
-        let names = ["国家/地区代码", "语言", "标签", "最低码率"];
+        let names = [
+            crate::t!("filter_country"),
+            crate::t!("filter_language"),
+            crate::t!("filter_tag"),
+            crate::t!("filter_bitrate"),
+        ];
         let label_width = format!("› {}: ", names[*selected]).width() as u16;
         let input_width = rect.width.saturating_sub(2 + label_width);
         let mut text = names
@@ -634,14 +752,28 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                     },
                 ))
             })
-            .chain([
-                Line::from("Tab 下一项 · ↑/↓ 候选 · Enter 应用 · Ctrl-U 清空 · Esc 取消"),
-                Line::from(crate::clean_text(&app.message)),
-            ])
+            .chain(if rect.width >= 60 {
+                vec![
+                    Line::from(format!(
+                        "{} · {}",
+                        crate::t!("filter_keys_edit"),
+                        crate::t!("filter_keys_apply")
+                    )),
+                    Line::from(crate::t!("filter_keys_clear")),
+                ]
+            } else {
+                vec![
+                    Line::from(crate::t!("filter_keys_edit")),
+                    Line::from(crate::t!("filter_keys_apply")),
+                    Line::from(crate::t!("filter_keys_clear")),
+                ]
+            })
+            .chain((!app.message.is_empty()).then(|| Line::from(crate::clean_text(&app.message))))
             .collect::<Vec<_>>();
         if *selected < 3 {
             let candidates = app.facet_candidates(view, *selected);
-            let count = usize::from(rect.height.saturating_sub(9)).min(8);
+            let reserved = text.len() as u16 + 3 + u16::from(view.facets_error.is_some());
+            let count = usize::from(rect.height.saturating_sub(reserved)).min(8);
             let start = app
                 .facet_index
                 .unwrap_or(0)
@@ -696,7 +828,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                 rect,
                 &mut app.help_scroll,
             )
-            .block(panel("帮助 · j/k 滚动 · Esc 关闭".into(), true)),
+            .block(panel(
+                app.help_title.unwrap_or(crate::t!("help_title")).into(),
+                true,
+            )),
             rect,
         );
     }
@@ -709,7 +844,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             "{}\n{}\n{}\n{}",
             fit(&confirmation.summary, usize::from(inner.width)).trim_end(),
             crate::clean_text(&confirmation.id),
-            crate::messages::text(confirmation.scope),
+            confirmation.scope,
             crate::clean_text(&confirmation.error)
         );
         frame.render_widget(
@@ -734,19 +869,20 @@ fn empty_hint(app: &App) -> &'static str {
         || app.filter.language.is_some()
         || app.filter.tag.is_some()
         || app.filter.min_bitrate > 0;
-    crate::messages::text(match app.source {
-        Source::Recordings => "empty_recordings",
-        _ if filtered => "empty_filtered",
-        Source::Stations => "empty_stations",
-        Source::Favorites => "empty_favorites",
-        Source::History => "empty_history",
-    })
+    match app.source {
+        Source::Recordings => crate::t!("empty_recordings"),
+        _ if filtered => crate::t!("empty_filtered"),
+        Source::Stations => crate::t!("empty_stations"),
+        Source::Favorites => crate::t!("empty_favorites"),
+        Source::History => crate::t!("empty_history"),
+    }
 }
 
 pub(super) fn help_text(locale: crate::messages::Locale, jump_binding: &str) -> String {
     let help = format!(
-        "{HELP}\n{}",
-        crate::messages::text_in(locale, "catalog_source_notice")
+        "{HELP}\n{}\n{}",
+        crate::messages::text_in(locale, "catalog_source_notice"),
+        crate::messages::text_in(locale, "core_help_notice")
     );
     if jump_binding.is_empty() {
         return help;

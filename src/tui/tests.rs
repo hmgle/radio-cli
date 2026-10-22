@@ -315,7 +315,7 @@ fn territory_filter_displays_names_but_selects_original_codes() {
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
     let rendered = text(&terminal);
-    assert!(rendered.contains("国家/地区代码"));
+    assert!(rendered.contains(crate::t!("filter_country")));
     assert!(rendered.contains("台湾 (TW) (3)"));
     app.key(key(KeyCode::Down), &data, &sender);
     app.key(key(KeyCode::Enter), &data, &sender);
@@ -1041,8 +1041,10 @@ fn renderer_marks_focus_and_distinguishes_current_from_selected_station() {
         terminal
             .draw(|frame| render::draw(frame, &mut app, &data))
             .unwrap();
-        if width >= 40 && height >= 16 {
+        if width >= 100 && height >= 20 {
             assert!(text(&terminal).contains("码率未知"));
+        } else if width >= 40 && height >= 16 {
+            assert!(text(&terminal).contains("Current Station"));
         }
     }
 }
@@ -2845,4 +2847,156 @@ fn corrected_page_is_adopted_only_for_the_current_request() {
     app.filter.query = "new search".into();
     app.reconcile(&data);
     assert_eq!(app.filter.query, "new search");
+}
+
+#[test]
+fn minimum_layout_keeps_list_rows_names_and_task_navigation() {
+    let mut data = view();
+    data.task_active = true;
+    data.task = "syncing".into();
+    for (width, height) in [(40, 16), (99, 19), (100, 19), (99, 20), (100, 20)] {
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(app.rects[Focus::List.index()].height >= 5);
+        assert!(text(&terminal).contains("Current Station"));
+        assert!(text(&terminal).contains("Selected Station"));
+        assert!(text(&terminal).contains("q"));
+        if height < 20 {
+            assert_eq!(app.rects[Focus::Activity.index()].height, 1);
+            assert!(text(&terminal).contains("[2/3]"));
+            app.focus = Focus::Activity;
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert!(app.rects[Focus::Activity.index()].height >= 5);
+            assert_eq!(app.rects[Focus::List.index()].height, 0);
+            app.focus = Focus::List;
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert!(app.rects[Focus::List.index()].height >= 5);
+        }
+    }
+}
+
+#[test]
+fn mouse_hits_only_clear_label_and_modal_wheel_stays_in_modal() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut data = view();
+    let mut app = App::default();
+    app.filter.query = "keep".into();
+    data.filter = app.filter.clone();
+    let (sender, receiver) = command::channel(16);
+    let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let clear = app.filter_summary;
+    let event = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(
+        event(MouseEventKind::Down(MouseButton::Left), 0, clear.y),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.filter.query, "keep");
+    assert!(receiver.try_recv().is_err());
+    app.mouse(
+        event(MouseEventKind::Down(MouseButton::Left), clear.x, clear.y),
+        &data,
+        &sender,
+    );
+    assert!(matches!(receiver.try_recv(), Ok(Command::Search(filter)) if filter.query.is_empty()));
+    app.help = true;
+    app.mouse(
+        event(MouseEventKind::ScrollDown, clear.x, clear.y),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.help_scroll, 1);
+    assert!(receiver.try_recv().is_err());
+    app.help = false;
+    app.filter_edit = Some((0, Default::default()));
+    Arc::make_mut(&mut data.facets)[0] = vec![crate::model::Facet {
+        value: "CN".into(),
+        count: 1,
+    }];
+    app.mouse(
+        event(MouseEventKind::ScrollDown, clear.x, clear.y),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "CN");
+    assert!(receiver.try_recv().is_err());
+    app.filter_edit = None;
+    let player = app.rects[Focus::Player.index()];
+    let focus = app.focus;
+    app.mouse(
+        event(MouseEventKind::ScrollDown, player.x, player.y),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.focus, focus);
+}
+
+#[test]
+fn recording_double_click_respects_data_and_layout_changes() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut data = view();
+    data.recordings = vec![
+        serde_json::from_value(serde_json::json!({
+            "id":"record-a", "stationuuid":"s", "station_name":"Saved audio",
+            "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+            "stopped_at":null, "media_duration_ms":null, "codec":"mp3", "container":"mp3",
+            "path":"/tmp/sample", "size_bytes":1, "status":"complete", "error":null
+        }))
+        .unwrap(),
+    ]
+    .into();
+    let mut app = App::default();
+    app.source = Source::Recordings;
+    let (sender, receiver) = command::channel(16);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let rect = app.rects[Focus::List.index()];
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + 2,
+        row: rect.y + 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let now = Instant::now();
+    app.mouse_at(click, &data, &sender, now);
+    data.task_active = true;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+    assert!(receiver.try_recv().is_err());
+    data.recordings_revision += 1;
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(200));
+    assert!(receiver.try_recv().is_err());
+    app.mouse_at(click, &data, &sender, now + Duration::from_millis(300));
+    assert!(matches!(receiver.try_recv(), Ok(Command::PlayRecording(id)) if id == "record-a"));
+}
+
+#[test]
+fn persistent_operation_error_has_details_and_explicit_dismissal() {
+    let mut data = view();
+    data.operation_error_id = 1;
+    data.operation_error = "delete failed: cannot remove file".into();
+    let mut app = App::default();
+    let (sender, receiver) = command::channel(10);
+    let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("Esc"));
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    assert!(
+        app.help_content
+            .as_deref()
+            .unwrap()
+            .contains(&data.operation_error)
+    );
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert_eq!(app.dismissed_error, 0);
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert_eq!(app.dismissed_error, 1);
+    assert!(receiver.try_recv().is_err());
 }

@@ -91,6 +91,24 @@ impl Tui {
             original,
         }
     }
+    fn resize(&mut self, width: u16, height: u16) {
+        let size = libc::winsize {
+            ws_row: height,
+            ws_col: width,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        unsafe {
+            assert_eq!(
+                libc::ioctl(self.slave.as_raw_fd(), libc::TIOCSWINSZ, &size),
+                0
+            );
+            assert_eq!(
+                libc::kill(self.child.id() as libc::pid_t, libc::SIGWINCH),
+                0
+            );
+        }
+    }
     fn send(&mut self, text: &str) {
         self.master.write_all(text.as_bytes()).unwrap();
     }
@@ -327,4 +345,37 @@ fn direct_url_command_plays_and_inspects_without_saving_a_station() {
     assert_eq!(store.count().unwrap(), 0);
     assert!(store.meta("pref_last_station").unwrap().is_none());
     tui.quit();
+}
+
+#[test]
+fn shrinking_cancels_deletion_and_blocks_invisible_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let station = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "Keep this station".into(),
+        url: "https://example.com/keep".into(),
+        custom: true,
+        active: true,
+        ..Station::default()
+    };
+    store.upsert(&station).unwrap();
+    let config_path = dir.path().join("config.toml");
+    fs::write(&config_path, "language = \"en\"\nauto_sync_days = 0\n").unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&config_path));
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("NORMAL"));
+    tui.send(&format!(":station remove {}\r", station.stationuuid));
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("Confirm deletion"));
+    tui.resize(39, 16);
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("40×16"));
+    tui.send("y:station add hidden https://example.com/hidden\r");
+    // q is a FIFO barrier: all preceding invisible input is handled before exit.
+    tui.send("q");
+    tui.quit();
+    assert_eq!(
+        store.station(&station.stationuuid).unwrap().name,
+        station.name
+    );
+    assert_eq!(store.count().unwrap(), 1);
 }
