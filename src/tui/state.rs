@@ -1082,7 +1082,8 @@ impl App {
         self.activity_tail = tail;
         self.activity_seen_scroll = self.activity_scroll;
     }
-    /// PgUp/PgDn: turn the catalog page in the list, scroll ten lines elsewhere.
+    /// Select a visible row or align the selection within the viewport.
+    /// Like line scrolling, alignment may leave empty rows below the last item.
     fn viewport(&mut self, key: KeyCode, view: &View, align: bool) {
         if self.focus != Focus::List || !view.page_ready(&self.filter) {
             return;

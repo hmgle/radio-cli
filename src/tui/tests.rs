@@ -4263,6 +4263,82 @@ fn light_popups_keep_the_cleared_border_column_on_the_light_background() {
 }
 
 #[test]
+fn viewport_alignment_survives_render_resize_and_mouse_hits() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (sender, receiver) = command::channel(4);
+    for source in Source::ALL {
+        for len in [3, 40] {
+            for selected in [0, len - 1] {
+                for suffix in ['t', 'z', 'b'] {
+                    let (mut app, data) = scrollable_list(source, len);
+                    app.list.select(Some(selected));
+                    // Reuse state across resizes, including a short viewport.
+                    for (width, height) in [(80, 24), (80, 16), (120, 40)] {
+                        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                        app.list.select(Some(selected));
+                        let rect = app.rects[Focus::List.index()];
+                        let height = usize::from(rect.height - 2);
+                        let above = match suffix {
+                            't' => 0,
+                            'b' => height - 1,
+                            _ => (height - 1) / 2,
+                        };
+                        let offset = selected.saturating_sub(above);
+                        app.key(key(KeyCode::Char('z')), &data, &sender);
+                        app.key(key(KeyCode::Char(suffix)), &data, &sender);
+                        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                        assert_eq!(app.list.offset(), offset, "{source:?}, {len}, z{suffix}");
+                        assert_eq!(app.list.selected(), Some(selected));
+                        let first_row: String = (rect.x + 1..rect.right() - 1)
+                            .map(|x| terminal.backend().buffer()[(x, rect.y + 1)].symbol())
+                            .collect();
+                        assert!(
+                            first_row.contains(&format!("Row {offset:03}")),
+                            "{first_row}"
+                        );
+                        let visible = height.min(len - offset);
+                        for (c, index) in [
+                            ('H', offset),
+                            ('M', offset + (visible - 1) / 2),
+                            ('L', offset + visible - 1),
+                        ] {
+                            app.key(key(KeyCode::Char(c)), &data, &sender);
+                            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                            assert_eq!(app.list.selected(), Some(index));
+                            assert_eq!(app.list.offset(), offset);
+                        }
+                        for row in 0..height {
+                            let previous = app.list.selected();
+                            app.mouse_at(
+                                MouseEvent {
+                                    kind: MouseEventKind::Down(MouseButton::Left),
+                                    column: rect.x + 3,
+                                    row: rect.y + 1 + row as u16,
+                                    modifiers: KeyModifiers::NONE,
+                                },
+                                &data,
+                                &sender,
+                                Instant::now() + Duration::from_secs(row as u64),
+                            );
+                            let expected = if row < visible {
+                                Some(offset + row)
+                            } else {
+                                previous
+                            };
+                            assert_eq!(app.list.selected(), expected);
+                            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                            assert_eq!(app.list.offset(), offset);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
 fn navigation_prefixes_cancel_on_another_prefix_or_control_key() {
     let (sender, receiver) = command::channel(4);
     for sequence in ["gzt", "gzz", "gzb"] {
