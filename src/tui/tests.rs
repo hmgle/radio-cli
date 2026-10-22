@@ -5286,6 +5286,54 @@ fn small_terminal_blocks_actions_and_defers_search_until_visible() {
 }
 
 #[test]
+fn long_notices_use_both_bottom_rows_without_losing_the_reason() {
+    use crate::messages::{Locale, text_in};
+    let data = view();
+    let compact = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    for locale in [Locale::En, Locale::ZhCn] {
+        let message = format!(
+            "{} · {}",
+            text_in(locale, "command_submitted"),
+            text_in(locale, "history_withheld")
+        );
+        for (width, height) in [(40, 16), (60, 20), (80, 24), (100, 24)] {
+            let mut app = App::default();
+            app.message = message.clone();
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            let rendered = text(&terminal);
+            let rows: Vec<_> = rendered.lines().collect();
+            let notice = compact(&rows[usize::from(height) - 2..].concat());
+            assert!(
+                notice.contains(&compact(&message)),
+                "{locale:?}, {width}: {rendered}"
+            );
+            assert!(rows[usize::from(height) - 3].contains(crate::t!("mode_normal")));
+            assert_eq!(app.message, message);
+            assert_eq!(app.filter_summary.y, height - 3);
+            // A short notice leaves the usual keyboard hints visible.
+            app.message = crate::t!("command_submitted").into();
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            let keys = if width < 80 {
+                crate::t!("keys_compact")
+            } else {
+                crate::t!("keys_global")
+            };
+            let rendered = text(&terminal);
+            assert!(rendered.lines().last().unwrap().starts_with(keys));
+            // Dismissing the notice restores the ordinary context row.
+            app.message.clear();
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert!(!compact(&text(&terminal)).contains(&compact(&message)));
+        }
+    }
+}
+
+#[test]
 fn bottom_bar_names_the_open_modal_instead_of_the_panel_behind_it() {
     let data = view();
     let (sender, _receiver) = command::channel(4);

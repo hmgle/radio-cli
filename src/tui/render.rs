@@ -712,33 +712,46 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             &filter,
             usize::from(bottom.width).saturating_sub(badge.width() + clear_width),
         );
+        let operation_failed = view.operation_error_id > app.dismissed_error;
+        let wrap_notice = !operation_failed && !app.message.is_empty() && modal_keys.is_none();
+        let message = if operation_failed {
+            crate::t!("operation_failed", "detail" => fit(&super::display::diagnostic(&view.operation_error), usize::from(bottom.width).saturating_sub(crate::t!("operation_failed", "detail" => "").width())).trim_end())
+        } else if app.message.is_empty() {
+            context.into()
+        } else {
+            super::display::diagnostic(&app.message)
+        };
+        let keys = if let Some(keys) = modal_keys {
+            keys
+        } else if bottom.width < 80 {
+            crate::t!("keys_compact").into()
+        } else if app.source == Source::Recordings {
+            crate::t!("keys_recordings").into()
+        } else {
+            crate::t!("keys_global").into()
+        };
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        badge,
-                        style(app.theme, Role::Selected),
-                    ),
-                    Span::raw(filter),
-                ]),
-                Line::from(if view.operation_error_id > app.dismissed_error {
-                    crate::t!("operation_failed", "detail" => fit(&super::display::diagnostic(&view.operation_error), usize::from(bottom.width).saturating_sub(crate::t!("operation_failed", "detail" => "").width())).trim_end())
-                } else if app.message.is_empty() {
-                    context.into()
-                } else {
-                    super::display::diagnostic(&app.message)
-                }),
-                Line::from(if let Some(keys) = modal_keys {
-                    keys
-                } else if bottom.width < 80 {
-                    crate::t!("keys_compact").into()
-                } else if app.source == Source::Recordings {
-                    crate::t!("keys_recordings").into()
-                } else {
-                    crate::t!("keys_global").into()
-                }),
-            ]),
-            bottom,
+            Paragraph::new(Line::from(vec![
+                Span::styled(badge, style(app.theme, Role::Selected)),
+                Span::raw(filter),
+            ])),
+            Rect::new(bottom.x, bottom.y, bottom.width, 1),
+        );
+        // Long notices use the shortcut row too. Keep the mode/filter row fixed
+        // and leave modal shortcuts visible when a dialog owns the keyboard.
+        let body = if wrap_notice {
+            Paragraph::new(format!("{message}\n{keys}")).wrap(Wrap { trim: true })
+        } else {
+            Paragraph::new(vec![Line::from(message), Line::from(keys)])
+        };
+        frame.render_widget(
+            body,
+            Rect::new(
+                bottom.x,
+                bottom.y + 1,
+                bottom.width,
+                bottom.height.saturating_sub(1),
+            ),
         );
     }
     if app.mode == Mode::Normal && app.source != Source::Recordings {
