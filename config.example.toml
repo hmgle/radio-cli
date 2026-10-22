@@ -1,4 +1,5 @@
-# Optional; omitted values use these defaults.
+# Optional; omitted values use these defaults. Unknown keys are rejected.
+# Full reference: docs/configuration.md (English) or docs/configuration.zh-CN.md.
 mpv = "mpv"
 ffmpeg = "ffmpeg"
 ffprobe = "ffprobe"

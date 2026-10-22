@@ -8,8 +8,12 @@ requests are welcome.
 - radio-cli is **Linux-first**, with basic CLI/TUI support on macOS.
   Keep shared Unix behavior portable and isolate platform-specific operations.
   Native Windows support is outside the current scope.
-- The README is the user-facing documentation; design details live in `docs/`
-  (currently written in Chinese).
+- `README.md` and `README.zh-CN.md` are the user-facing entry points. Public
+  user guides are the paired files under `docs/`; design and validation notes
+  are internal unless explicitly designated public.
+- Keep English and Chinese public docs structurally synchronized in the same
+  pull request. Do not hardcode release versions in install commands; derive
+  archive names from `SHA256SUMS` or link to the releases page.
 - Keep pull requests focused. One logical change per PR is easiest to review.
 
 ## Local development
@@ -59,6 +63,8 @@ Run the local catalog measurements with:
 ```sh
 cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
 cargo test --release --test catalog_perf -- --ignored --nocapture
+# Linux only: resource sampling uses /proc.
+uv run scripts/measure_resources.py --binary target/release/radio
 ```
 
 The second command builds a deterministic 200,000-station fixture and compares

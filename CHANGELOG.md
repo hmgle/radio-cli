@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reorganize the public documentation into synchronized English and Chinese
+  entry points, add detailed configuration, recording, troubleshooting, and JSON
+  references, and remove version-pinned release download examples.
 - Keep list rows and the current selection visible during background refreshes
   triggered by playback confirmation, including while navigating with j/k.
 - Make Ctrl-e/Ctrl-y scroll the list viewport by one line, preserving selection
@@ -234,8 +237,8 @@ Post-release review fixes tracked in #83.
 - Localize CLI operation progress and validate message keys across all modules.
 - Package only user-facing guides from fresh staging, check nonempty files, and
   run the packager in CI. Internal review notes are excluded from new archives.
-- Repeat paired catalog benchmarks and record the comparative evidence and limits
-  in `docs/validation.md`; retain the 100 ms absolute search budget.
+- Repeat paired catalog benchmarks to record comparative evidence and limits;
+  retain the 100 ms absolute search budget.
 
 ## 0.3.0 — 2026-10-19
 
@@ -303,4 +306,4 @@ Complete roadmap stages S1–S3 (#36–#57); S4 (#58–#64) remains backlog.
 
 The Linux x86_64 release archive contains a statically linked musl executable, documentation, and the MIT license. Playback and recording still require external `mpv` and `ffmpeg` / `ffprobe` executables. Checksums accompany the archive.
 
-All issues #1–#13 are addressed. Detailed evidence and validation are recorded in [the issue report](docs/issues-2026-10-18.md) and [the review follow-up](docs/review-followup-2026-10-18.md).
+All issues #1–#13 are addressed.

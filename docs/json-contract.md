@@ -1,5 +1,7 @@
 # JSON output and process exits
 
+**English** | [简体中文](json-contract.zh-CN.md)
+
 Use global `--json-v2` for a consistent machine-readable response. On success,
 stdout contains exactly one JSON value: `{"ok":true,"data":...}`. Commands
 without a result use `null`. On failure it contains
@@ -21,12 +23,13 @@ Usage failures, including unknown commands, return the error envelope when
 | 3 | Required executable could not be started |
 | 4 | Another media session owns the runtime lock |
 
-Legacy `--json` remains available in 0.7.0. Its success shapes are:
+Legacy `--json` remains available. Its success shapes are:
 
 | Command | Legacy data shape (also the `data` of v2) |
 | --- | --- |
 | `search` | Station array; preserved for existing scripts |
-| `info`, `station add`, `station edit` | Station object (`info`/`edit` always JSON) |
+| `info`, `station edit` | Station object; both always produce JSON |
+| `station add --json` | Station object |
 | `favorites list`, `history`, `station list`, `recordings list` | Page object: `items`, `total`, `offset`, `limit`, `has_more` |
 | `countries`, `languages`, `tags` | Array of `{value,count}` |
 | `favorites add/remove` | `{stationuuid,name,favorite}` |

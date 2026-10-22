@@ -2,45 +2,91 @@
 
 [![CI](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml)
 [![最新版本](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
-[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](Cargo.toml)
-[![Linux 与 macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#安装与启动)
+[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
+[![Linux 与 macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#环境要求)
 [![MIT 许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [English](README.md) | **简体中文**
 
-Linux 优先的轻量 CLI / TUI 网络收音机。Rust 管理本地目录与交互，SQLite 保存收藏和历史，mpv 播放，FFmpeg 无损录音。无需账号或 API Key。
+面向 Linux 与 macOS 的轻量终端收音机。Rust 管理本地目录和交互，SQLite 保存收藏与历史，
+mpv 负责播放，FFmpeg 以流拷贝方式录音。无需账号或 API Key。
 
-Linux 是主要支持平台。macOS 支持基本 CLI/TUI 操作：目录管理、收藏和历史、播放控制、
-录音及正常退出。代码依赖 Unix API，Windows 原生暂不支持。CI 在 Linux 和 macOS 上
-使用真实 mpv、FFmpeg 测试；Linux 检查还覆盖 Rust 1.88、x86_64 musl 静态构建
-及 RustSec 依赖审计。
+- 浏览 [Radio Browser](https://www.radio-browser.info/) 目录，在本地搜索，
+  按国家/地区、语言、标签和码率筛选，并随机播放匹配电台。
+- 使用键盘优先的 TUI，或用 CLI 编写脚本；支持兼容旧格式的 `--json` 和稳定的
+  `--json-v2` 输出。
+- 收藏、历史、自定义电台、设置和录音都保存在本机。
+- 可直接试听 HTTP(S) 流，也可保存带备用地址的自定义电台。
+- 以流拷贝方式录制 MP3、AAC、Vorbis 和 Opus，并生成元数据。
+
+Linux 是主要支持平台。macOS 支持核心 CLI/TUI 流程。代码依赖 Unix API，
+暂不支持原生 Windows。
 
 ## 演示
 
 [![观看 radio-cli 浏览 CN 电台并播放真实广播的演示](assets/demo.svg)](https://asciinema.org/a/1269102)
 
-[在 asciinema 观看 90 秒演示](https://asciinema.org/a/1269102) · 中文界面与字幕 · zsh · 无声音。
+[在 asciinema 观看 90 秒演示](https://asciinema.org/a/1269102)。演示展示中文界面
+浏览已同步目录、按 `CN` 筛选、搜索、播放、收藏、定位当前电台以及录制短片的流程；
+录像无声音。
 
-展示已同步目录的浏览、CN 地区筛选、搜索与详情、收藏、播放控制、当前电台定位、
-最近播放，以及简短录音与回放。
+## 快速开始
 
-## 安装与启动
+### 环境要求
 
-需要 mpv、FFmpeg（含 ffprobe）；从源码构建还需要 Rust 1.88+。
-SQLite 已编入程序，不要求安装 SQLite 命令行工具。
+- Linux 或 macOS；Linux 为主要目标平台。
+- `mpv`。
+- `ffmpeg` 与 `ffprobe`。
+- 仅从源码构建时需要 Rust 1.88 或更新版本。
 
-[发布页面](https://github.com/hmgle/radio-cli/releases)提供预编译程序和统一的 `SHA256SUMS`。
-使用预编译包无需 Rust 工具链，仍需单独安装 mpv 和 FFmpeg。升级兼容性变化见[更新日志](CHANGELOG.md)。
+SQLite 已编入可执行文件，不需要额外安装 SQLite 命令行工具。
+可用包管理器安装媒体工具，例如：
 
-| 平台 | 归档目标 | 支持状态 |
+```sh
+# Debian / Ubuntu
+sudo apt install mpv ffmpeg
+
+# macOS
+brew install mpv ffmpeg
+```
+
+### 安装预编译发行包
+
+[发布页面](https://github.com/hmgle/radio-cli/releases)提供发行归档、英文 shell 补全、
+手册页和统一的 `SHA256SUMS`。使用发行包不需要 Rust 工具链。
+
+| 平台 | 发布目标 | 状态 |
 | --- | --- | --- |
 | Linux x86_64 | `x86_64-unknown-linux-musl` | 主要支持；静态链接 |
 | macOS Apple Silicon | `aarch64-apple-darwin` | 实验性 |
 | macOS Intel | `x86_64-apple-darwin` | 实验性 |
 
+下载 `SHA256SUMS` 和对应平台的归档后，按下面的方式校验并解压，无需写死版本号：
+
 ```sh
-# Debian / Ubuntu
-sudo apt install mpv ffmpeg
+target=x86_64-unknown-linux-musl   # 或 aarch64-apple-darwin / x86_64-apple-darwin
+archive=$(awk -v t="$target" '$2 ~ "-" t ".tar.gz$" {print $2; exit}' SHA256SUMS)
+test -n "$archive" || { echo "SHA256SUMS 中未找到 $target 的归档" >&2; exit 1; }
+grep -F -- "$archive" SHA256SUMS | sha256sum -c -
+tar -xzf "$archive"
+cd "${archive%.tar.gz}"
+./radio doctor
+./radio sync
+./radio tui
+```
+
+macOS 上请把 `sha256sum -c -` 换成 `shasum -a 256 -c -`。
+
+macOS 发行包未经 Developer ID 签名或公证。若 Gatekeeper 阻止运行你信任的下载文件，
+请先校验校验和，再对解压出的程序执行
+`xattr -d com.apple.quarantine ./radio`。另见
+[Apple 关于打开下载软件的说明](https://support.apple.com/en-us/102445)。
+
+### 从源码构建
+
+```sh
+git clone https://github.com/hmgle/radio-cli.git
+cd radio-cli
 cargo build --release --locked
 ./target/release/radio doctor
 ./target/release/radio sync
@@ -50,237 +96,287 @@ cargo build --release --locked
 cargo install --path . --locked
 ```
 
-macOS 先通过 Homebrew 安装媒体工具，再下载匹配架构的归档和 `SHA256SUMS`，
-校验后解压。以 Apple Silicon 为例：
+### 首次运行
+
+当输入和输出都是交互终端时，直接运行 `radio` 会打开 TUI；任一输入或输出被重定向时，
+会改为打印帮助。`radio tui` 始终请求启动 TUI。
+
+本地没有目录时，TUI 和 `radio random` 会先获取最热门的 1,000 个电台。运行
+`radio sync` 可缓存完整目录。同步失败会保留原目录。`radio doctor` 检查 mpv、
+FFmpeg、ffprobe、录音目录和剩余空间。
+
+## 日常使用
+
+### TUI 快捷键
+
+| 场景 | 按键 | 操作 |
+| --- | --- | --- |
+| 通用 | `q` / `Ctrl-C` | 收尾录音并退出 |
+| 通用 | `?` | 键盘帮助；有未处理的失败时先显示失败详情 |
+| 通用 | `Esc` | 关闭弹窗、取消编辑或忽略错误 |
+| 通用 | `F5` | 刷新当前列表 |
+| 面板 | `Tab` / `Shift-Tab` | 下一个 / 上一个面板 |
+| 面板 | `1`–`5` | 聚焦来源 / 列表 / 详情 / 播放器 / 任务面板 |
+| 面板 | `h` / `l`、方向键 | 左右移动焦点，或选择、滚动 |
+| 面板 | `Ctrl-h/j/k/l`、`Ctrl` + 方向键 | 按屏幕方向移动焦点 |
+| 来源 | `[` / `]` | 上一个 / 下一个来源：电台、收藏、最近、录音 |
+| 来源 | `j` / `k`、方向键 | 聚焦来源面板时切换到下一个 / 上一个来源 |
+| 列表 | `j` / `k`、方向键 | 移动选择 |
+| 列表 | `gg` / `G`、`Home` / `End` | 首项 / 末项 |
+| 列表 | `Ctrl-u` / `Ctrl-d` | 移动十项 |
+| 列表 | `H` / `M` / `L` | 选择视口顶部 / 中间 / 底部行 |
+| 列表 | `zt` / `zz` / `zb` | 将选中行放到视口顶部 / 中间 / 底部 |
+| 列表 | `PgUp` / `PgDn`、`Ctrl-b` / `Ctrl-f` | 上一 / 下一数据页；其他面板中滚动十行 |
+| 列表 | `Ctrl-e` / `Ctrl-y` | 视口向下 / 向上滚动一行 |
+| 播放 | `Enter` | 播放选中电台或录音；来源面板中进入列表；播放器面板中查看播放中电台详情 |
+| 播放 | `Space` | 暂停 / 继续 |
+| 播放 | `m` | 静音 / 取消静音 |
+| 播放 | `+` 或 `=` / `-` | 提高 / 降低音量 |
+| 播放 | `n` | 按当前筛选随机播放 |
+| 播放 | `f` | 收藏 / 取消收藏选中电台 |
+| 播放 | `r` | 开始 / 停止录制当前播放电台 |
+| 复制 | `y` / `Y` | 复制选中 UUID / 流地址，或录音 ID / 路径 |
+| 搜索 | `/` | 搜索；`Enter` 确认，`Esc` 恢复原视图 |
+| 搜索 | `F` | 国家/地区、语言、标签和最低码率筛选 |
+| 搜索 | `Ctrl-U` | 筛选弹窗内清空搜索与筛选 |
+| 录音 | `D` / `o` / `e` | 确认删除 / 打开目录 / 显示错误详情 |
+| 定位 | 可配置 | 定位正在播放的电台；默认一秒内连按两次 `''` |
+
+鼠标默认启用：可点击面板或行，500 ms 内双击行播放，用滚轮导航。
+
+录音来源不提供目录搜索：`/`、`F` 和收藏键在该来源中不可用；按 `n` 会切回电台列表并随机播放。
+tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
+弹窗、文本输入和删除确认使用各自的按键；在 TUI 内按 `?` 查看完整的上下文帮助。
+`y` 和 `Y` 通过 OSC 52 复制，是否生效取决于终端和复用器。
+
+### TUI 内置命令
+
+| 命令 | 操作 |
+| --- | --- |
+| `:sync [--accept-shrink]` / `:sync-cancel` | 启动或取消后台目录同步 |
+| `:refresh` | 刷新当前列表 |
+| `:search [QUERY] [OPTIONS]` | 使用 CLI 搜索选项应用搜索 |
+| `:play [UUID\|URL]` | 播放选中项、指定 UUID 或临时流地址 |
+| `:random [OPTIONS]` | 随机播放；不带参数时沿用当前筛选 |
+| `:info [UUID]` / `:current` | 查看指定电台 / 当前播放电台 |
+| `:favorites list\|add\|remove [UUID]` | 管理收藏 |
+| `:history` | 显示最近成功播放记录 |
+| `:recordings list\|play ID\|remove ID [--index-only]` | 查看、播放或删除录音 |
+| `:open recordings` | 打开录音目录 |
+| `:station add\|list\|edit\|remove\|backups ...` | 管理自定义电台和备用地址 |
+| `:record [UUID] [--duration D] [--output-dir DIR]` / `:record stop` | 开始或收尾录音 |
+| `:pause` / `:mute` / `:stop` / `:volume 70` | 控制播放 |
+| `:help [COMMAND]` | 打开键盘帮助或命令用法 |
+| `:set language en\|zh-CN` / `:set mouse true\|false` | 修改当前会话设置 |
+| `:doctor` / `:focus sources\|list\|details\|player\|activity` | 运行诊断 / 移动焦点 |
+| `:quit` / `:q` | 收尾录音并退出 |
+
+`:help` 显示完整的上下文键盘帮助；输入 `:` 后按 `Tab` 可补全命令。
+`:record UUID` 只接受当前正在播放的电台；需要独立录音时请使用
+`radio record UUID`。
+
+### CLI 命令参考
+
+以下全局选项适用于所有子命令：
+
+| 选项 | 说明 |
+| --- | --- |
+| `--lang <en\|zh-CN>` | 选择界面和 CLI 语言 |
+| `--config <FILE>` | 使用指定的 TOML 配置文件 |
+| `--data-dir <DIR>` | 覆盖数据目录 |
+| `--api-url <URL>` | 覆盖 Radio Browser 服务器发现结果 |
+| `--json` | 输出旧版 JSON 结构 |
+| `--json-v2` | 输出统一的成功/错误封套 |
+| `-h`, `--help` | 打印帮助 |
+| `-V`, `--version` | 打印版本 |
+
+目录与搜索命令：
+
+| 命令 | 用途 |
+| --- | --- |
+| `radio` / `radio tui` | 打开 TUI |
+| `radio sync [--accept-shrink]` | 获取并替换完整目录 |
+| `radio search [QUERY] [OPTIONS]` | 搜索本地目录 |
+| `radio random [QUERY] [OPTIONS]` | 随机播放一个匹配电台 |
+| `radio info <UUID>` | 以 JSON 输出单个电台 |
+| `radio countries [--prefix TEXT]` | 列出国家/地区代码及数量 |
+| `radio languages [--prefix TEXT]` | 列出语言及数量 |
+| `radio tags [--prefix TEXT]` | 列出标签及数量 |
+
+`search` 和 `random` 接受 `--sort name|bitrate|votes|clickcount|random`、
+`--country CODE`、`--language LANGUAGE`、`--tag TAG`、`--min-bitrate KBPS`、
+`--limit N`（1–1000，默认 100）和 `--offset N`。搜索默认按 `clickcount` 排序。
+`info` 始终输出电台 JSON。
+
+收藏、历史与自定义电台：
+
+| 命令 | 用途 |
+| --- | --- |
+| `radio favorites list [PAGE]` | 列出收藏 |
+| `radio favorites add <UUID>` | 添加收藏 |
+| `radio favorites remove <UUID>` | 取消收藏 |
+| `radio history [PAGE]` | 显示成功起播历史 |
+| `radio station list [PAGE]` | 列出自定义电台 |
+| `radio station add <NAME> <URL> [--backup-url URL]...` | 添加自定义电台 |
+| `radio station edit <UUID> [--name NAME] [--url URL] [--backup-url URL]...` | 编辑自定义电台 |
+| `radio station remove <UUID> [--keep-references]` | 删除自定义电台 |
+| `radio station backups <UUID> [--add URL]... [--remove URL]...` | 管理备用地址 |
+
+`PAGE` 表示 `[--limit N] [--offset N] [--all]`。列表命令的 limit 范围为 1–1000，
+默认 100；`--all` 从指定 offset 起导出全部匹配项。
+
+播放、录音与诊断：
+
+| 命令 | 用途 |
+| --- | --- |
+| `radio play <UUID\|URL>` | 播放已保存电台，或试听 HTTP(S) 流 |
+| `radio record <UUID> [--duration D] [--output-dir DIR]` | 录制已保存电台，直到停止或达到时长 |
+| `radio recordings list [PAGE]` | 列出录音记录 |
+| `radio recordings recover` | 重试中断录音的待收尾发布 |
+| `radio recordings play <ID>` | 播放录音 |
+| `radio recordings remove <ID> [--index-only]` | 删除录音及文件，或只删除索引记录 |
+| `radio recordings open` | 打开录音目录 |
+| `radio devices` | 列出 mpv 音频输出设备 |
+| `radio doctor` | 检查媒体工具、录音路径和剩余空间 |
+
+Shell 集成：
+
+| 命令 | 用途 |
+| --- | --- |
+| `radio completions <SHELL>` | 为 bash、elvish、fish、powershell 或 zsh 生成补全 |
+| `radio man` | 生成 `radio(1)` 手册页 |
+| `radio help [COMMAND]` | 打印命令帮助 |
+
+示例：
 
 ```sh
-brew install mpv ffmpeg
-grep 'aarch64-apple-darwin.tar.gz$' SHA256SUMS | shasum -a 256 -c -
-tar -xzf radio-cli-v0.7.0-aarch64-apple-darwin.tar.gz
-cd radio-cli-v0.7.0-aarch64-apple-darwin
-./radio doctor
-./radio sync
-./radio tui
-```
-
-Intel Mac 请替换为 `x86_64-apple-darwin`。macOS 包未经 Developer ID 签名或公证。
-若 Gatekeeper 阻止运行你信任的下载文件，校验通过后，可对解压出的程序执行
-`xattr -d com.apple.quarantine ./radio` 再重试；另见
-[Apple 关于打开下载软件的说明](https://support.apple.com/en-us/102445)。
-也可安装 Rust 1.88+，在源码目录运行 `cargo install --path . --locked`。
-
-直接运行 `radio` 会在交互终端打开 TUI；重定向输出时显示帮助。没有目录时，TUI 和 `random` 先获取热门 1,000 台；完整目录通过 `sync` 获取。同步失败保留之前的目录。
-
-## 命令
-
-```sh
+radio sync
 radio search jazz --country FR --min-bitrate 128
 radio search 新闻 --language chinese
-radio search --tag 'public radio' --limit 100 --offset 100
-radio --json search jazz
-radio info <UUID>
-radio play <UUID>
-radio play https://example.com/live.mp3
 radio random --country CN
-radio favorites add <UUID>
-radio favorites list
-radio favorites remove <UUID>
-radio history
-radio station add '我的电台' 'https://example.com/live' \
-  --backup-url 'https://example.com/backup'
+radio play https://example.com/live.mp3
+radio station add "我的电台" https://example.com/live \
+  --backup-url https://example.com/backup
 radio record <UUID> --duration 30m --output-dir ./recordings
-radio recordings list
+radio --json-v2 search jazz
+radio completions zsh > _radio
 ```
 
-名称、国家/地区、语言和标签支持本地搜索；两个字符及以上的查询还会按子串匹配国家/地区的中文名称，
-例如 `刚果` 可同时命中两个刚果的电台，`法国` 可命中法国电台。单字符查询只匹配电台文本，因为单个汉字被过多地区共用
-（`岛` 出现在 32 个名称中）。国家/地区代码、语言和标签筛选使用完整值（语言也可用目录提供的代码，例如 `zh`）。最低码率筛选排除码率未知的记录。`random` 在整个匹配目录中抽样，不受搜索分页限制。`info` 始终输出 JSON；查询命令可加 `--json`。运行状态与诊断写入 stderr。
+搜索默认在本地进行且不区分大小写。查询包含两个及以上字符时，也会按子串匹配
+国家/地区中文名，例如 `刚果` 可命中两个刚果，`法国` 可命中法国。单字符查询只匹配
+电台文本，因为单个汉字被过多地区共用。国家/地区、语言和标签筛选使用完整目录值；
+语言也接受目录代码，例如 `zh`。`--min-bitrate` 会排除码率未知的电台。
+`random` 从整个筛选结果中抽样，不受当前分页限制。
 
-`--json-v2` 返回统一的成功/错误封套和稳定错误码，原有 `--json` 格式保持兼容，
-详见 [JSON 契约](docs/json-contract.md)。录音支持 `recordings play ID`、
-`recordings remove ID [--index-only]`、`recordings open`；TUI 中 Enter / D / o / e
-分别回听、确认删除、打开目录和展开错误。录音空间检查默认保留 16 MiB。
+直接 URL 是临时试听：不会写入目录或历史，也不会替换上次保存的电台。
+需要录音时请先用 `station add` 保存。
 
-电台采用完整 Radio Browser UUID；自定义电台创建本地 UUID。收藏、最近播放和自定义地址不被目录同步覆盖。收藏中已从目录消失的电台仍可尝试播放。历史保留最近 1,000 次成功起播记录，界面按电台聚合显示最近收听。
+旧脚本可继续使用 `--json`；需要原子成功/错误响应和稳定错误码时使用 `--json-v2`。
+详见 [JSON 输出契约](docs/json-contract.zh-CN.md)。
 
-TUI 按键：
+## 配置
 
-| 按键 | 操作 |
-|---|---|
-| `:` | 命令模式；Enter 执行，Esc 返回 |
-| Tab / Shift-Tab | 下一个 / 上一个面板 |
-| `1`–`5` | 来源 / 列表 / 详情 / 播放器 / 任务面板 |
-| Ctrl-方向键 / Ctrl-`h/j/k/l` | 按空间位置切换面板 |
-| 方向键 / `j`、`k` | 选择、导航或滚动当前面板 |
-| Enter | 列表中播放；播放器中查看当前电台详情 |
-| Space / `m` | 暂停 / 恢复 / 静音，录音继续 |
-| `y` / `Y` | OSC 52 复制 UUID / URL（录音 ID / 路径） |
-| `n` | 按当前筛选随机下一台 |
-| `f` | 收藏 / 取消收藏选中电台 |
-| `r` | 开始 / 停止当前电台录音 |
-| `+`、`-` | 音量 |
-| `/` | 增量搜索；Enter 确认，Esc 恢复原查询、页和选中项 |
-| `F` | 国家/地区代码、语言、标签、最低码率筛选 |
-| `[` / `]` | 电台 / 收藏 / 最近 / 录音分类；会话内各分类记住自己的页和选中行 |
-| `gg` / `G` | 列表首项 / 末项 |
-| `H` / `M` / `L` | 选择列表视口顶部 / 中间 / 底部项 |
-| `zt` / `zz` / `zb` | 将选中项置于视口顶部 / 中间 / 底部 |
-| PgUp / PgDn、Ctrl-b / Ctrl-f | 电台列表翻页 |
-| Ctrl-e / Ctrl-y | 当前面板视口向下 / 向上滚动一行；选中项可见时保持选择 |
-| `?` | 打开帮助或当前失败详情（详情/命令用法内按 `h` 切换到键盘帮助；`j`/`k`、PgUp/PgDn、`g`/`G`、Ctrl-e/y/b/f 滚动） |
-| `q` / Ctrl-C | 收尾录音并退出 |
+配置文件是可选的。默认路径如下：
 
-焦点面板采用亮青色粗边框、`▶` 标记和编号，底部显示模式与当前面板操作；也支持鼠标点击切换面板、选择行，双击电台行播放，滚轮导航。顶部持续显示当前播放电台、编码、码率、音量和录音状态，详情面板展示国家/地区、语言、标签、UUID、地址等信息。码率与编码标注为目录数据，未知值明确显示未知；不会随列表选择而改变当前播放信息。
+| 项目 | Linux | macOS |
+| --- | --- | --- |
+| 配置 | `${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml` | `~/Library/Application Support/radio-cli/config.toml` |
+| 数据目录 | `${XDG_DATA_HOME:-~/.local/share}/radio-cli/` | `~/Library/Application Support/radio-cli/` |
+| 数据库 | `<数据目录>/radio.db` | `<数据目录>/radio.db` |
+| 录音 | `<数据目录>/recordings/` | `<数据目录>/recordings/` |
 
-在 TUI 内直接执行 `:sync` 后台同步，`:sync-cancel` 取消任务，`:current` 查看当前电台完整详情，`:record --duration 30m` 定时录制当前电台。命令支持引号、Tab 补全和历史；更多命令与操作设计见 [TUI 使用说明](docs/tui.md)。
+使用 `--config <FILE>` 和 `--data-dir <DIR>` 可隔离或迁移状态。
+`--api-url` 覆盖配置中的目录服务器。命令行选项优先于配置文件。
+相对路径在启动时按工作目录解析。
 
-`play` 和 TUI `:play URL` 也接受 HTTP(S) 流地址。直接试听不会写入目录或播放历史，
-也不会替换上次播放电台；需要录音时请先用 `station add` 保存。
+| 类别 | 配置项 |
+| --- | --- |
+| 目录与网络 | `api_url`、`connect_timeout_secs`、`request_timeout_secs`、`auto_sync_days` |
+| 播放 | `mpv`、`volume`、`normalize_loudness`、`audio_device`、`resume`、`playback_timeout_secs` |
+| 录音 | `ffmpeg`、`ffprobe`、`recording_dir`、`probe_timeout_secs`、`recording_min_free_mb` |
+| 界面 | `language`、`theme`、`artwork`、`mouse`、`keybindings.jump_to_playing` |
 
-## 配置与数据
+可以从 [config.example.toml](config.example.toml) 开始。各配置项的合法值、默认值、
+路径优先级、语言检测、恢复模式、artwork 行为和快捷键语法见
+[配置参考](docs/configuration.zh-CN.md)。
 
-默认电台目录通过第三方服务 [Radio Browser API](https://api.radio-browser.info/) 获取，
-并缓存在用户本地 SQLite 数据库中。源码仓库及发行包不附带电台目录数据库。
-目录元数据由上游提供；使用自定义 `api_url` 时，目录来自指定服务。
+```toml
+mpv = "mpv"
+volume = 80
+resume = "selection"
+auto_sync_days = 7
+theme = "default"
+artwork = "station"
 
-中文 TUI 的国家/地区名称根据上游 `countrycode`，使用固定版本的
-[Unicode CLDR 48](https://github.com/unicode-org/cldr/tree/release-48) 中文名称显示；代码无法识别或缺失时回退显示上游目录名称，再回退代码，最后显示未知。
-`state` 字段标为“州/省/区域”。
-上游 `country`、`countrycode` 字段在本地保存和 JSON 输出中保留原值，
-`--country` 参数及 `countries` 命令保持兼容，代码筛选仍使用上游代码。
-地理名称与代码仅用于电台检索和展示，不表示本项目对相关地区政治地位或主权归属的立场。
-CLDR 名称表使用 [Unicode License V3](locales/LICENSE.unicode)，
-可用 `uv run scripts/update_territories.py` 从固定上游版本重新生成。
+[keybindings]
+jump_to_playing = "<F6>"
+```
 
-CLI 错误和列表文案支持 `--lang en` / `--lang zh-CN`。优先级为 `--lang`、
-`RADIO_LANG`、配置 `language`、`LC_ALL`/`LANG`，未知语言提示一次并回退英文。
-CLI 列表、领域错误、播放进度、顶层帮助简介以及 TUI 面板、帮助和交互提示已支持
-语言切换；子命令帮助和部分运行消息仍待迁移。
+手写配置文件不会被改写。运行时音量和上次电台保存在 SQLite 中。
+在 TUI 中用 `:set` 修改的设置只作用于当前会话。
 
-自定义电台支持 `station list --all`、`station edit UUID --name 名称 --url URL`、
-`station remove UUID`。删除有引用的电台时保留名称占位并清除播放地址；
-`--keep-references` 可强制保留无引用占位。`station backups UUID --add URL --remove URL`
-管理备用地址，归一化后重复的 URL 会报出已有 UUID。TUI 删除需按 `y` 二次确认。
+## 录音
 
-已起播的直播流遇到 EOF/错误时，按 1、3、7 秒退避最多重连三次，保持电台和当前地址，
-不会重复记入历史或点击上报。停止、换台、退出会取消待重试任务；耗尽后进入正常备用线路流程。
-恢复播放后重新获得每次断流的三次预算；滑动窗口限制每分钟最多重连六次，防止抖动流无限重试。
-播放开始前的流连接失败仍按候选线路回退。播放器本地启动失败（缺少可执行程序、
-IPC/socket 启动超时、缺少响度滤镜）及配置的音频设备失败会结束本次播放请求，
-不尝试其他线路、随机电台或目录刷新。解决本地问题后重新播放；偶发的播放器启动失败也需重新发起播放。
+录音使用流拷贝，不重新编码，也不降低音质。开始前会探测实际流编码。
 
-`radio devices`（或 `radio --json devices`）列出 mpv 音频输出设备；
-设置 `audio_device = "设备名"` 选择输出，留空或省略则自动选择。
-设备名取决于 mpv 的音频后端与本机硬件，重新连接硬件后可能变化。
+| 流编码 | 输出格式 |
+| --- | --- |
+| MP3 | `.mp3` |
+| AAC，包括常见 HLS AAC | `.aac` |
+| Vorbis | `.ogg` |
+| Opus | `.opus` |
 
-`normalize_loudness = true` 可开启自适应播放响度均衡，默认关闭。
-使用 mpv 的 `dynaudnorm` 短窗口（`f=150:g=5`），会增加少量缓冲；
-录音仍原流复制，不受影响。缺少滤镜时会提示安装兼容的 mpv 或关闭此选项。
-每个进程按配置的 mpv 可执行程序只探测一次滤镜能力；`radio devices` 始终实时枚举设备。
+每个录音先写入唯一的 `.part` 文件，正常停止后发布为最终文件。JSON sidecar 记录电台、
+实际请求地址、时间、编码、时长、完成状态和重连次数。最终文件不会覆盖已有文件。
+中断的录音保留临时文件，可用 `radio recordings list` 查看；
+`radio recordings recover` 可重试未完成的发布。
 
-运行时音量保存在 SQLite；配置 `resume = true` 可在 TUI 启动时恢复上次成功播放的电台和来源，
-默认关闭自动恢复播放。不会修改手写配置文件；无效音量回退配置值，已不可用的上次电台跳过。
-`resume = "selection"` 只恢复来源与上次电台的选择（含所在分页），不启动声音；
-电台不在该来源中时选中首行，录音来源不恢复电台选择。`false` 则打开全部电台且不播放。
+暂停播放不会暂停录音。切换电台会结束当前录音。`--duration` 接受秒、`s`、`m`、`h`，
+范围为 1 秒至 365 天。格式、空间预检、重连和恢复步骤见
+[录音指南](docs/recording.zh-CN.md)。
 
-`countries`、`languages --prefix zh`、`tags --prefix jazz` 列出本地实际筛选值及电台数。
-搜索支持 `--sort name|bitrate|votes|clickcount|random`，默认按点击数，能与全部筛选组合；
-随机排序每次查询重新排列。TUI 的 `F` 弹窗后台加载候选，↑/↓ 选择并填入。
+## 故障排查
 
-TUI 启动时自动后台刷新已完整同步且超过 `auto_sync_days` 天的目录（默认 7，0 关闭），
-自动同步也保留取消与缩减保护。`F` 弹窗 Ctrl-U 或点击底栏明确的清空筛选标签可清空筛选。
-查询仍按字面子串匹配，多词 CLI 参数用 shell 引号分组；`-tag:` 等高级语法留待后续。
+| 现象 | 首先尝试 |
+| --- | --- |
+| 缺少 mpv、FFmpeg 或 ffprobe | 安装工具后运行 `radio doctor` |
+| 目录为空或过旧 | 运行 `radio sync`，检查网络和代理设置 |
+| 流播放失败或没有声音 | 用 mpv 直接试播 URL，检查音量和静音状态，再运行 `radio devices` |
+| 另一个会话占用数据目录 | 关闭其他 TUI/播放/录音会话，或换用 `--data-dir` |
+| 配置修改不生效 | 检查配置路径、TOML 语法和未知字段，然后重启 radio-cli |
+| 录音不完整或无法发布 | 保留 `.part` 文件，查看 `radio recordings list`，再运行 `radio recordings recover` |
+| artwork 不显示 | 运行 `radio sync`，确认终端支持对应图片协议，并检查详情面板尺寸 |
 
-TUI 普通模式下连按 `''`（两次单引号，间隔不超过 1 秒）可定位当前播放电台并聚焦列表。
-快捷键在 `[keybindings]` 中配置 `jump_to_playing`（如 `"gp"`、`"<F6>"`、`"<Ctrl-p>"`），
-支持 1–4 个可打印非空白字符或带 `Ctrl-`/`Alt-`/`Shift-` 修饰的命名键；Ctrl-C 保留退出，
-设为 `""` 可禁用。目标在当前页时保留来源、筛选和排序，否则切换到全部电台、清除筛选并
-只加载目标所在页；定位不重新播放，暂停、连接和重连期间同样可用，播放失败后可定位到头部
-所示电台并提示“播放失败”，空闲时提示无播放。帮助面板
-显示实际配置的按键，禁用时不显示该条目。详见 [docs/tui.md](docs/tui.md)。
+代理、播放设备、退出码、macOS Gatekeeper、终端和语言问题见
+[故障排查指南](docs/troubleshooting.zh-CN.md)。
 
-Linux 默认路径：
-
-- 配置：`${XDG_CONFIG_HOME:-~/.config}/radio-cli/config.toml`
-- 数据：`${XDG_DATA_HOME:-~/.local/share}/radio-cli/radio.db`
-- 录音：数据目录下的 `recordings/`
-
-macOS 默认路径：
-
-- 配置：`~/Library/Application Support/radio-cli/config.toml`
-- 数据：`~/Library/Application Support/radio-cli/radio.db`
-- 录音：`~/Library/Application Support/radio-cli/recordings/`
-
-配置文件可选。参见 [config.example.toml](config.example.toml)，使用 `--config 文件` 指定；`--data-dir 目录` 可隔离测试数据。相对目录按启动时的工作目录解释；录音数据库保存绝对路径。
-
-默认发现 Radio Browser 服务器并有限重试。可设置 `api_url`，或使用优先级更高的 `--api-url https://服务器`。HTTP 请求支持 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 等标准环境变量；音频后端遵循其各自的代理支持，目录可达不代表音频流可达。过期目录按 auto_sync_days 配置自动后台刷新，可设 0 关闭。
-
-同一数据目录只允许一个播放 / 录音 / TUI 会话；其他 CLI 查询和收藏操作仍可使用。Linux 和 macOS 正常退出或 Ctrl-C 时均停止播放并收尾录音。Linux 还会在前台被强制终止时结束媒体子进程；macOS 不保证 SIGKILL 或崩溃后的子进程清理。长时间运行可放在 tmux 中，Linux 也可使用 systemd。
-
-## 录音行为
-
-播放时开始录音，会将请求录音时已知的曲名保存到文件名和元数据；切歌不会改名。
-未知曲名（含独立 CLI 录音）沿用原命名格式，文件名会清理特殊字符并限制字节数，
-曲名词语间的空白折叠为下划线。
-
-- MP3 → `.mp3`；AAC（包括常见 HLS AAC）→ `.aac`；Vorbis → `.ogg`；Opus → `.opus`。根据实际音轨探测，不盲信目录的编码字段。
-- 使用流拷贝，不重编码、不降低音质；不支持的录音编码明确报错。
-- 每个录音有 JSON 元数据，包含电台、实际请求地址、时间、编码、媒体时长和完成状态。源站重定向后的最终 CDN 地址不一定可见。
-- 先写唯一 `.part` 文件；正常停止后生成最终文件。中断 / 失败保留 `.part` 和状态，后续启动媒体会话时恢复未收尾记录。`recordings list` 可查看结果；媒体时长可能为估计值。
-- 最终文件不会覆盖已有文件。macOS 的录音发布要求文件系统支持硬链接；发布中断后可使用 `recordings recover` 重试。
-- TUI 切台先结束当前录音；新电台需重新按 `r`。暂停播放不会暂停录音。直播源提前结束不视作完整录音。
-- HTTP/ICY 连接异常截断时有限重连，HLS 分段拉取失败也计入重连次数。重连可能留下直播音频缺口；完成的录音仍保存重连次数并显示提示。重试耗尽仍保留临时文件和错误诊断。不会循环播放有限长度的源来凑足录音时长。
-- `--duration` 接受秒、`s`、`m`、`h`，范围为 1 秒至 365 天。切点以音频包为单位，不能保证精确歌曲边界。
-- 边听边录最多两条并发上游连接；编码探测连接先关闭，再启动录音连接。HLS 一个媒体任务可能请求多个分片。
-- 文件只保存在本地；请遵守电台条款与适用的个人录制规定。
-
-如需恢复 `.part`，先复制到新文件，再根据原编码用 FFmpeg 流拷贝。不要直接覆盖原文件。
-
-## 开发与验证
+## 开发
 
 ```sh
 cargo fmt --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --all-targets --all-features --locked
 cargo test --release --test storage catalog_benchmark -- --ignored --nocapture
-# 仅 Linux：资源采样依赖 /proc
-uv run scripts/measure_resources.py --binary target/release/radio
 ```
 
-测试使用本地 HTTP/ICY/HLS 源，不依赖公共电台。录音测试需要 FFmpeg；mpv IPC 测试使用空音频输出，可通过 `RADIO_TEST_MPV=/绝对路径/mpv` 指定，未找到 mpv 时会跳过相关测试。CI 安装并执行真实 mpv 测试。资源目标与结果见 [验证记录](docs/validation.md)。
+测试使用本地 HTTP/ICY/HLS fixture，不依赖公共电台。录音测试需要 FFmpeg；
+mpv 测试使用空音频输出，找不到 mpv 时跳过，可用
+`RADIO_TEST_MPV=/absolute/path/to/mpv` 指定程序。发行打包、平台要求和
+确定性目录基准见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-首版不提供后台服务、回溯缓存、歌曲识别、歌词、地图和后台全目录探测。目录来源为 [Radio Browser](https://www.radio-browser.info/)，音频直连电台；不使用 RoamDial 私有服务，也不会按同名自动合并备用线路。更详细的设计见 [实现说明](docs/implementation.md)。
+## 文档
 
-Ctrl-C 在所有 TUI 模式下收尾并退出；Esc 取消编辑或关闭弹窗。终端过小时，q 直接退出。
+| 文档 | 内容 |
+| --- | --- |
+| [配置参考](docs/configuration.zh-CN.md) | 全部配置项、路径、语言、恢复、artwork、快捷键 |
+| [录音指南](docs/recording.zh-CN.md) | 格式、文件、恢复、重连、空间检查 |
+| [故障排查](docs/troubleshooting.zh-CN.md) | 常见故障、代理、设备、退出码 |
+| [JSON 输出契约](docs/json-contract.zh-CN.md) | JSON 结构、错误码与进程退出码 |
+| [更新日志](CHANGELOG.md)（英文） | 版本说明与兼容性变化 |
+| [贡献指南](CONTRIBUTING.md)（英文） | 开发、测试和发行归档 |
+| [安全策略](SECURITY.md)（英文） | 支持版本和漏洞报告 |
 
-`radio completions bash|zsh|fish` 生成 shell 补全，例如
-`radio completions zsh > _radio` 后放入 zsh 的 `$fpath` 目录。
-`radio man > radio.1` 生成手册页。发布压缩包包含三种 shell 补全和
-`man/radio.1`，生成命令不读取配置、不创建数据目录。
+## 许可证
 
-`theme = "default"|"mono"|"light"` 设置主题，非空 `NO_COLOR` 强制 mono。
-可设置 `artwork = "station"` 在 TUI 详情中显示电台台标，或用 `"track"` 优先显示
-当前曲目的 ICY 封面，默认 `"off"`。
-台标来自目录的 `favicon`，不探测音频流；升级后运行 `radio sync` 为旧电台补齐数据。
-支持的终端使用 Kitty、Sixel 或 iTerm2 图片协议，否则回退 Unicode 彩色半块；
-tmux 固定使用半块。图片利用详情文字下方的剩余空间，封面切换时文字位置不变。
-单色主题、小于 100×24 的窗口或文字下方空间不足时保留纯文字详情。
-部分 Sixel 终端（包括 xterm）的图片被弹窗或文字覆盖后可能消失，可尝试重新打开详情。
-仅下载不超过 256 KiB 的 JPEG/PNG，并限制解码尺寸；图片缓存在数据目录的
-`artwork/` 中，最多 128 项、32 MiB，台标 URL 变化后重新获取。
-曲目封面要求 ICY `StreamUrl` 是有效图片地址，且元数据标题与当前非空播放标题一致；
-不可用时回退台标或文字。仅在详情展示的电台正在播放时探测，间隔 25 秒，
-可能被源站计为额外听众；暂停、停止、切台和退出会取消探测，HLS 和本地录音回放除外。
-录音优先：等待封面探测连接关闭后才开始检测编码，检测、录制和收尾期间回退台标。
-等待关闭超过 `connect_timeout_secs` 的两倍时，播放或录音启动会提示超时，可重试；
-不会因此超出连接数上限。
-播放和录音仍最多使用两条音频上游连接；目录与图片 HTTP 请求另计。
-曲目关联信息不持久化；下载的图片文件可复用缓存。
-80×24 下详情用 `3` 打开，空闲任务栏收起。`mouse = false` 或 `:set mouse false`
-允许终端选择文本。命令历史跨会话保留 100 条（含 URL 凭据的命令不保存）；`:help record` 查看命令用法，
-`:set language en|zh-CN` 在当前会话切换已迁移的消息语言。
-诊断信息隐藏 URL 凭据；播放和主动复制 URL 保留完整地址。OSC 52 复制超过 4096 字节时提示截断。
-详情明确标记列表选中、指定查看或当前播放的对象，并显示备用地址查询状态。
-活动日志上滚后保持位置，提示新消息数与旧记录淘汰。
-
-录音空间预检优先使用探测到的音频流码率，再使用容器码率、目录码率。无时限或码率未知时，只检查配置的最低余量并提示无法估算总大小；预检无法保证录音途中磁盘不会耗尽。
+MIT，见 [LICENSE](LICENSE)。随附的中文国家/地区名称表使用
+[Unicode License V3](locales/LICENSE.unicode)。

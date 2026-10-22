@@ -53,8 +53,12 @@ trap 'rm -rf -- "$release_staging"' EXIT
 release_dir="$release_staging/$release_name"
 mkdir -p "$release_dir/completions" "$release_dir/man"
 cp "$release_binary" "$release_dir/radio"
-git archive HEAD README.md README.zh-CN.md LICENSE CHANGELOG.md config.example.toml \
-    docs/tui.md docs/json-contract.md docs/validation.md locales/LICENSE.unicode | tar -x -C "$release_dir"
+git archive HEAD README.md README.zh-CN.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md config.example.toml assets/demo.svg \
+    docs/configuration.md docs/configuration.zh-CN.md \
+    docs/recording.md docs/recording.zh-CN.md \
+    docs/troubleshooting.md docs/troubleshooting.zh-CN.md \
+    docs/json-contract.md docs/json-contract.zh-CN.md \
+    locales/LICENSE.unicode | tar -x -C "$release_dir"
 for release_shell in bash zsh fish; do
     "$release_binary" --lang en completions "$release_shell" > "$release_dir/completions/radio.$release_shell"
 done
