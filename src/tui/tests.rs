@@ -4054,7 +4054,15 @@ fn commands_with_url_credentials_stay_out_of_the_command_history() {
             matches!(receiver.try_recv(), Ok(Command::Add { .. })),
             "{line}"
         );
-        assert_eq!(app.message, crate::t!("history_withheld"), "{line}");
+        assert_eq!(
+            app.message,
+            format!(
+                "{} · {}",
+                crate::t!("command_submitted"),
+                crate::t!("history_withheld")
+            ),
+            "{line}"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), kept, "{line}");
         app.key(key(KeyCode::Char(':')), &data, &sender);
         app.key(key(KeyCode::Up), &data, &sender);
@@ -4066,6 +4074,20 @@ fn commands_with_url_credentials_stay_out_of_the_command_history() {
     }
     assert!(matches!(receiver.try_recv(), Ok(Command::Add { .. })));
     assert!(!String::from_utf8_lossy(&kept).contains("hunter2"));
+
+    run(&mut app, "play https://user:hunter2@example.com/live");
+    assert!(
+        matches!(receiver.try_recv(), Ok(Command::Play(url)) if url == "https://user:hunter2@example.com/live")
+    );
+    assert_eq!(
+        app.message,
+        format!(
+            "{} · {}",
+            crate::t!("command_submitted"),
+            crate::t!("history_withheld")
+        )
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), kept);
 
     // A failure notice is kept and the reason is added after it.
     let (full, _held) = command::channel(1);

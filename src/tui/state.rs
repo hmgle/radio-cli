@@ -1142,12 +1142,11 @@ impl App {
     fn execute_line(&mut self, view: &View, sender: &CommandSender) {
         if self.run_line(view, sender) {
             let notice = crate::t!("history_withheld");
-            self.message =
-                if self.message.is_empty() || self.message == crate::t!("command_submitted") {
-                    notice.into()
-                } else {
-                    format!("{} · {notice}", self.message)
-                };
+            self.message = if self.message.is_empty() {
+                notice.into()
+            } else {
+                format!("{} · {notice}", self.message)
+            };
         }
     }
     /// Runs the command line; returns whether it was kept out of the history
