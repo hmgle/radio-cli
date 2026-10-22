@@ -2016,7 +2016,8 @@ fn station_refresh_does_not_read_recordings_until_that_source_is_selected() {
         &data,
     )
     .unwrap();
-    assert!(worker::refresh_if_needed(&engine, &filter, &data, false).is_err());
+    worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
+    assert!(data.lock().unwrap().page_error(&filter).is_some());
 }
 
 #[test]
@@ -2777,4 +2778,71 @@ fn deletion_confirmation_keeps_target_and_survives_queue_rejection() {
         assert!(!app.quit);
         assert!(receiver.try_recv().is_err());
     }
+}
+
+#[test]
+fn page_failure_disables_stale_objects_and_retries_the_current_filter() {
+    use super::worker::{PagePhase, PageState};
+    for source in Source::ALL {
+        let mut data = view();
+        let mut app = App::default();
+        app.source = source;
+        app.filter.recordings = source == Source::Recordings;
+        app.filter.favorites = source == Source::Favorites;
+        app.filter.history = source == Source::History;
+        app.filter.query = "keep my query".into();
+        data.filter = app.filter.clone();
+        let (sender, receiver) = command::channel(10);
+        data.page = Some(PageState {
+            generation: 7,
+            requested: app.filter.clone(),
+            phase: PagePhase::Error("broken storage".into()),
+        });
+        assert!(app.selected(&data).is_none());
+        assert_eq!(app.length(&data), 0);
+        for code in [
+            KeyCode::Char('y'),
+            KeyCode::Char('Y'),
+            KeyCode::Char('D'),
+            KeyCode::Char('f'),
+        ] {
+            app.key(key(code), &data, &sender);
+        }
+        assert!(app.confirmation.is_none());
+        assert!(app.clipboard.is_none());
+        assert!(receiver.try_recv().is_err());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains("F5"));
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert_eq!(app.help_content.as_deref(), Some("broken storage"));
+        app.key(key(KeyCode::Esc), &data, &sender);
+        app.key(key(KeyCode::F(5)), &data, &sender);
+        let filter = match receiver.try_recv().unwrap() {
+            Command::Search(f) | Command::Recordings(f) => f,
+            _ => panic!("expected retry"),
+        };
+        assert_eq!(filter, app.filter);
+        data.page.as_mut().unwrap().phase = PagePhase::Ready;
+        assert!(data.page_ready(&filter));
+    }
+}
+
+#[test]
+fn corrected_page_is_adopted_only_for_the_current_request() {
+    use super::worker::{PagePhase, PageState};
+    let mut data = view();
+    let mut app = App::default();
+    app.filter.offset = 200;
+    data.page = Some(PageState {
+        generation: 4,
+        requested: app.filter.clone(),
+        phase: PagePhase::Ready,
+    });
+    data.filter.offset = 100;
+    app.reconcile(&data);
+    assert_eq!(app.filter.offset, 100);
+    app.filter.query = "new search".into();
+    app.reconcile(&data);
+    assert_eq!(app.filter.query, "new search");
 }

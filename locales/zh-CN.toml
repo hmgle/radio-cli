@@ -109,3 +109,11 @@ confirm_station_keep_scope = "删除流地址，保留电台占位记录及引�
 delete_submitted = "删除命令已提交"
 operation_failed = "错误：{detail} · 5 详情 · Esc 关闭"
 terminal_too_small = "radio · 当前 {width}×{height}；至少 40×16 · q 退出 · Esc 取消"
+
+page_loading = "正在更新列表…"
+page_failed = "列表查询失败：{detail}\nF5 重试 · Enter 详情"
+empty_recordings = "暂无录音。播放电台后按 r 开始录音。"
+empty_filtered = "暂无匹配项。按 F 打开筛选，再按 Ctrl-U 清空搜索与筛选。"
+empty_stations = "暂无电台。输入 :sync 获取目录。"
+empty_favorites = "暂无收藏。用 [ 或 ] 切到电台，按 f 收藏。"
+empty_history = "暂无播放历史。用 [ 或 ] 切到电台，按 Enter 播放。"

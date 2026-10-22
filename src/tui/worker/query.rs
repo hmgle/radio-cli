@@ -1,5 +1,5 @@
 //! A single catalog reader keeps SQLite work out of the media owner loop.
-use super::{LocatedStation, View};
+use super::{LocatedStation, PagePhase, PageState, View};
 use crate::{
     model::{FacetKind, Filter, Recording, Sort, Station},
     store::Store,
@@ -43,7 +43,7 @@ struct Shared {
 pub(super) struct Sender(Arc<Shared>);
 
 impl Sender {
-    pub fn page(&self, filter: Filter, revision: (u64, u64), note: String) {
+    pub fn page(&self, filter: Filter, revision: (u64, u64), note: String) -> u64 {
         let mut pending = self.0.pending.lock().unwrap();
         pending.page_generation += 1;
         pending.page = Some((
@@ -55,6 +55,7 @@ impl Sender {
             },
         ));
         self.0.ready.notify_one();
+        pending.page_generation
     }
 
     pub fn locate(&self, uuid: String, request: u64, limit: usize) {
@@ -130,6 +131,7 @@ enum Request {
 }
 
 struct Rows {
+    filter: Filter,
     stations: Vec<Station>,
     recordings: Vec<Recording>,
     total: usize,
@@ -155,7 +157,7 @@ impl Reader {
                 .as_ref()
                 .filter(|(k, r, _)| *k == key && *r == revision)
                 .map(|(_, _, n)| *n);
-            let (stations, recordings) = if filter.recordings {
+            let (mut stations, mut recordings) = if filter.recordings {
                 (vec![], store.recordings_page(filter.limit, filter.offset)?)
             } else {
                 (store.search(filter)?, vec![])
@@ -175,8 +177,18 @@ impl Reader {
             } else {
                 store.search_count(filter)?
             };
+            let mut effective = filter.clone();
+            if filter.offset > 0 && filter.offset >= total {
+                effective.offset = total.saturating_sub(1) / limit * limit;
+                if filter.recordings {
+                    recordings = store.recordings_page(limit, effective.offset)?;
+                } else {
+                    stations = store.search(&effective)?;
+                }
+            }
             Ok((
                 Rows {
+                    filter: effective,
                     stations,
                     recordings,
                     total,
@@ -249,11 +261,21 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                             data.backups_errors = Default::default();
                             data.rows_revision += 1;
                         }
-                        data.filter = page.filter;
+                        data.filter = rows.filter;
+                        data.page = Some(PageState {
+                            generation,
+                            requested: page.filter,
+                            phase: PagePhase::Ready,
+                        });
                         data.catalog_note = page.note;
                     }
                     Err(error) => {
-                        data.log(&crate::t!("list_query_failed", "detail" => format!("{error:#}")))
+                        data.page = Some(PageState {
+                            generation,
+                            requested: page.filter.clone(),
+                            phase: PagePhase::Loading,
+                        });
+                        data.fail_page(&page.filter, format!("{error:#}"));
                     }
                 }
                 data.revision += 1;
@@ -513,7 +535,8 @@ mod tests {
         store.upsert(&rows[0]).unwrap();
         filter.offset = 8;
         let page = reader.page(&reader_store, &filter).unwrap();
-        assert!(page.stations.is_empty());
+        assert_eq!(page.stations.len(), 1);
+        assert_eq!(page.filter.offset, 1);
         assert_eq!(page.total, 2);
         filter.offset = 0;
         filter.limit = 100;
@@ -542,12 +565,15 @@ mod tests {
         worker
             .sender
             .page(filter.clone(), store.revision().unwrap(), String::new());
-        wait(&view, |v| !v.logs.is_empty());
+        wait(&view, |v| v.page_error(&filter).is_some());
+        assert!(!view.lock().unwrap().page_ready(&filter));
         conn.execute("DELETE FROM recordings", []).unwrap();
         let revision = store.revision().unwrap();
         view.lock().unwrap().store_revision = Some(revision);
-        worker.sender.page(filter, revision, String::new());
+        worker.sender.page(filter.clone(), revision, String::new());
         wait(&view, |v| v.recordings_revision == 1);
+        assert!(view.lock().unwrap().page_ready(&filter));
+        assert!(view.lock().unwrap().page_error(&filter).is_none());
     }
 
     #[test]

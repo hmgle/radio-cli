@@ -331,7 +331,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             },
             app.filter.offset / app.filter.limit.max(1) + 1
         );
-        let items: Vec<ListItem> = if app.filter != view.filter {
+        let items: Vec<ListItem> = if !view.page_ready(&app.filter) {
             vec![]
         } else if app.source == Source::Recordings {
             view.recordings
@@ -380,12 +380,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         if items.is_empty() {
             frame.render_widget(
                 Paragraph::new(
-                    if app.filter != view.filter && app.source != Source::Recordings {
-                        "正在更新列表…"
-                    } else if view.task_active {
-                        "目录任务进行中…\n可以继续使用 : 命令"
+                    if let Some(error) = view.page_error(&app.filter) {
+                        crate::t!("page_failed", "detail" => fit(error, usize::from(rect.width.saturating_sub(2))).trim_end())
+                    } else if !view.page_ready(&app.filter) {
+                        crate::t!("page_loading").into()
                     } else {
-                        "暂无匹配项\n:sync 同步 · / 搜索 · F 筛选 · ] 切换来源"
+                        empty_hint(app).into()
                     },
                 )
                 .wrap(Wrap { trim: true })
@@ -414,7 +414,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     }
     if show_details {
         let text = if app.source == Source::Recordings && !app.inspect_info {
-            view.recordings.get(app.list.selected().unwrap_or(0)).map(|r| {
+            view.recordings.get(app.list.selected().unwrap_or(0)).filter(|_| view.page_ready(&app.filter)).map(|r| {
                 format!(
                     "{}\n状态: {}\n编码: {} / {}\n时长: {}\n大小: {} bytes\n开始: {}\n结束: {}\n电台 UUID: {}\n地址: {}\n文件: {}\n{}{}",
                     value(&r.station_name),
@@ -726,6 +726,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             Rect::new(inner.x, inner.bottom().saturating_sub(3), inner.width, 3),
         );
     }
+}
+
+fn empty_hint(app: &App) -> &'static str {
+    let filtered = !app.filter.query.is_empty()
+        || app.filter.country.is_some()
+        || app.filter.language.is_some()
+        || app.filter.tag.is_some()
+        || app.filter.min_bitrate > 0;
+    crate::messages::text(match app.source {
+        Source::Recordings => "empty_recordings",
+        _ if filtered => "empty_filtered",
+        Source::Stations => "empty_stations",
+        Source::Favorites => "empty_favorites",
+        Source::History => "empty_history",
+    })
 }
 
 pub(super) fn help_text(locale: crate::messages::Locale, jump_binding: &str) -> String {

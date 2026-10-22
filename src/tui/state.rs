@@ -524,14 +524,14 @@ impl App {
     }
 
     pub fn selected<'a>(&self, view: &'a View) -> Option<&'a Station> {
-        if self.source == Source::Recordings || self.filter != view.filter {
+        if self.source == Source::Recordings || !view.page_ready(&self.filter) {
             None
         } else {
             view.rows.get(self.list.selected().unwrap_or(0))
         }
     }
     pub fn length(&self, view: &View) -> usize {
-        if self.filter != view.filter {
+        if !view.page_ready(&self.filter) {
             0
         } else if self.source == Source::Recordings {
             view.recordings.len()
@@ -540,6 +540,13 @@ impl App {
         }
     }
     pub fn reconcile(&mut self, view: &View) {
+        if view.page.as_ref().is_some_and(|p| {
+            p.requested == self.filter && p.phase == super::worker::PagePhase::Ready
+        }) && self.filter != view.filter
+        {
+            self.filter = view.filter.clone();
+            self.reset_selection();
+        }
         if let Some((selected, values)) = &self.filter_edit
             && *selected < 3
             && self.facet_index.is_some()
@@ -572,7 +579,7 @@ impl App {
         }
 
         if let Some((_, revision)) = &self.jump_selection {
-            if self.filter != view.filter || *revision == view.rows_revision {
+            if !view.page_ready(&self.filter) || *revision == view.rows_revision {
                 return;
             }
             let (uuid, _) = self.jump_selection.take().unwrap();
@@ -586,7 +593,7 @@ impl App {
             }
         }
         let len = self.length(view);
-        if self.source != Source::Recordings && self.filter != view.filter {
+        if self.source != Source::Recordings && !view.page_ready(&self.filter) {
             return;
         }
         let revision = if self.source == Source::Recordings {
@@ -612,7 +619,7 @@ impl App {
             Some(self.list.selected().unwrap_or(0).min(len - 1))
         });
         if view.rows_revision > 0
-            && self.filter == view.filter
+            && view.page_ready(&self.filter)
             && let Some(uuid) = self.restore_selection.take()
             && let Some(index) = view.rows.iter().position(|row| row.stationuuid == uuid)
         {
@@ -621,6 +628,9 @@ impl App {
         self.selected_id = self.selection_id(view);
     }
     fn selection_id(&self, view: &View) -> Option<String> {
+        if !view.page_ready(&self.filter) {
+            return None;
+        }
         if self.source == Source::Recordings {
             view.recordings
                 .get(self.list.selected().unwrap_or(0))
@@ -946,7 +956,7 @@ impl App {
         self.inspect_info = false;
         self.details_scroll = 0;
         if self.source != Source::Recordings
-            && self.filter == view.filter
+            && view.page_ready(&self.filter)
             && let Some(index) = view
                 .rows
                 .iter()
@@ -1245,7 +1255,7 @@ impl App {
             KeyCode::Char('g') => self.pending_g = true,
             KeyCode::End | KeyCode::Char('G') => self.move_selection(10000, view),
             KeyCode::PageDown | KeyCode::PageUp if self.focus == Focus::List => {
-                if self.filter != view.filter {
+                if !view.page_ready(&self.filter) {
                     return;
                 }
                 let total = if self.source == Source::Recordings {
@@ -1266,6 +1276,13 @@ impl App {
             }
             KeyCode::PageDown => self.move_selection(10, view),
             KeyCode::PageUp => self.move_selection(-10, view),
+            KeyCode::Enter
+                if self.focus == Focus::List && view.page_error(&self.filter).is_some() =>
+            {
+                self.help_content = view.page_error(&self.filter).map(str::to_owned);
+                self.help = true;
+                self.help_scroll = 0;
+            }
             KeyCode::Enter if self.focus == Focus::Sources => self.focus = Focus::List,
             KeyCode::Enter if self.focus == Focus::Player => {
                 if let Some(station) = &view.status.station {
@@ -1273,7 +1290,7 @@ impl App {
                 }
             }
             KeyCode::Enter if self.focus == Focus::List => {
-                if self.source == Source::Recordings && self.filter == view.filter {
+                if self.source == Source::Recordings && view.page_ready(&self.filter) {
                     if let Some(r) = view.recordings.get(self.list.selected().unwrap_or(0)) {
                         self.send(sender, Command::PlayRecording(r.id.clone()));
                     }
@@ -1282,7 +1299,7 @@ impl App {
                 }
             }
             KeyCode::Char('D')
-                if self.source == Source::Recordings && self.filter == view.filter =>
+                if self.source == Source::Recordings && view.page_ready(&self.filter) =>
             {
                 if let Some(r) = view.recordings.get(self.list.selected().unwrap_or(0)) {
                     self.confirmation = Some(Confirmation::new(
@@ -1340,26 +1357,26 @@ impl App {
                 self.send(sender, Command::Mute);
             }
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.clipboard = if self.source == Source::Recordings && self.filter == view.filter
-                {
-                    view.recordings
-                        .get(self.list.selected().unwrap_or(0))
-                        .map(|r| {
+                self.clipboard =
+                    if self.source == Source::Recordings && view.page_ready(&self.filter) {
+                        view.recordings
+                            .get(self.list.selected().unwrap_or(0))
+                            .map(|r| {
+                                if key.code == KeyCode::Char('Y') {
+                                    r.path.clone()
+                                } else {
+                                    r.id.clone()
+                                }
+                            })
+                    } else {
+                        self.selected(view).map(|s| {
                             if key.code == KeyCode::Char('Y') {
-                                r.path.clone()
+                                s.primary_url().into()
                             } else {
-                                r.id.clone()
+                                s.stationuuid.clone()
                             }
                         })
-                } else {
-                    self.selected(view).map(|s| {
-                        if key.code == KeyCode::Char('Y') {
-                            s.primary_url().into()
-                        } else {
-                            s.stationuuid.clone()
-                        }
-                    })
-                };
+                    };
                 if self.clipboard.is_some() {
                     self.message = "已发送到终端剪贴板".into();
                 }

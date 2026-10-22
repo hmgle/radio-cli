@@ -109,3 +109,11 @@ confirm_station_keep_scope = "Remove stream addresses; keep the station placehol
 delete_submitted = "Deletion submitted"
 operation_failed = "Error: {detail} · 5 details · Esc dismiss"
 terminal_too_small = "radio · {width}×{height}; need 40×16 · q quit · Esc cancel"
+
+page_loading = "Loading list…"
+page_failed = "List failed: {detail}\nF5 retry · Enter details"
+empty_recordings = "No recordings yet. Play a station, then press r to record."
+empty_filtered = "No matches. F opens filters; Ctrl-U there clears the search and filters."
+empty_stations = "No stations. Use :sync to fetch the catalog."
+empty_favorites = "No favorites. Switch to stations with [ or ]; press f to add one."
+empty_history = "No listening history. Switch to stations with [ or ]; Enter plays one."

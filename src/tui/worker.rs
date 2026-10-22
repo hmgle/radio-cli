@@ -27,6 +27,19 @@ pub(super) struct LocatedStation {
     pub filter: Result<Filter, String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PagePhase {
+    Loading,
+    Ready,
+    Error(String),
+}
+#[derive(Clone)]
+pub(super) struct PageState {
+    pub generation: u64,
+    pub requested: Filter,
+    pub phase: PagePhase,
+}
+
 #[derive(Clone)]
 pub(super) struct View {
     pub artwork_station: Option<String>,
@@ -60,6 +73,7 @@ pub(super) struct View {
     pub revision: u64,
     pub rows_revision: u64,
     pub filter: Filter,
+    pub page: Option<PageState>,
     pub total: usize,
     pub recordings_total: usize,
 }
@@ -83,6 +97,7 @@ impl View {
             facets_error: None,
             backups_errors: Default::default(),
             backups: Default::default(),
+            page: None,
             total: 0,
             recordings_total: 0,
             rows: Default::default(),
@@ -103,6 +118,34 @@ impl View {
                 ..Filter::default()
             },
         }
+    }
+    pub fn page_ready(&self, filter: &Filter) -> bool {
+        self.filter == *filter
+            && self
+                .page
+                .as_ref()
+                .is_none_or(|p| p.phase == PagePhase::Ready)
+    }
+    pub fn page_error(&self, filter: &Filter) -> Option<&str> {
+        self.page
+            .as_ref()
+            .filter(|p| p.requested == *filter)
+            .and_then(|p| {
+                if let PagePhase::Error(error) = &p.phase {
+                    Some(error.as_str())
+                } else {
+                    None
+                }
+            })
+    }
+    fn fail_page(&mut self, filter: &Filter, error: String) {
+        let generation = self.page.as_ref().map_or(0, |p| p.generation);
+        self.page = Some(PageState {
+            generation,
+            requested: filter.clone(),
+            phase: PagePhase::Error(error.clone()),
+        });
+        self.log(&crate::t!("list_query_failed", "detail" => error));
     }
     pub fn snapshot(&mut self) -> Arc<Self> {
         if let Some((revision, view)) = &self.published
@@ -215,14 +258,32 @@ fn catalog_note(store: &Store, days: u16) -> Result<String> {
 }
 
 fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
+    let result = refresh_page(engine, filter, view);
+    if let Err(error) = &result {
+        let mut data = view.lock().unwrap();
+        data.refresh_requested = false;
+        data.fail_page(filter, format!("{error:#}"));
+    }
+    result
+}
+
+fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
     let store_revision = engine.store.revision()?;
+    view.lock().unwrap().store_revision = Some(store_revision);
     let note = catalog_note(&engine.store, engine.config.settings.auto_sync_days)?;
     {
         let mut data = view.lock().unwrap();
         if let Some(sender) = data.queries.clone() {
             data.store_revision = Some(store_revision);
             data.refresh_requested = false;
-            sender.page(filter.clone(), store_revision, note);
+            let generation = sender.page(filter.clone(), store_revision, note);
+            data.page = Some(PageState {
+                generation,
+                requested: filter.clone(),
+                phase: PagePhase::Loading,
+            });
+            data.revision += 1;
+            data.immediate_revision += 1;
             return Ok(());
         }
     }
@@ -248,6 +309,11 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
     data.refresh_requested = false;
     data.catalog_note = note;
     data.filter = filter.clone();
+    data.page = Some(PageState {
+        generation: 0,
+        requested: filter.clone(),
+        phase: PagePhase::Ready,
+    });
     data.revision += 1;
     data.immediate_revision += 1;
     Ok(())
@@ -263,12 +329,22 @@ pub(super) fn refresh_if_needed(
     view: &Arc<Mutex<View>>,
     recording_ended: bool,
 ) -> Result<()> {
-    let revision = engine.store.revision()?;
+    let revision = match engine.store.revision() {
+        Ok(revision) => revision,
+        Err(error) => {
+            let mut data = view.lock().unwrap();
+            if data.refresh_requested || data.page_error(filter).is_none() {
+                data.refresh_requested = false;
+                data.fail_page(filter, format!("{error:#}"));
+            }
+            return Ok(());
+        }
+    };
     let data = view.lock().unwrap();
     let needed = data.refresh_requested || data.store_revision != Some(revision) || recording_ended;
     drop(data);
     if needed {
-        refresh(engine, filter, view)?;
+        let _ = refresh(engine, filter, view);
     }
     Ok(())
 }
@@ -657,6 +733,16 @@ pub(super) fn run(
             engine.artwork.demand = view.lock().unwrap().artwork_station.clone();
             if let Err(error) = engine.tick() {
                 view.lock().unwrap().fail_operation(&format!("{error:#}"));
+            }
+            {
+                let data = view.lock().unwrap();
+                if data
+                    .page
+                    .as_ref()
+                    .is_some_and(|p| p.requested == filter && p.phase == PagePhase::Ready)
+                {
+                    filter = data.filter.clone();
+                }
             }
             refresh_if_needed(
                 &engine,
