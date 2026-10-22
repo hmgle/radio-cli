@@ -2242,6 +2242,24 @@ fn failure_details_sanitize_external_control_text_and_scroll_the_full_tail() {
     assert!(!rendered.contains('\x1b'));
     assert!(!rendered.contains('\x07'));
     assert!(rendered.contains("last FFmpeg failure"));
+
+    data.inspected_request = 7;
+    data.inspected_error = Some(format!(
+        "\x1b]0;injected\x07\n{}\nlast details failure",
+        "detail line\n".repeat(150)
+    ));
+    let mut app = App::default();
+    app.focus = Focus::Details;
+    app.inspect_info = true;
+    app.info_request = 7;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(!text(&terminal).contains('\x1b'));
+    assert!(!text(&terminal).contains('\x07'));
+    assert!(!text(&terminal).contains("last details failure"));
+    app.details_scroll = 4096;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(app.details_scroll > 100);
+    assert!(text(&terminal).contains("last details failure"));
 }
 
 #[test]

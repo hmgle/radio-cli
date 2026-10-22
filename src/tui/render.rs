@@ -540,6 +540,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         } else if app.inspect_info && view.inspected_request != app.info_request {
             crate::t!("details_loading").into()
         } else if app.inspect_info && view.inspected_error.is_some() {
+            // scroll_text sanitizes each line while preserving long diagnostics.
             view.inspected_error.clone().unwrap()
         } else if let Some(station) = if app.inspect_info {
             view.inspected.as_ref()
