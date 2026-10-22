@@ -3113,7 +3113,12 @@ fn persistent_operation_error_has_details_and_explicit_dismissal() {
             .unwrap()
             .contains(&data.operation_error)
     );
-    assert!(app.help_content.as_deref().unwrap().contains(&app.message));
+    assert!(
+        app.help_content
+            .as_deref()
+            .unwrap()
+            .contains("Deletion submitted")
+    );
     app.key(key(KeyCode::Esc), &data, &sender);
     assert_eq!(app.dismissed_error, 0);
     app.key(key(KeyCode::Esc), &data, &sender);

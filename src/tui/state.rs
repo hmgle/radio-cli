@@ -1180,7 +1180,7 @@ impl App {
         if self.jump_key(key, view, sender) {
             return;
         }
-        self.message.clear();
+        let previous_message = std::mem::take(&mut self.message);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => self.quit = true,
@@ -1222,8 +1222,8 @@ impl App {
                     errors.push(crate::t!("recording_failed_detail", "reason" => reason));
                 }
                 self.help_title = (!errors.is_empty()).then_some(crate::t!("error_details_title"));
-                if !errors.is_empty() && !self.message.is_empty() {
-                    errors.push(self.message.clone());
+                if !errors.is_empty() && !previous_message.is_empty() {
+                    errors.push(previous_message);
                 }
                 self.help_content = (!errors.is_empty())
                     .then(|| crate::t!("error_details_body", "detail" => errors.join("\n\n")));
