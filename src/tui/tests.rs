@@ -3942,6 +3942,32 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
 }
 
 #[test]
+fn artwork_checks_reuse_details_wrapping_until_content_or_width_changes() {
+    let mut data = view();
+    let app = App::default();
+    let row = data.rows[0].clone();
+    for _ in 0..100 {
+        render::station_lines(&app, &row, &data, 60);
+    }
+    assert_eq!(app.details_cache.borrow().rebuilds, 1);
+    render::station_lines(&app, &row, &data, 40);
+    assert_eq!(app.details_cache.borrow().rebuilds, 2);
+    Arc::make_mut(&mut data.backups)
+        .insert(row.stationuuid.clone(), vec!["https://backup/live".into()]);
+    let lines = render::station_lines(&app, &row, &data, 40);
+    assert_eq!(app.details_cache.borrow().rebuilds, 3);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.to_string().contains("https://backup/live"))
+    );
+    let mut changed = row;
+    changed.name = "New name".into();
+    render::station_lines(&app, &changed, &data, 40);
+    assert_eq!(app.details_cache.borrow().rebuilds, 4);
+}
+
+#[test]
 fn details_name_the_origin_and_backup_request_phase() {
     let mut data = view();
     let mut app = App::default();

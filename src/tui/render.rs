@@ -12,6 +12,30 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Default)]
+pub(super) struct DetailsCache {
+    text: String,
+    width: usize,
+    lines: Vec<Line<'static>>,
+    #[cfg(test)]
+    pub rebuilds: usize,
+}
+
+impl DetailsCache {
+    fn lines(&mut self, text: &str, width: usize) -> &[Line<'static>] {
+        if self.text != text || self.width != width {
+            self.lines = field_lines(text, width);
+            self.text = text.into();
+            self.width = width;
+            #[cfg(test)]
+            {
+                self.rebuilds += 1;
+            }
+        }
+        &self.lines
+    }
+}
+
 fn panel(title: String, active: bool) -> Block<'static> {
     Block::default()
         .title(if active {
@@ -540,7 +564,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             active(Focus::Details),
         );
         let lines = if super::artwork::station(app, view).is_some() {
-            field_lines(&text, usize::from(text_rect.width.saturating_sub(2).max(1)))
+            app.details_cache
+                .borrow_mut()
+                .lines(&text, usize::from(text_rect.width.saturating_sub(2).max(1)))
+                .to_vec()
         } else {
             wrapped_lines(&text, text_rect.width.saturating_sub(2))
         };
@@ -996,7 +1023,10 @@ pub(super) fn station_lines(
     width: u16,
 ) -> Vec<Line<'static>> {
     let content = station_details(app, station, view);
-    field_lines(&content, usize::from(width.max(1)))
+    app.details_cache
+        .borrow_mut()
+        .lines(&content, usize::from(width.max(1)))
+        .to_vec()
 }
 
 pub(super) fn field_lines(content: &str, width: usize) -> Vec<Line<'static>> {
