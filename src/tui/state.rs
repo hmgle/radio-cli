@@ -609,7 +609,7 @@ impl App {
             }
         }
         let len = self.length(view);
-        if self.source != Source::Recordings && !view.page_ready(&self.filter) {
+        if !view.page_ready(&self.filter) {
             return;
         }
         let revision = if self.source == Source::Recordings {

@@ -577,6 +577,53 @@ mod tests {
     }
 
     #[test]
+    fn stale_failure_does_not_replace_a_new_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO recordings(id,status,json) VALUES ('broken','complete','bad')",
+            [],
+        )
+        .unwrap();
+        let view = Arc::new(Mutex::new(View::new(status())));
+        let worker = Worker::start(&path, &view).unwrap();
+        let revision = store.revision().unwrap();
+        view.lock().unwrap().store_revision = Some(revision);
+        let (started, waiting) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+            started.send(()).unwrap();
+            blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+        }));
+        worker.sender.page(
+            Filter {
+                recordings: true,
+                limit: 100,
+                ..Filter::default()
+            },
+            revision,
+            String::new(),
+        );
+        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        let filter = Filter {
+            limit: 100,
+            ..Filter::default()
+        };
+        let generation = worker.sender.page(filter.clone(), revision, String::new());
+        release.send(()).unwrap();
+        wait(&view, |v| {
+            v.page
+                .as_ref()
+                .is_some_and(|p| p.generation == generation && p.phase == PagePhase::Ready)
+        });
+        let data = view.lock().unwrap();
+        assert!(data.page_ready(&filter));
+        assert!(data.logs.is_empty());
+    }
+
+    #[test]
     fn shutdown_interrupts_an_active_sqlite_query() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("radio.db");

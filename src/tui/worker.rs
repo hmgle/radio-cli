@@ -162,7 +162,7 @@ impl View {
     }
     fn fail_operation(&mut self, message: &str) {
         self.operation_error_id += 1;
-        self.operation_error = crate::clean_text(message);
+        self.operation_error = message.into();
         self.log(message);
     }
     fn log(&mut self, message: &str) {
@@ -454,7 +454,9 @@ pub(super) fn execute(
             } else {
                 super::state::Source::Stations
             };
-            engine.store.set_meta("pref_source", source.preference())?;
+            if let Err(error) = engine.store.set_meta("pref_source", source.preference()) {
+                view.lock().unwrap().fail_operation(&format!("{error:#}"));
+            }
             *filter = value;
             view.lock().unwrap().inspected = None;
             request_refresh(view);
@@ -579,7 +581,9 @@ pub(super) fn execute(
             data.log("已请求取消目录任务");
         }
         Command::Recordings(value) => {
-            engine.store.set_meta("pref_source", "recordings")?;
+            if let Err(error) = engine.store.set_meta("pref_source", "recordings") {
+                view.lock().unwrap().fail_operation(&format!("{error:#}"));
+            }
             *filter = value;
             filter.recordings = true;
             request_refresh(view);

@@ -1665,6 +1665,14 @@ fn recording_refresh_preserves_selected_identity() {
     let mut app = App::default();
     app.source = Source::Recordings;
     app.reconcile(&data);
+    data.page = Some(super::worker::PageState {
+        generation: 2,
+        requested: app.filter.clone(),
+        phase: super::worker::PagePhase::Loading,
+    });
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(0));
+    data.page.as_mut().unwrap().phase = super::worker::PagePhase::Ready;
     Arc::make_mut(&mut data.recordings).insert(0, recording("new"));
     data.recordings_revision += 1;
     app.reconcile(&data);
@@ -2999,4 +3007,53 @@ fn persistent_operation_error_has_details_and_explicit_dismissal() {
     app.key(key(KeyCode::Esc), &data, &sender);
     assert_eq!(app.dismissed_error, 1);
     assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn source_preference_write_failure_does_not_block_list_queries() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.store.upsert(&station("needle")).unwrap();
+    let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER deny_source BEFORE INSERT ON meta
+        WHEN NEW.key = 'pref_source' BEGIN SELECT RAISE(ABORT, 'source preference denied'); END;",
+        )
+        .unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    for recordings in [false, true] {
+        let requested = Filter {
+            recordings,
+            query: "needle".into(),
+            limit: 100,
+            ..Filter::default()
+        };
+        worker::execute(
+            if recordings {
+                Command::Recordings(requested.clone())
+            } else {
+                Command::Search(requested.clone())
+            },
+            &mut engine,
+            &mut filter,
+            &mut job,
+            &shared,
+        )
+        .unwrap();
+        worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
+        let data = shared.lock().unwrap();
+        assert!(data.page_ready(&requested));
+        assert!(data.operation_error.contains("source preference denied"));
+        if !recordings {
+            assert_eq!(data.rows.len(), 1);
+        }
+    }
 }
