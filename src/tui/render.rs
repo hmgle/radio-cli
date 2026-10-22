@@ -1,7 +1,7 @@
 use super::{
     command::HELP,
     state::{App, Focus, Mode, Source},
-    worker::View,
+    worker::{PageStatus, View},
 };
 use crate::model::Station;
 use ratatui::{
@@ -423,10 +423,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             },
             app.filter.offset / app.filter.limit.max(1) + 1
         );
-        let items: Vec<ListItem> = if !view.page_ready(&app.filter) {
-            vec![]
-        } else if app.source == Source::Recordings {
-            view.recordings
+        let items: Vec<ListItem> = if app.source == Source::Recordings {
+            view.recordings_for(&app.filter)
                 .iter()
                 .map(|r| {
                     let width = usize::from(app.rects[Focus::List.index()].width.saturating_sub(4));
@@ -452,7 +450,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                 })
                 .collect()
         } else {
-            view.rows
+            view.stations_for(&app.filter)
                 .iter()
                 .map(|s| {
                     let current = view.status.playing()
@@ -473,12 +471,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         if items.is_empty() {
             frame.render_widget(
                 Paragraph::new(
-                    if let Some(error) = view.page_error(&app.filter) {
-                        crate::t!("page_failed", "detail" => fit(error, usize::from(rect.width.saturating_sub(2))).trim_end())
-                    } else if !view.page_ready(&app.filter) {
-                        crate::t!("page_loading").into()
-                    } else {
-                        empty_hint(app).into()
+                    match view.page_status(&app.filter) {
+                        PageStatus::Failed(error) => crate::t!("page_failed", "detail" => fit(error, usize::from(rect.width.saturating_sub(2))).trim_end()),
+                        PageStatus::Loading => crate::t!("page_loading").into(),
+                        PageStatus::Ready => empty_hint(app).into(),
                     },
                 )
                 .wrap(Wrap { trim: true })
@@ -507,7 +503,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     }
     if show_details {
         let text = if app.source == Source::Recordings && !app.inspect_info {
-            view.recordings.get(app.list.selected().unwrap_or(0)).filter(|_| view.page_ready(&app.filter)).map(|r| {
+            view.recordings_for(&app.filter).get(app.list.selected().unwrap_or(0)).map(|r| {
                 format!(
                     "{}\n状态: {}\n编码: {} / {}\n时长: {}\n大小: {} bytes\n开始: {}\n结束: {}\n电台 UUID: {}\n地址: {}\n文件: {}\n{}{}",
                     value(&r.station_name),

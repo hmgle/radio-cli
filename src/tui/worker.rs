@@ -41,6 +41,12 @@ pub(super) struct PageState {
     pub phase: PagePhase,
 }
 
+pub(super) enum PageStatus<'a> {
+    Loading,
+    Ready,
+    Failed(&'a str),
+}
+
 #[derive(Clone)]
 pub(super) struct View {
     pub artwork_station: Option<String>,
@@ -127,23 +133,40 @@ impl View {
         }
     }
     pub fn page_ready(&self, filter: &Filter) -> bool {
-        self.filter == *filter
-            && self
-                .page
-                .as_ref()
-                .is_some_and(|p| p.phase == PagePhase::Ready)
+        matches!(self.page_status(filter), PageStatus::Ready)
+    }
+    pub fn page_status(&self, filter: &Filter) -> PageStatus<'_> {
+        match self.page.as_ref() {
+            Some(page) if page.phase == PagePhase::Ready && self.filter == *filter => {
+                PageStatus::Ready
+            }
+            Some(PageState {
+                requested,
+                phase: PagePhase::Error(error),
+                ..
+            }) if requested == filter => PageStatus::Failed(error),
+            _ => PageStatus::Loading,
+        }
     }
     pub fn page_error(&self, filter: &Filter) -> Option<&str> {
-        self.page
-            .as_ref()
-            .filter(|p| p.requested == *filter)
-            .and_then(|p| {
-                if let PagePhase::Error(error) = &p.phase {
-                    Some(error.as_str())
-                } else {
-                    None
-                }
-            })
+        match self.page_status(filter) {
+            PageStatus::Failed(error) => Some(error),
+            _ => None,
+        }
+    }
+    pub fn stations_for(&self, filter: &Filter) -> &[Station] {
+        if self.page_ready(filter) {
+            &self.rows
+        } else {
+            &[]
+        }
+    }
+    pub fn recordings_for(&self, filter: &Filter) -> &[Recording] {
+        if self.page_ready(filter) {
+            &self.recordings
+        } else {
+            &[]
+        }
     }
     fn fail_page(&mut self, filter: &Filter, error: String) {
         if self.page_failure.as_ref().is_none_or(|(f, _)| f != filter) {
