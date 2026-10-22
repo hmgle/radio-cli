@@ -28,6 +28,12 @@ use std::{
 };
 use worker::View;
 
+/// Pointer motion, drags and releases never change visible state, so they must not repaint.
+fn mouse_redraws(kind: event::MouseEventKind) -> bool {
+    use event::MouseEventKind::{Drag, Moved, Up};
+    !matches!(kind, Moved | Drag(_) | Up(_))
+}
+
 struct Screen;
 impl Screen {
     fn enter(mouse: bool) -> Result<Self> {
@@ -155,7 +161,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                 }
                 Event::Mouse(mouse) => {
                     app.mouse(mouse, &snapshot, &sender);
-                    dirty = true;
+                    dirty |= mouse_redraws(mouse.kind);
                 }
                 _ => {}
             }

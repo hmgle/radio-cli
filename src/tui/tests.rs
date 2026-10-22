@@ -468,6 +468,25 @@ fn input_labels_use_display_cells_and_keep_the_cursor_inside() {
 }
 
 #[test]
+fn pointer_motion_and_release_do_not_request_a_redraw() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    for kind in [
+        MouseEventKind::Moved,
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        assert!(!super::mouse_redraws(kind), "{kind:?}");
+    }
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::ScrollDown,
+        MouseEventKind::ScrollUp,
+    ] {
+        assert!(super::mouse_redraws(kind), "{kind:?}");
+    }
+}
+
+#[test]
 fn list_border_clicks_select_rows_without_starting_playback() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let data = view();
