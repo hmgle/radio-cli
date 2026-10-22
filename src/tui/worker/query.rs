@@ -249,7 +249,7 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                     || !data.page.as_ref().is_some_and(|p| {
                         p.generation == generation
                             && p.requested == page.filter
-                            && p.phase == PagePhase::Loading
+                            && matches!(p.phase, PagePhase::Loading | PagePhase::Refreshing)
                     })
                 {
                     continue;
@@ -775,6 +775,123 @@ mod tests {
             assert!(view.lock().unwrap().rows[0].favorite);
             assert!(view.lock().unwrap().page_retry_at.is_none());
         }
+    }
+
+    #[test]
+    fn playback_confirmation_keeps_the_page_visible_and_interactive_during_refresh() {
+        use crate::{engine::PlaybackState, tui::state::App};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::test_support::config(dir.path());
+        config.settings.mpv = crate::test_support::fake_mpv(dir.path())
+            .to_string_lossy()
+            .into();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        for i in 0..40 {
+            engine
+                .store
+                .upsert(&Station {
+                    stationuuid: uuid::Uuid::new_v4().to_string(),
+                    name: format!("Row {i:03}"),
+                    url: "http://127.0.0.1:1/audio".into(),
+                    custom: true,
+                    active: true,
+                    ..Station::default()
+                })
+                .unwrap();
+        }
+        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let worker = Worker::start(&dir.path().join("radio.db"), &view).unwrap();
+        view.lock().unwrap().queries = Some(worker.sender.clone());
+        let mut filter = Filter {
+            limit: 100,
+            ..Filter::default()
+        };
+        worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+        wait(&view, |v| v.page_ready(&filter));
+
+        let mut app = App::default();
+        app.list.select(Some(15));
+        *app.list.offset_mut() = 10;
+        let initial = view.lock().unwrap().snapshot();
+        app.reconcile(&initial);
+        let playing = app.selected(&initial).unwrap().stationuuid.clone();
+        let (sender, receiver) = crate::tui::command::channel(4);
+        app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &initial,
+            &sender,
+        );
+        worker::execute(
+            receiver.try_recv().unwrap(),
+            &mut engine,
+            &mut filter,
+            &mut None,
+            &view,
+        )
+        .unwrap();
+        assert_eq!(engine.status.playback_state, PlaybackState::Connecting);
+        app.key(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            &initial,
+            &sender,
+        );
+        assert_eq!(app.list.selected(), Some(16));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while engine.status.playback_state != PlaybackState::Playing {
+            assert!(Instant::now() < deadline, "playback was not confirmed");
+            engine.tick().unwrap();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            engine.store.meta("pref_last_station").unwrap().as_deref(),
+            Some(playing.as_str())
+        );
+
+        // Hold the real reader so the otherwise brief refresh is deterministic.
+        let (started, waiting) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+            started.send(()).unwrap();
+            blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+        }));
+        worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        let refreshing = view.lock().unwrap().snapshot();
+        assert_eq!(
+            refreshing.page.as_ref().unwrap().phase,
+            PagePhase::Refreshing
+        );
+        assert_eq!(refreshing.stations_for(&filter).len(), 40);
+        app.reconcile(&refreshing);
+        app.key(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            &refreshing,
+            &sender,
+        );
+        assert_eq!((app.list.selected(), app.list.offset()), (Some(17), 10));
+        let selected = app.selected(&refreshing).unwrap().stationuuid.clone();
+
+        // Another mutation while the reader waits must retain the visible page.
+        engine.store.set_meta("test_refresh", "again").unwrap();
+        worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+        {
+            let data = view.lock().unwrap();
+            assert_eq!(data.page.as_ref().unwrap().phase, PagePhase::Refreshing);
+            assert_eq!(data.stations_for(&filter).len(), 40);
+        }
+        release.send(()).unwrap();
+        wait(&view, |v| {
+            v.page.as_ref().unwrap().phase == PagePhase::Ready
+        });
+        let refreshed = view.lock().unwrap().snapshot();
+        app.reconcile(&refreshed);
+        assert_eq!((app.list.selected(), app.list.offset()), (Some(17), 10));
+        assert_eq!(app.selected(&refreshed).unwrap().stationuuid, selected);
+        assert!(receiver.try_recv().is_err());
+        engine.shutdown().unwrap();
     }
 
     #[test]

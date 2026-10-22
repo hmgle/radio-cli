@@ -30,6 +30,10 @@ pub(super) struct LocatedStation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PagePhase {
     Loading,
+    /// Revalidate the current page while keeping its last successful rows
+    /// visible. This avoids a blank frame for mutations such as playback
+    /// history updates.
+    Refreshing,
     Ready,
     Error(String),
 }
@@ -135,11 +139,17 @@ impl View {
         }
     }
     pub fn page_ready(&self, filter: &Filter) -> bool {
+        // "Ready" describes usable visible rows, including the last successful
+        // snapshot of this exact query while its replacement is being read.
         matches!(self.page_status(filter), PageStatus::Ready)
     }
     pub fn page_status(&self, filter: &Filter) -> PageStatus<'_> {
         match self.page.as_ref() {
-            Some(page) if page.phase == PagePhase::Ready && self.filter == *filter => {
+            Some(page)
+                if self.filter == *filter
+                    && (page.phase == PagePhase::Ready
+                        || page.phase == PagePhase::Refreshing && page.requested == *filter) =>
+            {
                 PageStatus::Ready
             }
             Some(PageState {
@@ -331,10 +341,15 @@ fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Re
             data.refresh_requested = false;
             data.page_retry_at = None;
             let generation = sender.page(filter.clone(), store_revision, note);
+            let phase = if data.page_ready(filter) {
+                PagePhase::Refreshing
+            } else {
+                PagePhase::Loading
+            };
             data.page = Some(PageState {
                 generation,
                 requested: filter.clone(),
-                phase: PagePhase::Loading,
+                phase,
             });
             data.revision += 1;
             data.immediate_revision += 1;

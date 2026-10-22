@@ -1000,6 +1000,11 @@ impl App {
         match self.focus {
             Focus::Sources => {}
             Focus::List => {
+                // Loading and failed queries have no actionable rows. Keep the
+                // last selection identity so recovery can restore it.
+                if !view.page_ready(&self.filter) || self.length(view) == 0 {
+                    return;
+                }
                 let index = (self.list.selected().unwrap_or(0) as i64 + i64::from(delta))
                     .clamp(0, self.length(view).saturating_sub(1) as i64)
                     as usize;

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep list rows and the current selection visible during background refreshes
+  triggered by playback confirmation, including while navigating with j/k.
 - Make Ctrl-e/Ctrl-y scroll the list viewport by one line, preserving selection
   unless the selected row would leave the screen, as in Vim.
 - Keep small terminals usable, isolate deletion confirmations, and make list

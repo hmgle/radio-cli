@@ -2042,6 +2042,99 @@ fn recording_refresh_preserves_selected_identity() {
 }
 
 #[test]
+fn refreshing_page_keeps_rows_and_selection_interactive() {
+    for source in Source::ALL {
+        let (mut app, mut data) = scrollable_list(source, 40);
+        let (sender, receiver) = command::channel(4);
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        app.list.select(Some(15));
+        *app.list.offset_mut() = 10;
+        app.reconcile(&data);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let rect = app.rects[Focus::List.index()];
+        let contents = |terminal: &Terminal<TestBackend>| {
+            (rect.y + 1..rect.bottom() - 1)
+                .flat_map(|y| {
+                    (rect.x + 1..rect.right() - 1)
+                        .map(move |x| terminal.backend().buffer()[(x, y)].clone())
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = contents(&terminal);
+        data.page.as_mut().unwrap().phase = worker::PagePhase::Refreshing;
+        let different = Filter {
+            query: "different query".into(),
+            ..app.filter.clone()
+        };
+        assert!(!data.page_ready(&different));
+        assert!(data.stations_for(&different).is_empty());
+        assert!(data.recordings_for(&different).is_empty());
+        app.reconcile(&data);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_eq!(contents(&terminal), before, "{source:?}: list flashed");
+        assert_eq!((app.list.selected(), app.list.offset()), (Some(15), 10));
+
+        // Input during revalidation remains relative to the visible selection.
+        app.key(key(KeyCode::Char('j')), &data, &sender);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_eq!((app.list.selected(), app.list.offset()), (Some(16), 10));
+        let selected = if source == Source::Recordings {
+            data.recordings[16].id.clone()
+        } else {
+            data.rows[16].stationuuid.clone()
+        };
+        // Even if the replacement page reorders rows, keep the latest selection.
+        Arc::make_mut(&mut data.rows).reverse();
+        Arc::make_mut(&mut data.recordings).reverse();
+        data.rows_revision += 1;
+        data.recordings_revision += 1;
+        data.page.as_mut().unwrap().phase = worker::PagePhase::Ready;
+        app.reconcile(&data);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_eq!(app.list.selected(), Some(23), "{source:?}");
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(match receiver.try_recv().unwrap() {
+            Command::Play(id) | Command::PlayRecording(id) => id == selected,
+            _ => false,
+        });
+    }
+}
+
+#[test]
+fn navigation_during_loading_or_failure_preserves_selection_for_recovery() {
+    for source in Source::ALL {
+        for phase in [
+            worker::PagePhase::Loading,
+            worker::PagePhase::Error("storage unavailable".into()),
+        ] {
+            let (mut app, mut data) = scrollable_list(source, 40);
+            let (sender, receiver) = command::channel(4);
+            app.list.select(Some(15));
+            *app.list.offset_mut() = 10;
+            app.reconcile(&data);
+            app.inspect_info = true;
+            app.details_scroll = 7;
+            data.page.as_mut().unwrap().phase = phase;
+            for code in ['j', 'k', 'g', 'g', 'G'] {
+                app.key(key(KeyCode::Char(code)), &data, &sender);
+                app.reconcile(&data);
+                assert_eq!((app.list.selected(), app.list.offset()), (Some(15), 10));
+                assert!(app.inspect_info);
+                assert_eq!(app.details_scroll, 7);
+            }
+            Arc::make_mut(&mut data.rows).reverse();
+            Arc::make_mut(&mut data.recordings).reverse();
+            data.rows_revision += 1;
+            data.recordings_revision += 1;
+            data.page.as_mut().unwrap().phase = worker::PagePhase::Ready;
+            app.reconcile(&data);
+            assert_eq!(app.list.selected(), Some(24));
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+}
+
+#[test]
 fn recording_rows_and_details_show_localized_status_duration_and_size() {
     let recording: crate::model::Recording = serde_json::from_value(serde_json::json!({
         "id":"r","stationuuid":"s","station_name":"Night FM","source_url_resolved":"https://example.com",
