@@ -665,7 +665,14 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         } else if app.help {
             (
                 crate::t!("mode_help").to_owned(),
-                Some(crate::t!("help_keys").to_owned()),
+                Some(
+                    if app.help_content.is_some() {
+                        crate::t!("help_keys_more")
+                    } else {
+                        crate::t!("help_keys")
+                    }
+                    .to_owned(),
+                ),
             )
         } else if app.filter_edit.is_some() {
             (

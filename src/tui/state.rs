@@ -1331,6 +1331,13 @@ impl App {
                 KeyCode::PageUp => self.move_popup(PopupMove::Pages(-1)),
                 KeyCode::Home | KeyCode::Char('g') => self.move_popup(PopupMove::Top),
                 KeyCode::End | KeyCode::Char('G') => self.move_popup(PopupMove::Bottom),
+                // Failure details and command usage replace the keyboard help
+                // that `?` would otherwise open, so offer a way back to it.
+                KeyCode::Char('h') if !control && self.help_content.is_some() => {
+                    self.help_content = None;
+                    self.help_title = None;
+                    self.help_scroll = 0;
+                }
                 _ => {}
             }
             return;
@@ -1436,25 +1443,40 @@ impl App {
                 self.focus = Focus::List;
             }
             KeyCode::Char('?') => {
-                let mut errors = vec![];
+                let mut errors: Vec<(&'static str, String)> = vec![];
                 if view.operation_error_id > self.dismissed_error {
-                    errors.push(view.operation_error.clone());
+                    errors.push((
+                        crate::t!("operation_error_title"),
+                        view.operation_error.clone(),
+                    ));
                 }
                 if let crate::engine::PlaybackState::Failed { reason } = &view.status.playback_state
                 {
-                    errors.push(crate::t!("playback_failed", "reason" => reason));
+                    errors.push((
+                        crate::t!("playback_error_title"),
+                        crate::t!("playback_failed", "reason" => reason),
+                    ));
                 }
                 if let crate::engine::RecordingState::Failed { reason } =
                     &view.status.recording_state
                 {
-                    errors.push(crate::t!("recording_failed_detail", "reason" => reason));
+                    errors.push((
+                        crate::t!("recording_error_title"),
+                        crate::t!("recording_failed_detail", "reason" => reason),
+                    ));
                 }
-                self.help_title = (!errors.is_empty()).then_some(crate::t!("error_details_title"));
-                if !errors.is_empty() && !previous_message.is_empty() {
-                    errors.push(previous_message);
+                // A single failure names itself; several share the generic title.
+                self.help_title = match errors.as_slice() {
+                    [] => None,
+                    [(title, _)] => Some(*title),
+                    _ => Some(crate::t!("error_details_title")),
+                };
+                let mut details: Vec<String> =
+                    errors.into_iter().map(|(_, detail)| detail).collect();
+                if !details.is_empty() && !previous_message.is_empty() {
+                    details.push(previous_message);
                 }
-                self.help_content = (!errors.is_empty())
-                    .then(|| crate::t!("error_details_body", "detail" => errors.join("\n\n")));
+                self.help_content = (!details.is_empty()).then(|| details.join("\n\n"));
                 self.help = true;
                 self.help_scroll = 0;
             }
@@ -1489,7 +1511,7 @@ impl App {
                 if self.focus == Focus::List && view.page_error(&self.filter).is_some() =>
             {
                 self.help_content = view.page_error(&self.filter).map(str::to_owned);
-                self.help_title = Some(crate::t!("error_details_title"));
+                self.help_title = Some(crate::t!("list_error_title"));
                 self.help = true;
                 self.help_scroll = 0;
             }

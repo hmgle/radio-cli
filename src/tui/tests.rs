@@ -2121,11 +2121,21 @@ fn help_popup_pages_by_its_visible_height_and_reaches_both_ends() {
     let last = render::wrapped_lines(&help, 86).pop().unwrap().to_string();
     assert!(screen.contains(last.trim_end()), "last help line: {last}");
 
-    // A narrow terminal drops the position rather than overlapping the title.
+    // The short title leaves room for the position even at 40 columns; a title
+    // that would collide with it wins and the position is dropped.
     let mut narrow = Terminal::new(TestBackend::new(40, 16)).unwrap();
     app.help_scroll = 0;
     let screen = draw(&mut app, &mut narrow);
-    assert!(!screen.contains(&format!("/{}", app.popup.total)));
+    assert!(
+        screen.contains(&format!("/{} ", app.popup.total)),
+        "{screen}"
+    );
+    app.help_title = Some("A title far too long to share the border");
+    let screen = draw(&mut app, &mut narrow);
+    assert!(
+        !screen.contains(&format!("/{} ", app.popup.total)),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -2169,6 +2179,178 @@ fn long_popup_text_has_no_operation_cap_and_follows_the_terminal_size() {
     assert_eq!(app.help_scroll, 0);
     assert!(app.popup.span(0).is_none());
     assert!(!screen.contains("1-2/2"));
+}
+
+#[test]
+fn each_popup_names_what_it_shows_and_a_single_failure_gets_its_own_title() {
+    use super::worker::{PagePhase, PageState};
+    let (sender, _receiver) = command::channel(8);
+    let draw = |app: &mut App, data: &View| {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, app, data)).unwrap();
+        text(&terminal)
+    };
+    let failed_playback = |data: &mut View| {
+        data.status.playback_state = crate::engine::PlaybackState::Failed {
+            reason: "stream refused".into(),
+        };
+    };
+    let failed_recording = |data: &mut View| {
+        data.status.recording_state = crate::engine::RecordingState::Failed {
+            reason: "disk full".into(),
+        };
+    };
+
+    let data = view();
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    assert!(draw(&mut app, &data).contains(crate::t!("help_title")));
+
+    let mut app = App::default();
+    for c in ":help record".chars() {
+        app.key(key(KeyCode::Char(c)), &data, &sender);
+    }
+    app.key(key(KeyCode::Enter), &data, &sender);
+    let screen = draw(&mut app, &data);
+    assert!(screen.contains(crate::t!("command_help_title")), "{screen}");
+    assert!(!screen.contains(crate::t!("help_title")));
+
+    let mut playing = view();
+    failed_playback(&mut playing);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &playing, &sender);
+    let screen = draw(&mut app, &playing);
+    assert_eq!(app.help_title, Some(crate::t!("playback_error_title")));
+    assert!(
+        screen.contains(crate::t!("playback_error_title")),
+        "{screen}"
+    );
+    assert!(screen.contains("stream refused"));
+
+    let mut recording = view();
+    failed_recording(&mut recording);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &recording, &sender);
+    assert_eq!(app.help_title, Some(crate::t!("recording_error_title")));
+    assert!(draw(&mut app, &recording).contains(crate::t!("recording_error_title")));
+
+    let mut operation = view();
+    operation.operation_error_id = 1;
+    operation.operation_error = "delete failed".into();
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &operation, &sender);
+    assert_eq!(app.help_title, Some(crate::t!("operation_error_title")));
+    assert!(draw(&mut app, &operation).contains(crate::t!("operation_error_title")));
+
+    let mut listing = view();
+    let mut app = App::default();
+    listing.page = Some(PageState {
+        generation: 1,
+        requested: app.filter.clone(),
+        phase: PagePhase::Error("catalog unreachable".into()),
+    });
+    app.key(key(KeyCode::Enter), &listing, &sender);
+    assert_eq!(app.help_title, Some(crate::t!("list_error_title")));
+    let screen = draw(&mut app, &listing);
+    assert!(screen.contains(crate::t!("list_error_title")), "{screen}");
+    assert!(screen.contains("catalog unreachable"));
+
+    // Several failures at once share one generic title and list every detail.
+    let mut mixed = view();
+    failed_playback(&mut mixed);
+    failed_recording(&mut mixed);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &mixed, &sender);
+    let screen = draw(&mut app, &mixed);
+    assert!(
+        screen.contains(crate::t!("error_details_title")),
+        "{screen}"
+    );
+    assert!(screen.contains("stream refused") && screen.contains("disk full"));
+    assert_eq!(app.help_title, Some(crate::t!("error_details_title")));
+}
+
+#[test]
+fn error_and_command_popups_lead_back_to_the_keyboard_help() {
+    let (sender, receiver) = command::channel(8);
+    let mut data = view();
+    data.status.playback_state = crate::engine::PlaybackState::Failed {
+        reason: "stream refused\n".to_string() + &"more detail\n".repeat(60),
+    };
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains(crate::t!("help_keys_more")));
+    app.key(key(KeyCode::PageDown), &data, &sender);
+    assert!(app.help_scroll > 0);
+
+    app.key(key(KeyCode::Char('h')), &data, &sender);
+    assert!(app.help && app.help_content.is_none() && app.help_title.is_none());
+    assert_eq!(app.help_scroll, 0);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let screen = text(&terminal);
+    assert!(screen.contains(crate::t!("help_title")));
+    assert!(screen.contains(crate::t!("help_keys")));
+    assert!(!screen.contains(crate::t!("help_keys_more")));
+
+    // Inside the keyboard help `h` is plain text, as is Ctrl-h.
+    app.key(key(KeyCode::Char('j')), &data, &sender);
+    let scrolled = app.help_scroll;
+    app.key(key(KeyCode::Char('h')), &data, &sender);
+    app.key(
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        &data,
+        &sender,
+    );
+    assert!(app.help && app.help_content.is_none());
+    assert_eq!(app.help_scroll, scrolled);
+
+    // Closing and reopening still shows the failure while it lasts.
+    app.key(key(KeyCode::Char('q')), &data, &sender);
+    assert!(!app.help);
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    assert!(
+        app.help_content
+            .as_deref()
+            .unwrap()
+            .contains("stream refused")
+    );
+
+    let mut app = App::default();
+    let idle = view();
+    for c in ":help record".chars() {
+        app.key(key(KeyCode::Char(c)), &idle, &sender);
+    }
+    app.key(key(KeyCode::Enter), &idle, &sender);
+    assert!(app.help_content.is_some());
+    app.key(key(KeyCode::Char('h')), &idle, &sender);
+    assert!(app.help_content.is_none());
+    assert!(receiver.try_recv().is_err(), "popup keys never leak");
+}
+
+#[test]
+fn popup_titles_leave_room_for_the_position_on_a_narrow_terminal() {
+    let (sender, _receiver) = command::channel(4);
+    let mut data = view();
+    data.operation_error_id = 1;
+    data.operation_error = (1..=40)
+        .map(|i| format!("failure line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let screen = text(&terminal);
+    assert!(
+        screen.contains(crate::t!("operation_error_title")),
+        "{screen}"
+    );
+    assert!(
+        screen.contains(&format!("/{} ", app.popup.total)),
+        "{screen}"
+    );
 }
 
 #[test]
