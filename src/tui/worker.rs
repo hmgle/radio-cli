@@ -413,12 +413,16 @@ pub(super) fn refresh_if_needed(
     Ok(())
 }
 
-fn favorite_changed(view: &Arc<Mutex<View>>, uuid: &str, add: bool) -> Result<()> {
+fn favorite_changed(store: &Store, view: &Arc<Mutex<View>>, uuid: &str, add: bool) -> Result<()> {
+    let name = super::state::target_name(
+        &store.station(uuid).map(|s| s.name).unwrap_or_default(),
+        uuid,
+    );
     let mut data = view.lock().unwrap();
-    data.log(if add {
-        crate::t!("station_favorited")
+    data.log(&if add {
+        crate::t!("station_favorited", "name" => name)
     } else {
-        crate::t!("station_unfavorited")
+        crate::t!("station_unfavorited", "name" => name)
     });
     if let Some(station) = data.inspected.as_mut().filter(|s| s.stationuuid == uuid) {
         station.favorite = add;
@@ -532,12 +536,12 @@ pub(super) fn execute(
         Command::Random(filter) => engine.random(filter)?,
         Command::ToggleFavorite(uuid) => {
             let add = engine.store.toggle_favorite(&uuid)?;
-            favorite_changed(view, &uuid, add)?;
+            favorite_changed(&engine.store, view, &uuid, add)?;
         }
         Command::AdjustVolume(delta) => engine.volume(delta)?,
         Command::Favorite(uuid, add) => {
             engine.store.favorite(&uuid, add)?;
-            favorite_changed(view, &uuid, add)?;
+            favorite_changed(&engine.store, view, &uuid, add)?;
         }
         Command::Pause => engine.pause()?,
         Command::Mute => engine.mute()?,

@@ -53,10 +53,19 @@ pub(super) fn sections(locale: Locale, jump_binding: &str) -> Vec<Section> {
     );
     let binding = crate::clean_text(jump_binding);
     if !binding.is_empty() {
-        playback.entries.push(Entry::Item {
-            keys: binding,
-            detail: messages::text_in(locale, "help_jump").to_owned(),
-        });
+        // Keep the binding with the other keys, ahead of any trailing note.
+        let at = playback
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Item { .. }))
+            .map_or(0, |last| last + 1);
+        playback.entries.insert(
+            at,
+            Entry::Item {
+                keys: binding,
+                detail: messages::text_in(locale, "help_jump").to_owned(),
+            },
+        );
     }
     let mut notes = section(
         messages::text_in(locale, "help_notes_title"),

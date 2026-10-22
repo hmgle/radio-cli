@@ -199,7 +199,10 @@ source_history = "最近播放"
 source_recordings = "本地录音"
 filters_cleared = "已清空筛选"
 command_submitted = "命令已提交"
-clipboard_sent = "已发送到终端剪贴板"
+clipboard_station_uuid = "已将电台 UUID 发送到终端剪贴板：{name}"
+clipboard_station_url = "已将流地址发送到终端剪贴板：{name}"
+clipboard_recording_id = "已将录音 ID 发送到终端剪贴板：{name}"
+clipboard_recording_path = "已将录音文件路径发送到终端剪贴板：{name}"
 paste_ignored = "已忽略粘贴；请先按 : 进入命令或按 / 搜索"
 no_station_selected = "当前没有选中的电台"
 no_recording_selected = "当前没有选中的录音"
@@ -269,8 +272,9 @@ n\t随机电台（录音来源下先切换到电台列表）
 f\t收藏/取消收藏选中电台
 r\t录制正在播放的电台（再按一次停止）
 + 或 = / -\t提高/降低音量
-y\t复制 UUID/录音 ID（OSC 52）
-Y\t复制 URL/文件路径（OSC 52）
+y\t复制选中电台的 UUID，或选中录音的 ID（OSC 52）
+Y\t复制选中电台的流地址，或选中录音的文件路径（OSC 52）
+复制与收藏作用于列表中选中的行，而不是正在播放的电台或 :info 显示的电台。
 """
 help_find_title = "搜索与筛选"
 help_find = """
@@ -352,8 +356,8 @@ Esc / ? / q 关闭本帮助；j/k、PgUp/PgDn、Home/End、g/G、Ctrl-e/y/b/f �
 在 tmux 中，Ctrl-b 是前缀键，不会到达 TUI；请改用 PgUp。
 """
 
-station_favorited = "已收藏电台"
-station_unfavorited = "已取消收藏"
+station_favorited = "已收藏：{name}"
+station_unfavorited = "已取消收藏：{name}"
 invalid_filter_field = "无效的筛选字段"
 tui_record_current_only = "TUI 仅录制当前播放电台；请先播放目标电台，或退出后用 radio record UUID 独立录音"
 station_references_kept = "；引用名称保留"

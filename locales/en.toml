@@ -199,7 +199,10 @@ source_history = "Recent plays"
 source_recordings = "Recordings"
 filters_cleared = "Filters cleared"
 command_submitted = "Command submitted"
-clipboard_sent = "Sent to the terminal clipboard"
+clipboard_station_uuid = "Sent the station UUID to the terminal clipboard: {name}"
+clipboard_station_url = "Sent the stream URL to the terminal clipboard: {name}"
+clipboard_recording_id = "Sent the recording ID to the terminal clipboard: {name}"
+clipboard_recording_path = "Sent the recording file path to the terminal clipboard: {name}"
 paste_ignored = "Paste ignored; press : for a command or / to search first"
 no_station_selected = "No station is selected"
 no_recording_selected = "No recording is selected"
@@ -270,8 +273,9 @@ n\tRandom station (from recordings, switch to stations first)
 f\tFavorite / unfavorite the selected station
 r\tRecord the playing station (press again to stop)
 + or = / -\tRaise / lower the volume
-y\tCopy UUID/recording ID (OSC 52)
-Y\tCopy URL/file path (OSC 52)
+y\tCopy the selected station's UUID, or the selected recording's ID (OSC 52)
+Y\tCopy the selected station's stream URL, or the selected recording's file path (OSC 52)
+Copy and favorite act on the selected list row, not on the playing station or one shown by :info.
 """
 help_find_title = "Search and filters"
 help_find = """
@@ -353,8 +357,8 @@ Esc / ? / q close this help; j/k, PgUp/PgDn, Home/End, g/G, Ctrl-e/y/b/f and the
 In tmux, Ctrl-b is the prefix and never reaches the TUI; use PgUp instead.
 """
 
-station_favorited = "Station favorited"
-station_unfavorited = "Station unfavorited"
+station_favorited = "Added to favorites: {name}"
+station_unfavorited = "Removed from favorites: {name}"
 invalid_filter_field = "Invalid filter field"
 tui_record_current_only = "The TUI records only the playing station; play the target first, or exit and use radio record UUID"
 station_references_kept = "; reference names preserved"

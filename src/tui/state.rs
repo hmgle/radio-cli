@@ -1599,34 +1599,54 @@ impl App {
                 self.send(sender, Command::Mute);
             }
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.clipboard = if self.source == Source::Recordings {
+                let whole = key.code == KeyCode::Char('Y');
+                let copied = if self.source == Source::Recordings {
                     view.recordings_for(&self.filter)
                         .get(self.list.selected().unwrap_or(0))
                         .map(|r| {
-                            if key.code == KeyCode::Char('Y') {
-                                r.path.clone()
+                            let name = target_name(&r.station_name, &r.id);
+                            if whole {
+                                (
+                                    r.path.clone(),
+                                    crate::t!("clipboard_recording_path", "name" => name),
+                                )
                             } else {
-                                r.id.clone()
+                                (
+                                    r.id.clone(),
+                                    crate::t!("clipboard_recording_id", "name" => name),
+                                )
                             }
                         })
                 } else {
                     self.selected(view).map(|s| {
-                        if key.code == KeyCode::Char('Y') {
-                            s.primary_url().into()
+                        let name = target_name(&s.name, &s.stationuuid);
+                        if whole {
+                            (
+                                s.primary_url().to_owned(),
+                                crate::t!("clipboard_station_url", "name" => name),
+                            )
                         } else {
-                            s.stationuuid.clone()
+                            (
+                                s.stationuuid.clone(),
+                                crate::t!("clipboard_station_uuid", "name" => name),
+                            )
                         }
                     })
                 };
-                if self.clipboard.is_some() {
-                    self.message = crate::t!("clipboard_sent").into();
-                } else {
-                    self.message = if self.source == Source::Recordings {
-                        crate::t!("no_recording_selected")
-                    } else {
-                        crate::t!("no_station_selected")
+                match copied {
+                    Some((value, notice)) => {
+                        self.clipboard = Some(value);
+                        self.message = notice;
                     }
-                    .into();
+                    None => {
+                        self.clipboard = None;
+                        self.message = if self.source == Source::Recordings {
+                            crate::t!("no_recording_selected")
+                        } else {
+                            crate::t!("no_station_selected")
+                        }
+                        .into();
+                    }
                 }
             }
             KeyCode::Char(' ') => {
@@ -1769,6 +1789,16 @@ impl App {
         }
     }
 }
+/// A label for a copy or favorite target: its cleaned name, or its id when unnamed.
+pub(super) fn target_name(name: &str, id: &str) -> String {
+    let name = crate::clean_text(name);
+    if name.trim().is_empty() {
+        crate::clean_text(id)
+    } else {
+        name
+    }
+}
+
 // Locating a failed station must not read like a successful playback jump.
 fn located_notice(view: &View) -> String {
     if matches!(

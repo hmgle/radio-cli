@@ -444,6 +444,7 @@ fn help_documents_the_keys_the_screens_rely_on() {
                 "line breaks become spaces",
                 "Ctrl-b is the prefix",
                 "<F6>",
+                "Copy and favorite act on the selected list row",
             ],
         ),
         (
@@ -464,6 +465,7 @@ fn help_documents_the_keys_the_screens_rely_on() {
                 "换行变为空格",
                 "Ctrl-b 是前缀键",
                 "<F6>",
+                "复制与收藏作用于列表中选中的行",
             ],
         ),
     ];
@@ -2237,7 +2239,10 @@ fn ignored_keys_explain_why_nothing_happened() {
     app.source = Source::Stations;
     let data = view();
     app.key(key(KeyCode::Char('y')), &data, &sender);
-    assert_eq!(app.message, crate::t!("clipboard_sent"));
+    assert_eq!(
+        app.message,
+        crate::t!("clipboard_station_uuid", "name" => "Selected Station")
+    );
     app.source = Source::Stations;
     app.key(key(KeyCode::Char('F')), &data, &sender);
     assert!(app.filter_edit.is_some());
@@ -2328,7 +2333,8 @@ fn an_expired_notice_gives_the_bottom_bar_back_to_the_context_hint() {
     let (sender, _receiver) = command::channel(4);
     let mut app = App::default();
     app.key(key(KeyCode::Char('y')), &data, &sender);
-    assert_eq!(app.message, crate::t!("clipboard_sent"));
+    let notice = crate::t!("clipboard_station_uuid", "name" => "Selected Station");
+    assert_eq!(app.message, notice);
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     let draw = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
         terminal
@@ -2336,11 +2342,11 @@ fn an_expired_notice_gives_the_bottom_bar_back_to_the_context_hint() {
             .unwrap();
         text(terminal)
     };
-    assert!(draw(&mut app, &mut terminal).contains(crate::t!("clipboard_sent")));
+    assert!(draw(&mut app, &mut terminal).contains(&notice));
     let start = Instant::now();
     assert!(!app.expire_message(start));
     assert!(app.expire_message(start + Duration::from_secs(4)));
-    assert!(!draw(&mut app, &mut terminal).contains(crate::t!("clipboard_sent")));
+    assert!(!draw(&mut app, &mut terminal).contains(&notice));
 }
 
 #[test]
@@ -3505,6 +3511,101 @@ fn command_history_survives_sessions_with_private_bounded_storage() {
     assert_eq!(next.text, "search station 104");
     next.key(key(KeyCode::Down), true);
     assert_eq!(next.text, "draft");
+}
+
+#[test]
+fn copy_notices_name_the_row_that_was_copied() {
+    let mut data = view();
+    let mut app = App::default();
+    let (sender, _receiver) = command::channel(10);
+    let selected = data.rows[0].clone();
+
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert_eq!(
+        app.clipboard.as_deref(),
+        Some(selected.stationuuid.as_str())
+    );
+    assert_eq!(
+        app.message,
+        crate::t!("clipboard_station_uuid", "name" => "Selected Station")
+    );
+    app.key(key(KeyCode::Char('Y')), &data, &sender);
+    assert_eq!(app.clipboard.as_deref(), Some(selected.primary_url()));
+    assert_eq!(
+        app.message,
+        crate::t!("clipboard_station_url", "name" => "Selected Station")
+    );
+    // The row is the target, not the station that happens to be playing.
+    assert!(!app.message.contains("Current Station"));
+
+    Arc::make_mut(&mut data.rows)[0].name = "  ".into();
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert!(
+        app.message.ends_with(&selected.stationuuid),
+        "{}",
+        app.message
+    );
+
+    data.recordings = vec![
+        serde_json::from_value(serde_json::json!({
+            "id":"saved", "stationuuid":"s", "station_name":"Saved audio",
+            "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+            "stopped_at":null, "media_duration_ms":null, "codec":"mp3", "container":"mp3",
+            "path":"/tmp/sample", "size_bytes":1, "status":"done", "error":null,
+            "reconnects": 0
+        }))
+        .unwrap(),
+    ]
+    .into();
+    app.source = Source::Recordings;
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert_eq!(app.clipboard.as_deref(), Some("saved"));
+    assert_eq!(
+        app.message,
+        crate::t!("clipboard_recording_id", "name" => "Saved audio")
+    );
+    app.key(key(KeyCode::Char('Y')), &data, &sender);
+    assert_eq!(app.clipboard.as_deref(), Some("/tmp/sample"));
+    assert_eq!(
+        app.message,
+        crate::t!("clipboard_recording_path", "name" => "Saved audio")
+    );
+}
+
+#[test]
+fn favorite_log_entries_name_the_station() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+    config.prepare().unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let row = station("Jazz FM");
+    engine.store.upsert(&row).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    let mut job = None;
+    let uuid = row.stationuuid.clone();
+    for (command, expected) in [
+        (
+            Command::ToggleFavorite(uuid.clone()),
+            crate::t!("station_favorited", "name" => "Jazz FM"),
+        ),
+        (
+            Command::ToggleFavorite(uuid.clone()),
+            crate::t!("station_unfavorited", "name" => "Jazz FM"),
+        ),
+        (
+            Command::Favorite(uuid.clone(), true),
+            crate::t!("station_favorited", "name" => "Jazz FM"),
+        ),
+    ] {
+        worker::execute(command, &mut engine, &mut filter, &mut job, &shared).unwrap();
+        let data = shared.lock().unwrap();
+        let last = data.logs.back().unwrap();
+        assert!(last.ends_with(&expected), "{last} vs {expected}");
+    }
 }
 
 #[test]
