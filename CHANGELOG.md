@@ -24,6 +24,9 @@
   viewport navigation with a one-second sequence timeout.
 - Resolve interface theme styles before painting widgets, preserve artwork
   colors in light mode, and keep monochrome terminal output free of SGR.
+- Build release binaries for size with opt-level s and fat LTO. The static
+  Linux executable is about a third smaller, while a full catalog sync runs
+  about ten percent slower.
 
 ## 0.7.0 — 2026-10-21
 

@@ -50,4 +50,6 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true
+# Retain unwinding: panic = "abort" would skip the Drop hooks that restore the
+# terminal and stop mpv and recording.
 panic = "unwind"
