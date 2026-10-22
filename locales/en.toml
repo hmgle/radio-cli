@@ -247,50 +247,55 @@ station_details = "{name}{context}\nCountry: {country}\nLanguage: {language}\nSt
 # Help section bodies hold one entry per line: "keys<TAB>description" is an
 # item, "keys<TAB>" with no description is a usage-only item, and a line
 # without a tab is a note. Both catalogs keep the same order and line kinds.
-help_jump = "Locate the playing station (keybindings.jump_to_playing configures this key)"
+help_jump = "Locate the playing station, or the last requested one after a failure (keybindings.jump_to_playing configures this key)"
 help_nav_title = "Navigation"
 help_nav = """
 Tab / Shift-Tab\tSwitch panels
 1–5\tFocus a panel
-Ctrl-h/j/k/l or Ctrl-arrows\tMove focus spatially
+Left / Right or h / l\tSwitch panels sideways
+Ctrl-h/j/k/l or Ctrl-arrows\tSwitch panels by direction
 [ / ]\tSwitch category
-j/k, arrows\tNavigate/scroll
-gg / G\tFirst/last item
-Ctrl-u/d\tMove ten items
+j/k, Up / Down\tMove the selection or scroll (in Sources: switch category)
+gg / G, Home / End\tFirst/last item
+Ctrl-u / Ctrl-d\tMove ten items
+Ctrl-e / Ctrl-y\tMove or scroll one line down / up
+PgUp / PgDn, Ctrl-b / Ctrl-f\tList: previous/next database page · other panels: scroll ten lines
 """
 help_play_title = "Playback"
 help_play = """
 Enter\tPlay the selected item (open the list from sources)
-Space\tPause
+Space\tPause / resume
 m\tMute
-n\tRandom station
-f\tFavorite the selection
-r\tRecord
-+ / -\tVolume
+n\tRandom station (from recordings, switch to stations first)
+f\tFavorite / unfavorite the selected station
+r\tRecord the playing station (press again to stop)
++ or = / -\tRaise / lower the volume
 y\tCopy UUID/recording ID (OSC 52)
 Y\tCopy URL/file path (OSC 52)
 """
 help_find_title = "Search and filters"
 help_find = """
-/\tSearch (Enter confirms, Esc restores the original search)
-F\tFilters (type to narrow · Up/Down candidates · Tab field)
+/\tSearch stations (Enter confirms, Esc restores the original search)
+F\tFilters (type to narrow · Up/Down candidates · Tab/Shift-Tab field · Enter applies · Esc closes)
 Ctrl-U\tIn the filter popup: clear search and filters
 """
 help_general_title = "General"
 help_general = """
-F5\tRefresh
-?\tHelp
-q / Ctrl-C\tQuit
+F5\tRefresh the current list
+?\tHelp; with a pending failure, its details first (h switches to this help)
+q / Ctrl-C\tQuit; Ctrl-C also works while typing and in popups
 """
-help_input_title = "Command input"
+help_input_title = "Text input"
 help_input = """
-:\tEnter a command; Enter executes; Esc returns; Ctrl-C finalizes and quits
-Tab / Shift-Tab\tCompletion
-Up / Down\tHistory
+:\tOpen the command line; Enter runs it, Esc cancels, Ctrl-C finalizes and quits
+Tab / Shift-Tab\tComplete a command (command line only)
+Up / Down\tCommand history (command line only)
 Left / Right\tMove the cursor
 Home / Ctrl-a\tStart of line
 End / Ctrl-e\tEnd of line
-Ctrl-u\tClear
+Ctrl-w\tDelete the previous word
+Ctrl-u\tClear the line (the filter popup clears search and filters instead)
+Pasted text goes into the active command, search or filter field; line breaks become spaces and nothing is submitted. Paste is ignored elsewhere.
 """
 help_commands_title = "Commands"
 help_commands = """
@@ -305,7 +310,6 @@ help_commands = """
 :favorites list|add|remove [UUID]\t
 :history\tRecent plays
 :recordings list\tRecording records
-Recordings: Enter play · D delete (y confirms) · o folder · e errors
 :recordings play ID / :recordings remove ID [--index-only]\t
 :open recordings\tOpen the recording directory
 :station add 'My Station' https://example.com/live\t
@@ -315,7 +319,7 @@ Recordings: Enter play · D delete (y confirms) · o folder · e errors
 :record [UUID] [--duration 30m] [--output-dir DIR]\t
 :record stop\tFinalize recording
 :pause / :mute / :stop / :volume 70\t
-:help record\tCLI command usage
+:help [command]\tKeyboard help; with a command, its CLI usage (e.g. :help station add)
 :set language en|zh-CN\tSwitch UI language
 :set mouse true|false\tCapture the mouse; false allows terminal selection
 The last 100 commands persist in command-history.json in the data directory
@@ -323,22 +327,30 @@ The last 100 commands persist in command-history.json in the data directory
 :focus sources|list|details|player|activity\t
 :quit / :q\tFinalize and quit
 """
+help_mouse_title = "Mouse"
+help_mouse = """
+Click\tFocus a panel; select a source or a row
+Double-click\tPlay a row (same row within 500 ms)
+Wheel\tList, details and activity move three lines; help scrolls one line; filters step through candidates
+[Clear]\tClear search and filters (bottom right of station lists)
+Mouse input is ignored while typing and in confirmations. :set mouse false releases the mouse for terminal text selection.
+"""
 help_context_title = "By context"
 help_context = """
 List\tPgUp/PgDn changes database pages; gg/G and Home/End select within the page.
-Recordings\tEnter or double-click plays; station search/filter/favorite keys do not apply.
-Wheel\tList moves three items; help scrolls; filters choose candidates.
+Player\tEnter shows the playing station's details.
+Recordings\tEnter or double-click plays · D deletes (y confirms) · o opens the folder · e expands errors · n switches to stations. Search, filter and favorite keys do not apply.
 Under 20 rows\t5 opens task details, 2 returns to the list.
 Failed list\tAutomatic retries back off from 500ms to 30s; F5 retries immediately, Enter shows the full error.
 Deletion\ty confirms; Enter/n/Esc/q cancel; Ctrl-C quits.
-Filter popup\tCtrl-U clears search and filters immediately; the explicit Clear label does the same.
 Operation error\t? shows details; Esc dismisses in normal mode.
 """
 help_notes_title = "Notes"
 help_notes = """
 Commands invoke built-in operations without a shell. Input supports quoting and Unicode.
 Bitrate/codec come from the catalog and may be stale; the player handles actual audio.
-Esc / ? / q close help; j/k, PgUp/PgDn, Home/End, g/G, Ctrl-e/y/b/f scroll.
+Esc / ? / q close this help; j/k, PgUp/PgDn, Home/End, g/G, Ctrl-e/y/b/f and the wheel scroll. In failure details and command usage, h returns to this help.
+In tmux, Ctrl-b is the prefix and never reaches the TUI; use PgUp instead.
 """
 
 station_favorited = "Station favorited"

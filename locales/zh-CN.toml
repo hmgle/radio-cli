@@ -246,50 +246,55 @@ current_request_url = "当前播放请求地址: {url}\n"
 station_details = "{name}{context}\n国家/地区: {country}\n语言: {language}\n州/省/区域: {subdivision}\n码率: {bitrate}（目录）\n编码: {codec}（目录）\nHLS: {hls}\n标签: {tags}\n收藏: {favorite} · 目录: {catalog}\nUUID: {uuid}\n流地址: {url}\n备用地址: {backups}\n{request}官网: {homepage}"
 # 帮助各段正文每行一条：“键名<TAB>说明”为条目，“键名<TAB>”（无说明）为仅用法条目，
 # 不含制表符的行为备注。两种语言保持相同的顺序与行类型。
-help_jump = "定位当前播放电台（可在 keybindings.jump_to_playing 配置）"
+help_jump = "定位当前播放电台；播放失败后定位最后请求的电台（可在 keybindings.jump_to_playing 配置）"
 help_nav_title = "导航"
 help_nav = """
 Tab / Shift-Tab\t切换面板
 1–5\t直达面板
-Ctrl-h/j/k/l 或 Ctrl-方向键\t按空间移动焦点
+Left / Right 或 h / l\t左右切换面板
+Ctrl-h/j/k/l 或 Ctrl-方向键\t按方向切换面板
 [ / ]\t切换目录分类
-j/k、方向键\t导航/滚动
-gg / G\t首项/末项
-Ctrl-u/d\t移动十项
+j/k、方向键\t移动选中项或滚动（来源面板中切换分类）
+gg / G, Home / End\t首项/末项
+Ctrl-u / Ctrl-d\t移动十项
+Ctrl-e / Ctrl-y\t向下/向上移动或滚动一行
+PgUp / PgDn, Ctrl-b / Ctrl-f\t列表：上/下一数据页 · 其他面板：滚动十行
 """
 help_play_title = "播放"
 help_play = """
 Enter\t播放列表选中项（来源面板中进入列表）
-Space\t暂停
+Space\t暂停/继续
 m\t静音
-n\t随机
-f\t收藏选中项
-r\t录音
-+ / -\t音量
+n\t随机电台（录音来源下先切换到电台列表）
+f\t收藏/取消收藏选中电台
+r\t录制正在播放的电台（再按一次停止）
++ 或 = / -\t提高/降低音量
 y\t复制 UUID/录音 ID（OSC 52）
 Y\t复制 URL/文件路径（OSC 52）
 """
 help_find_title = "搜索与筛选"
 help_find = """
-/\t搜索模式（Enter 确认，Esc 恢复原搜索）
-F\t筛选对话框（键入过滤 · Up/Down 候选 · Tab 字段）
+/\t搜索电台（Enter 确认，Esc 恢复原搜索）
+F\t筛选对话框（键入过滤 · Up/Down 候选 · Tab/Shift-Tab 切换字段 · Enter 应用 · Esc 关闭）
 Ctrl-U\t筛选窗内：清空搜索与筛选
 """
 help_general_title = "通用"
 help_general = """
-F5\t刷新
-?\t帮助
-q / Ctrl-C\t退出
+F5\t刷新当前列表
+?\t帮助；有未处理的失败时先显示失败详情（按 h 切换到本帮助）
+q / Ctrl-C\t退出；Ctrl-C 在输入和弹层中同样有效
 """
-help_input_title = "命令输入"
+help_input_title = "文本输入"
 help_input = """
-:\t输入命令；Enter 执行；Esc 返回普通模式；Ctrl-c 收尾并退出
-Tab / Shift-Tab\t补全
-Up / Down\t历史
-Left / Right\t编辑光标
+:\t打开命令行；Enter 执行，Esc 取消，Ctrl-C 收尾并退出
+Tab / Shift-Tab\t补全命令（仅命令行）
+Up / Down\t命令历史（仅命令行）
+Left / Right\t移动光标
 Home / Ctrl-a\t行首
 End / Ctrl-e\t行尾
-Ctrl-u\t清空
+Ctrl-w\t删除光标前一个词
+Ctrl-u\t清空本行（筛选窗内改为清空搜索与筛选）
+粘贴的文本进入当前的命令、搜索或筛选字段；换行变为空格，不会自动提交。其他位置的粘贴被忽略。
 """
 help_commands_title = "命令"
 help_commands = """
@@ -304,7 +309,6 @@ help_commands = """
 :favorites list|add|remove [UUID]\t
 :history\t最近播放
 :recordings list\t录音记录
-录音列表: Enter 播放 · D 删除(y 确认) · o 打开目录 · e 展开错误
 :recordings play ID / :recordings remove ID [--index-only]\t
 :open recordings\t打开录音目录
 :station add '我的电台' https://example.com/live\t
@@ -314,7 +318,7 @@ help_commands = """
 :record [UUID] [--duration 30m] [--output-dir 目录]\t
 :record stop\t收尾录音
 :pause / :mute / :stop / :volume 70\t
-:help record\t查看 CLI 命令用法
+:help [命令]\t键盘帮助；带命令时显示其 CLI 用法（如 :help station add）
 :set language en|zh-CN\t切换界面语言
 :set mouse true|false\t鼠标捕获；false 可用终端选择文本
 命令历史持久保存最近 100 条（数据目录 command-history.json）
@@ -322,22 +326,30 @@ help_commands = """
 :focus sources|list|details|player|activity\t
 :quit / :q\t收尾并退出
 """
+help_mouse_title = "鼠标"
+help_mouse = """
+单击\t聚焦面板；选择来源或列表行
+双击\t播放该行（500 ms 内再次点击同一行）
+滚轮\t列表、详情、活动区每次三行；帮助每次一行；筛选窗逐项切换候选
+[清空筛选]\t清空搜索与筛选（电台列表底栏右侧）
+输入和确认期间鼠标被忽略。:set mouse false 释放鼠标，可用终端选择文本。
+"""
 help_context_title = "分场景说明"
 help_context = """
 列表\tPgUp/PgDn 切换数据页；gg/G、Home/End 选择页内首尾。
-录音\tEnter 或双击播放；不使用电台搜索、筛选和收藏键。
-滚轮\t列表移动三项；帮助滚动正文；筛选选择候选。
+播放器\tEnter 查看正在播放电台的详情。
+录音\tEnter 或双击播放 · D 删除（y 确认）· o 打开目录 · e 展开错误 · n 切回电台列表。搜索、筛选、收藏键不适用。
 不足20行\t5 查看任务详情，2 返回列表。
 列表失败\t从 500ms 到 30s 自动退避重试，F5 立即重试，Enter 查看完整原因。
 删除确认\ty 确认；Enter/n/Esc/q 取消；Ctrl-C 退出。
-筛选窗\tCtrl-U 立即清空搜索与筛选；底栏明确的清空标签作用相同。
 操作失败\t? 查看详情；普通模式 Esc 关闭提示。
 """
 help_notes_title = "说明"
 help_notes = """
 命令只调用内置操作，不执行 shell。输入支持引号和中文。
 码率/编码来自目录，可能滞后；实际音频由播放器处理。
-Esc / ? / q 关闭帮助；j/k、PgUp/PgDn、Home/End、g/G、Ctrl-e/y/b/f 滚动。
+Esc / ? / q 关闭本帮助；j/k、PgUp/PgDn、Home/End、g/G、Ctrl-e/y/b/f 和滚轮滚动。在失败详情和命令用法中，按 h 回到本帮助。
+在 tmux 中，Ctrl-b 是前缀键，不会到达 TUI；请改用 PgUp。
 """
 
 station_favorited = "已收藏电台"

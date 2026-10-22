@@ -88,6 +88,10 @@ pub(super) fn sections(locale: Locale, jump_binding: &str) -> Vec<Section> {
             messages::text_in(locale, "help_commands"),
         ),
         section(
+            messages::text_in(locale, "help_mouse_title"),
+            messages::text_in(locale, "help_mouse"),
+        ),
+        section(
             messages::text_in(locale, "help_context_title"),
             messages::text_in(locale, "help_context"),
         ),

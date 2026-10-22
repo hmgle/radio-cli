@@ -394,7 +394,11 @@ fn help_aligns_descriptions_by_display_width() {
     assert_eq!(detail_column(&english, "gg / G", "First/last item"), column);
     assert_eq!(detail_column(&english, "1–5", "Focus a panel"), column);
     assert_eq!(
-        detail_column(&english, "Ctrl-h/j/k/l or Ctrl-arrows", "Move focus"),
+        detail_column(
+            &english,
+            "Ctrl-h/j/k/l or Ctrl-arrows",
+            "Switch panels by direction"
+        ),
         column
     );
 
@@ -402,9 +406,12 @@ fn help_aligns_descriptions_by_display_width() {
     let chinese = lines(crate::messages::Locale::ZhCn);
     let column = detail_column(&chinese, "Tab / Shift-Tab", "切换面板");
     assert_eq!(detail_column(&chinese, "gg / G", "首项/末项"), column);
-    assert_eq!(detail_column(&chinese, "Ctrl-u/d", "移动十项"), column);
     assert_eq!(
-        detail_column(&chinese, "Ctrl-h/j/k/l 或 Ctrl-方向键", "按空间移动焦点"),
+        detail_column(&chinese, "Ctrl-u / Ctrl-d", "移动十项"),
+        column
+    );
+    assert_eq!(
+        detail_column(&chinese, "Ctrl-h/j/k/l 或 Ctrl-方向键", "按方向切换面板"),
         column
     );
     let commands = detail_column(&chinese, ":refresh", "刷新当前列表");
@@ -413,6 +420,93 @@ fn help_aligns_descriptions_by_display_width() {
         detail_column(&chinese, ":random [搜索筛选参数]", "不传参数时沿用当前筛选"),
         commands
     );
+}
+
+#[test]
+fn help_documents_the_keys_the_screens_rely_on() {
+    use crate::messages::Locale;
+    let expected: &[(Locale, &[&str])] = &[
+        (
+            Locale::En,
+            &[
+                "PgUp / PgDn, Ctrl-b / Ctrl-f",
+                "gg / G, Home / End",
+                "Ctrl-e / Ctrl-y",
+                "Left / Right or h / l",
+                "Switch panels by direction",
+                "Ctrl-w",
+                "In the filter popup: clear search and filters",
+                "h switches to this help",
+                "h returns to this help",
+                ":help [command]",
+                "[Clear]",
+                "Double-click",
+                "line breaks become spaces",
+                "Ctrl-b is the prefix",
+                "<F6>",
+            ],
+        ),
+        (
+            Locale::ZhCn,
+            &[
+                "PgUp / PgDn, Ctrl-b / Ctrl-f",
+                "gg / G, Home / End",
+                "Ctrl-e / Ctrl-y",
+                "Left / Right 或 h / l",
+                "按方向切换面板",
+                "Ctrl-w",
+                "筛选窗内：清空搜索与筛选",
+                "按 h 切换到本帮助",
+                "按 h 回到本帮助",
+                ":help [命令]",
+                "[清空筛选]",
+                "双击",
+                "换行变为空格",
+                "Ctrl-b 是前缀键",
+                "<F6>",
+            ],
+        ),
+    ];
+    for (locale, needles) in expected {
+        // Wide enough that no key or description wraps.
+        let text = help_text(*locale, "<F6>", 200);
+        for needle in *needles {
+            assert!(text.contains(needle), "{locale:?} lacks {needle:?}\n{text}");
+        }
+        assert!(!text.contains("Ctrl-u/d"), "{locale:?}");
+    }
+}
+
+#[test]
+fn help_lists_exactly_the_commands_the_parser_knows() {
+    use super::help::Entry;
+    use std::collections::BTreeSet;
+    let mut known: BTreeSet<String> = super::command::COMPLETIONS
+        .iter()
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_owned)
+        .collect();
+    known.insert("q".into());
+    for locale in [crate::messages::Locale::En, crate::messages::Locale::ZhCn] {
+        let title = crate::messages::text_in(locale, "help_commands_title");
+        let sections = super::help::sections(locale, "");
+        let section = sections
+            .iter()
+            .find(|section| section.title == title)
+            .expect("a commands section");
+        let documented: BTreeSet<String> = section
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Item { keys, .. } if keys.starts_with(':') => Some(keys),
+                _ => None,
+            })
+            .flat_map(|keys| keys.split(" / "))
+            .filter_map(|variant| variant.trim_start_matches(':').split_whitespace().next())
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(documented, known, "{locale:?}");
+    }
 }
 
 #[test]
@@ -1285,7 +1379,7 @@ fn renderer_marks_focus_and_distinguishes_current_from_selected_station() {
     terminal
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
-    assert!(text(&terminal).contains("close help"));
+    assert!(text(&terminal).contains("Radio Browser"));
     app.help = false;
     data.status.station.as_mut().unwrap().bitrate = 0;
     data.status.station.as_mut().unwrap().codec = "UNKNOWN".into();
