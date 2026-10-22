@@ -690,7 +690,33 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             ))
         };
         let context = context_hint(app.source, app.focus);
-        let badge = format!(" {} · {} ", crate::t!("mode_normal"), app.focus.label());
+        // A modal owns the keyboard, so the bar names it instead of the panel behind it.
+        let (mode_label, modal_keys) = if app.confirmation.is_some() {
+            (
+                crate::t!("mode_confirm").to_owned(),
+                Some(crate::t!("confirm_keys").to_owned()),
+            )
+        } else if app.help {
+            (
+                crate::t!("mode_help").to_owned(),
+                Some(crate::t!("help_keys").to_owned()),
+            )
+        } else if app.filter_edit.is_some() {
+            (
+                crate::t!("mode_filters").to_owned(),
+                Some(format!(
+                    "{} · {}",
+                    crate::t!("filter_keys_edit"),
+                    crate::t!("filter_keys_apply")
+                )),
+            )
+        } else {
+            (
+                format!("{} · {}", crate::t!("mode_normal"), app.focus.label()),
+                None,
+            )
+        };
+        let badge = format!(" {mode_label} ");
         let clear_width = if app.source == Source::Recordings {
             0
         } else {
@@ -716,11 +742,15 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 } else {
                     app.message.clone()
                 }),
-                Line::from(if bottom.width < 80 {
-                    crate::t!("keys_compact")
+                Line::from(if let Some(keys) = modal_keys {
+                    keys
+                } else if bottom.width < 80 {
+                    crate::t!("keys_compact").into()
                 } else if app.source == Source::Recordings {
-                    crate::t!("keys_recordings")
-                } else { crate::t!("keys_global") }),
+                    crate::t!("keys_recordings").into()
+                } else {
+                    crate::t!("keys_global").into()
+                }),
             ]),
             bottom,
         );

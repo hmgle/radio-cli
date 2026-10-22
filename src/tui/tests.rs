@@ -2941,6 +2941,42 @@ fn small_terminal_blocks_actions_and_defers_search_until_visible() {
 }
 
 #[test]
+fn bottom_bar_names_the_open_modal_instead_of_the_panel_behind_it() {
+    let data = view();
+    let (sender, _receiver) = command::channel(4);
+    let draw_text = |app: &mut App| {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, app, &data)).unwrap();
+        text(&terminal)
+    };
+    let mut app = App::default();
+    let normal = draw_text(&mut app);
+    assert!(normal.contains(&format!(" {} · ", crate::t!("mode_normal"))));
+    assert!(normal.contains(crate::t!("keys_global")));
+    app.key(key(KeyCode::Char('?')), &data, &sender);
+    let help = draw_text(&mut app);
+    assert!(help.contains(&format!(" {} ", crate::t!("mode_help"))));
+    assert!(help.contains(crate::t!("help_keys")));
+    assert!(!help.contains(&format!(" {} · ", crate::t!("mode_normal"))));
+    assert!(!help.contains(crate::t!("keys_global")));
+    app.key(key(KeyCode::Esc), &data, &sender);
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    let filters = draw_text(&mut app);
+    assert!(filters.contains(&format!(" {} ", crate::t!("mode_filters"))));
+    assert!(!filters.contains(&format!(" {} · ", crate::t!("mode_normal"))));
+    app.key(key(KeyCode::Esc), &data, &sender);
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    let id = data.rows[0].stationuuid.clone();
+    app.editor.set(&format!("station remove {id}"));
+    app.key(key(KeyCode::Enter), &data, &sender);
+    let confirm = draw_text(&mut app);
+    assert!(confirm.contains(&format!(" {} ", crate::t!("mode_confirm"))));
+    assert!(!confirm.contains(&format!(" {} · ", crate::t!("mode_normal"))));
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(draw_text(&mut app).contains(&format!(" {} · ", crate::t!("mode_normal"))));
+}
+
+#[test]
 fn deletion_confirmation_keeps_target_and_survives_queue_rejection() {
     let mut data = view();
     let (sender, receiver) = command::channel(1);
