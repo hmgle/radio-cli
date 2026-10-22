@@ -158,6 +158,12 @@ enum PopupMove {
     Bottom,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Remembered {
+    Kept,
+    WithheldCredentials,
+}
+
 #[derive(Default)]
 pub(super) struct Editor {
     pub station_ids: Vec<String>,
@@ -182,14 +188,20 @@ impl Editor {
         self.history_index = None;
         self.draft.clear();
     }
-    pub fn remember(&mut self) -> anyhow::Result<()> {
+    /// Records a submitted line for Up/Down recall and the history file. A line
+    /// holding URL credentials is withheld from both, never rewritten.
+    pub fn remember(&mut self) -> anyhow::Result<Remembered> {
+        if crate::redact::has_url_credentials(&self.text) {
+            return Ok(Remembered::WithheldCredentials);
+        }
         if !self.text.trim().is_empty() && self.history.back() != Some(&self.text) {
             self.history.push_back(self.text.clone());
         }
         while self.history.len() > 100 {
             self.history.pop_front();
         }
-        self.save_history()
+        self.save_history()?;
+        Ok(Remembered::Kept)
     }
     pub fn load_history(&mut self, path: std::path::PathBuf) -> anyhow::Result<()> {
         use std::io::Read;
@@ -1012,6 +1024,19 @@ impl App {
         self.flush_search(sender);
     }
     fn execute_line(&mut self, view: &View, sender: &CommandSender) {
+        if self.run_line(view, sender) {
+            let notice = crate::t!("history_withheld");
+            self.message =
+                if self.message.is_empty() || self.message == crate::t!("command_submitted") {
+                    notice.into()
+                } else {
+                    format!("{} · {notice}", self.message)
+                };
+        }
+    }
+    /// Runs the command line; returns whether it was kept out of the history
+    /// because it contains credentials, so the user can be told why.
+    fn run_line(&mut self, view: &View, sender: &CommandSender) -> bool {
         match command::parse(
             &self.editor.text,
             self.selected(view),
@@ -1021,9 +1046,14 @@ impl App {
             Ok(parsed) => {
                 self.mode = Mode::Normal;
                 self.message.clear();
-                if let Err(error) = self.editor.remember() {
-                    self.message = crate::t!("history_save_failed", "detail" => error);
-                }
+                let withheld = match self.editor.remember() {
+                    Ok(Remembered::Kept) => false,
+                    Ok(Remembered::WithheldCredentials) => true,
+                    Err(error) => {
+                        self.message = crate::t!("history_save_failed", "detail" => error);
+                        false
+                    }
+                };
                 // A command supersedes any pending incremental search.
                 if self.search_due.is_some()
                     && !matches!(
@@ -1079,11 +1109,11 @@ impl App {
                                 | Command::DeleteRecording { .. }
                         ) {
                             self.confirmation = Confirmation::new(command, view);
-                            return;
+                            return withheld;
                         }
                         if let Command::Info(uuid, _) = command {
                             self.request_info(uuid, sender);
-                            return;
+                            return withheld;
                         }
                         if matches!(command, Command::Random(_))
                             && self.source == Source::Recordings
@@ -1101,8 +1131,12 @@ impl App {
                         }
                     }
                 }
+                withheld
             }
-            Err(error) => self.message = crate::clean_text(&format!("{error}")),
+            Err(error) => {
+                self.message = crate::clean_text(&format!("{error}"));
+                false
+            }
         }
     }
     fn jump_to_playing(&mut self, view: &View, sender: &CommandSender) {

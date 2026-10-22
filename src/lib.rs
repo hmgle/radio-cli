@@ -9,6 +9,7 @@ pub mod model;
 pub mod player;
 pub mod process;
 pub mod recorder;
+mod redact;
 pub mod service;
 pub mod store;
 mod territories;

@@ -211,6 +211,7 @@ recordings_no_search = "搜索和筛选不适用于本地录音；请切换到�
 invalid_min_bitrate = "最低码率必须为非负整数"
 command_submit_failed = "无法提交操作，请稍后重试: {detail}"
 history_save_failed = "历史保存失败: {detail}"
+history_withheld = "未保存到命令历史：其中含有 URL 凭据"
 recording_failed_detail = "录音失败: {reason}"
 recording_deleted = "已删除录音 {id}"
 recordings_opened = "已打开 {path}"

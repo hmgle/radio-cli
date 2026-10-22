@@ -332,8 +332,10 @@ catalog and image HTTP requests are separate. Track associations are never
 persisted, even when the downloaded image file is reused from the cache.
 At 80×24, details open with `3` and the idle task area collapses.
 Use `mouse = false` or `:set mouse false` for native text selection.
-Command history retains 100 entries across sessions. `:help record` shows command
-usage and `:set language en|zh-CN` changes migrated messages for this session.
+Command history retains 100 entries across sessions; commands containing URL
+credentials (user info or secret query parameters) still run but are not saved.
+`:help record` shows command usage and `:set language en|zh-CN` changes migrated
+messages for this session.
 
 Recording space preflight prefers probed audio bitrate, then container bitrate,
 then catalog bitrate. With no duration or no known bitrate, it checks only the

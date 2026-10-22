@@ -211,6 +211,7 @@ recordings_no_search = "Search and filters do not apply to recordings; switch to
 invalid_min_bitrate = "Minimum bitrate must be a nonnegative integer"
 command_submit_failed = "Cannot submit operation; try again: {detail}"
 history_save_failed = "Cannot save command history: {detail}"
+history_withheld = "Not saved to command history: it contains URL credentials"
 recording_failed_detail = "Recording failed: {reason}"
 recording_deleted = "Deleted recording {id}"
 recordings_opened = "Opened {path}"

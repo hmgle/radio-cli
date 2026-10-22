@@ -3751,6 +3751,61 @@ fn command_history_survives_sessions_with_private_bounded_storage() {
 }
 
 #[test]
+fn commands_with_url_credentials_stay_out_of_the_command_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("command-history.json");
+    let data = view();
+    let (sender, receiver) = command::channel(16);
+    let mut app = App::default();
+    app.editor.load_history(path.clone()).unwrap();
+    let run = |app: &mut App, line: &str| {
+        app.key(key(KeyCode::Char(':')), &data, &sender);
+        app.editor.set(line);
+        app.key(key(KeyCode::Enter), &data, &sender);
+    };
+
+    run(&mut app, "station add Plain https://example.com/live");
+    assert_eq!(app.message, crate::t!("command_submitted"));
+    let kept = std::fs::read(&path).unwrap();
+
+    for line in [
+        "station add Secret https://user:hunter2@example.com/live",
+        "station add Signed 'https://example.com/live?quality=high&token=hunter2'",
+    ] {
+        run(&mut app, line);
+        // The command itself still runs; only the history skips it.
+        assert!(
+            matches!(receiver.try_recv(), Ok(Command::Add { .. })),
+            "{line}"
+        );
+        assert_eq!(app.message, crate::t!("history_withheld"), "{line}");
+        assert_eq!(std::fs::read(&path).unwrap(), kept, "{line}");
+        app.key(key(KeyCode::Char(':')), &data, &sender);
+        app.key(key(KeyCode::Up), &data, &sender);
+        assert_eq!(
+            app.editor.text,
+            "station add Plain https://example.com/live"
+        );
+        app.key(key(KeyCode::Esc), &data, &sender);
+    }
+    assert!(matches!(receiver.try_recv(), Ok(Command::Add { .. })));
+    assert!(!String::from_utf8_lossy(&kept).contains("hunter2"));
+
+    // A failure notice is kept and the reason is added after it.
+    let (full, _held) = command::channel(1);
+    app.key(key(KeyCode::Char(':')), &data, &full);
+    app.editor
+        .set("station add Again https://u:p@example.com/live");
+    app.key(key(KeyCode::Enter), &data, &full);
+    app.key(key(KeyCode::Char(':')), &data, &full);
+    app.editor
+        .set("station add More https://u:p@example.com/live");
+    app.key(key(KeyCode::Enter), &data, &full);
+    assert!(app.message.ends_with(crate::t!("history_withheld")));
+    assert_ne!(app.message, crate::t!("history_withheld"));
+}
+
+#[test]
 fn copy_notices_name_the_row_that_was_copied() {
     let mut data = view();
     let mut app = App::default();
