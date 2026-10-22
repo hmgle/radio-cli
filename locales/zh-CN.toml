@@ -99,3 +99,13 @@ artwork_handoff_timeout = "等待封面连接关闭超时，请重试播放或�
 catalog_source_notice = "默认电台目录来自 Radio Browser；数据来源说明见 README。"
 list_query_failed = "列表查询失败: {detail}"
 facet_query_failed = "筛选候选加载失败: {detail}"
+
+confirm_delete = "确认删除"
+confirm_keys = "y 删除 · Enter/n/Esc/q 取消 · Ctrl-C 退出"
+confirm_index_scope = "仅删除索引，保留音频和 sidecar 文件。"
+confirm_recording_scope = "删除音频、sidecar 和索引；文件删除失败时保留索引。"
+confirm_station_scope = "删除此电台；如有收藏、历史或录音引用，保留占位记录。"
+confirm_station_keep_scope = "删除流地址，保留电台占位记录及引用。"
+delete_submitted = "删除命令已提交"
+operation_failed = "错误：{detail} · 5 详情 · Esc 关闭"
+terminal_too_small = "radio · 当前 {width}×{height}；至少 40×16 · q 退出 · Esc 取消"

@@ -127,7 +127,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     app.update_size(area.width, area.height);
     if app.too_small {
         frame.render_widget(
-            Paragraph::new("radio · 请将终端调整到至少 40×16；q 退出"),
+            Paragraph::new(
+                crate::t!("terminal_too_small", "width" => area.width, "height" => area.height),
+            ),
             area,
         );
         return;
@@ -173,7 +175,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         app.rects[Focus::List.index()] = sources[1];
         app.rects[Focus::Details.index()] = sources[1];
     }
-    let normal = app.mode == Mode::Normal && !app.help && app.filter_edit.is_none();
+    let normal = app.mode == Mode::Normal
+        && !app.help
+        && app.filter_edit.is_none()
+        && app.confirmation.is_none();
     let active = |focus| normal && app.focus == focus;
     let playing = match &view.status.playback_state {
         crate::engine::PlaybackState::Failed { reason } => {
@@ -583,10 +588,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                     ),
                     Span::raw(filter),
                 ]),
-                Line::from(if app.message.is_empty() {
-                    context
+                Line::from(if view.operation_error_id > app.dismissed_error {
+                    crate::t!("operation_failed", "detail" => fit(&view.operation_error, usize::from(bottom.width.saturating_sub(25))).trim_end())
+                } else if app.message.is_empty() {
+                    context.into()
                 } else {
-                    &app.message
+                    app.message.clone()
                 }),
                 Line::from(
                     "Tab/Shift-Tab 焦点 · 1–5 面板 · [/] 分类 · : 命令 · / 搜索 · ? 帮助 · q 退出",
@@ -691,6 +698,32 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             )
             .block(panel("帮助 · j/k 滚动 · Esc 关闭".into(), true)),
             rect,
+        );
+    }
+    if let Some(confirmation) = &app.confirmation {
+        let rect = popup(area, 72, area.height.saturating_sub(2));
+        clear_popup(frame, rect);
+        let inner = rect.inner(ratatui::layout::Margin::new(1, 1));
+        frame.render_widget(panel(crate::t!("confirm_delete").into(), true), rect);
+        let body = format!(
+            "{}\n{}\n{}\n{}",
+            fit(&confirmation.summary, usize::from(inner.width)).trim_end(),
+            crate::clean_text(&confirmation.id),
+            crate::messages::text(confirmation.scope),
+            crate::clean_text(&confirmation.error)
+        );
+        frame.render_widget(
+            Paragraph::new(body).wrap(Wrap { trim: false }),
+            Rect::new(
+                inner.x,
+                inner.y,
+                inner.width,
+                inner.height.saturating_sub(3),
+            ),
+        );
+        frame.render_widget(
+            Paragraph::new(crate::t!("confirm_keys")).wrap(Wrap { trim: true }),
+            Rect::new(inner.x, inner.bottom().saturating_sub(3), inner.width, 3),
         );
     }
 }

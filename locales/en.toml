@@ -99,3 +99,13 @@ audio_devices_unavailable = "mpv returned no audio devices; check that the confi
 
 artwork_handoff_timeout = "Artwork connection cleanup timed out; retry playback or recording"
 catalog_source_notice = "The default station catalog comes from Radio Browser; see the README for data sources."
+
+confirm_delete = "Confirm deletion"
+confirm_keys = "y delete · Enter/n/Esc/q cancel · Ctrl-C quit"
+confirm_index_scope = "Remove the index only; keep audio and sidecar files."
+confirm_recording_scope = "Delete audio, sidecar and index. If file deletion fails, keep the index."
+confirm_station_scope = "Remove this station; preserve placeholders for favorites, history and recordings that reference it."
+confirm_station_keep_scope = "Remove stream addresses; keep the station placeholder and references."
+delete_submitted = "Deletion submitted"
+operation_failed = "Error: {detail} · 5 details · Esc dismiss"
+terminal_too_small = "radio · {width}×{height}; need 40×16 · q quit · Esc cancel"

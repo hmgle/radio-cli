@@ -91,6 +91,8 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         let mut last_draw = Instant::now();
         let mut dirty = true;
         while !stop.load(Ordering::Relaxed) && !app.quit {
+            let size = terminal.size()?;
+            app.update_size(size.width, size.height);
             let snapshot = view.lock().unwrap().snapshot();
             app.reconcile(&snapshot);
             if let Some(artwork) = &mut artwork {
@@ -112,7 +114,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                 last_draw = Instant::now();
                 dirty = false;
             }
-            if app.search_due.is_some_and(|due| Instant::now() >= due) {
+            if !app.too_small && app.search_due.is_some_and(|due| Instant::now() >= due) {
                 app.flush_search(&sender);
                 dirty = true;
             }

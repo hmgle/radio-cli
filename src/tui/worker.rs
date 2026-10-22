@@ -38,6 +38,8 @@ pub(super) struct View {
     pub immediate_revision: u64,
     pub recordings_revision: u64,
     pub logs_revision: u64,
+    pub operation_error_id: u64,
+    pub operation_error: String,
     pub facets: Arc<[Vec<crate::model::Facet>; 3]>,
     pub facets_loading: bool,
     pub facets_request: Option<(usize, String)>,
@@ -73,6 +75,8 @@ impl View {
             immediate_revision: 1,
             recordings_revision: 0,
             logs_revision: 0,
+            operation_error_id: 0,
+            operation_error: String::new(),
             facets: Default::default(),
             facets_loading: false,
             facets_request: None,
@@ -112,6 +116,11 @@ impl View {
         let snapshot = Arc::new(view);
         self.published = Some((self.revision, snapshot.clone()));
         snapshot
+    }
+    fn fail_operation(&mut self, message: &str) {
+        self.operation_error_id += 1;
+        self.operation_error = crate::clean_text(message);
+        self.log(message);
     }
     fn log(&mut self, message: &str) {
         let message = crate::clean_text(message);
@@ -577,7 +586,7 @@ pub(super) fn run(
                 Ok(command) => {
                     if let Err(error) = execute(command, &mut engine, &mut filter, &mut job, &view)
                     {
-                        view.lock().unwrap().log(&format!("错误: {error:#}"));
+                        view.lock().unwrap().fail_operation(&format!("{error:#}"));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -647,7 +656,7 @@ pub(super) fn run(
             }
             engine.artwork.demand = view.lock().unwrap().artwork_station.clone();
             if let Err(error) = engine.tick() {
-                view.lock().unwrap().log(&format!("错误: {error:#}"));
+                view.lock().unwrap().fail_operation(&format!("{error:#}"));
             }
             refresh_if_needed(
                 &engine,

@@ -308,6 +308,80 @@ impl Editor {
     }
 }
 
+pub(super) struct Confirmation {
+    pub id: String,
+    pub summary: String,
+    pub scope: &'static str,
+    pub error: String,
+    recording: bool,
+    option: bool,
+}
+impl Confirmation {
+    fn new(command: Command, view: &View) -> Self {
+        let (id, recording, option, scope) = match command {
+            Command::DeleteRecording { id, index_only } => (
+                id,
+                true,
+                index_only,
+                if index_only {
+                    "confirm_index_scope"
+                } else {
+                    "confirm_recording_scope"
+                },
+            ),
+            Command::Station(crate::cli::StationAction::Remove {
+                uuid,
+                keep_references,
+            }) => (
+                uuid,
+                false,
+                keep_references,
+                if keep_references {
+                    "confirm_station_keep_scope"
+                } else {
+                    "confirm_station_scope"
+                },
+            ),
+            _ => unreachable!("only deletion needs confirmation"),
+        };
+        let summary = if recording {
+            view.recordings
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.station_name.clone())
+        } else {
+            view.rows
+                .iter()
+                .chain(view.inspected.iter())
+                .chain(view.status.station.iter())
+                .find(|s| s.stationuuid == id)
+                .map(|s| s.name.clone())
+        }
+        .unwrap_or_default();
+        Self {
+            id,
+            summary: crate::clean_text(&summary),
+            scope,
+            error: String::new(),
+            recording,
+            option,
+        }
+    }
+    fn command(&self) -> Command {
+        if self.recording {
+            Command::DeleteRecording {
+                id: self.id.clone(),
+                index_only: self.option,
+            }
+        } else {
+            Command::Station(crate::cli::StationAction::Remove {
+                uuid: self.id.clone(),
+                keep_references: self.option,
+            })
+        }
+    }
+}
+
 pub(super) struct App {
     last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
@@ -322,7 +396,7 @@ pub(super) struct App {
     pub theme: crate::config::Theme,
     pub artwork: super::artwork::ImageState,
     pub recording_error_expanded: bool,
-    pub confirmation: Option<Command>,
+    pub confirmation: Option<Confirmation>,
     pub focus: Focus,
     pub source: Source,
     pub mode: Mode,
@@ -351,6 +425,8 @@ pub(super) struct App {
     positions: [usize; 4],
     pub quit: bool,
     pub too_small: bool,
+    size: (u16, u16),
+    pub dismissed_error: u64,
     pending_g: bool,
     rows_revision: u64,
     selected_id: Option<String>,
@@ -406,6 +482,8 @@ impl Default for App {
             positions: [0; 4],
             quit: false,
             too_small: false,
+            size: (0, 0),
+            dismissed_error: 0,
             pending_g: false,
             rows_revision: 0,
             selected_id: None,
@@ -428,7 +506,21 @@ impl App {
         })
     }
     pub fn update_size(&mut self, width: u16, height: u16) {
+        if self.size != (width, height) {
+            self.last_click = None;
+            self.rects = [Rect::default(); 5];
+            self.source_rows = [Rect::default(); 4];
+            self.filter_summary = Rect::default();
+            self.size = (width, height);
+        }
         self.too_small = width < 40 || height < 16;
+        if self.too_small {
+            self.confirmation = None;
+            self.pending_g = false;
+            self.jump_progress = 0;
+            self.jump_last = None;
+            self.last_click = None;
+        }
     }
 
     pub fn selected<'a>(&self, view: &'a View) -> Option<&'a Station> {
@@ -538,7 +630,9 @@ impl App {
         }
     }
     pub fn request_selected_backups(&mut self, view: &View, sender: &CommandSender) {
-        self.request_selected_backups_at(view, sender, Instant::now());
+        if !self.too_small {
+            self.request_selected_backups_at(view, sender, Instant::now());
+        }
     }
     pub(super) fn request_selected_backups_at(
         &mut self,
@@ -579,6 +673,9 @@ impl App {
         matching_facets(&view.facets[selected], &self.facet_prefix)
     }
     pub fn request_facets(&mut self, sender: &CommandSender) {
+        if self.too_small {
+            return;
+        }
         let Some((selected, _)) = &self.filter_edit else {
             return;
         };
@@ -615,6 +712,9 @@ impl App {
         }
     }
     pub fn flush_search(&mut self, sender: &CommandSender) {
+        if self.too_small {
+            return;
+        }
         self.pending_jump = None;
         if self.send(
             sender,
@@ -803,9 +903,7 @@ impl App {
                             Command::Station(crate::cli::StationAction::Remove { .. })
                                 | Command::DeleteRecording { .. }
                         ) {
-                            self.confirmation = Some(command);
-                            self.message =
-                                "确认删除？录音默认先删文件再删索引；--index-only 保留文件。y 确认 · n/Esc 取消".into();
+                            self.confirmation = Some(Confirmation::new(command, view));
                             return;
                         }
                         if let Command::Info(uuid, _) = command {
@@ -919,15 +1017,32 @@ impl App {
             self.quit = true;
             return;
         }
-        if let Some(command) = self.confirmation.take() {
+        if self.too_small {
+            if key.code == KeyCode::Esc {
+                if self.mode == Mode::Search {
+                    self.filter.query = self.original_query.clone();
+                    self.filter.offset = 0;
+                    self.search_due = Some(Instant::now());
+                }
+                self.mode = Mode::Normal;
+                self.help = false;
+                self.filter_edit = None;
+                self.message.clear();
+            }
+            return;
+        }
+        if let Some(mut confirmation) = self.confirmation.take() {
             match key.code {
-                KeyCode::Char('y') => {
-                    if self.send(sender, command) {
-                        self.message = "删除命令已提交".into();
+                KeyCode::Char('y') if key.kind == crossterm::event::KeyEventKind::Press => {
+                    if self.send(sender, confirmation.command()) {
+                        self.message = crate::t!("delete_submitted").into();
+                    } else {
+                        confirmation.error = self.message.clone();
+                        self.confirmation = Some(confirmation);
                     }
                 }
-                KeyCode::Char('n') | KeyCode::Esc => self.message.clear(),
-                _ => self.confirmation = Some(command),
+                KeyCode::Enter | KeyCode::Char('n' | 'q') | KeyCode::Esc => self.message.clear(),
+                _ => self.confirmation = Some(confirmation),
             }
             return;
         }
@@ -1105,6 +1220,7 @@ impl App {
                 self.help_scroll = 0;
             }
             KeyCode::Char('q') => self.quit = true,
+            KeyCode::Esc => self.dismissed_error = view.operation_error_id,
             KeyCode::Tab => self.focus = Focus::ALL[(self.focus.index() + 1) % 5],
             KeyCode::BackTab => self.focus = Focus::ALL[(self.focus.index() + 4) % 5],
             KeyCode::Char(c @ '1'..='5') => self.focus = Focus::ALL[c as usize - '1' as usize],
@@ -1169,11 +1285,13 @@ impl App {
                 if self.source == Source::Recordings && self.filter == view.filter =>
             {
                 if let Some(r) = view.recordings.get(self.list.selected().unwrap_or(0)) {
-                    self.confirmation = Some(Command::DeleteRecording {
-                        id: r.id.clone(),
-                        index_only: false,
-                    });
-                    self.message = "删除录音文件、sidecar 和索引？y 确认 · n/Esc 取消；仅删索引用 :recordings remove ID --index-only".into();
+                    self.confirmation = Some(Confirmation::new(
+                        Command::DeleteRecording {
+                            id: r.id.clone(),
+                            index_only: false,
+                        },
+                        view,
+                    ));
                 }
             }
             KeyCode::Char('o') if self.source == Source::Recordings => {
@@ -1268,7 +1386,8 @@ impl App {
         sender: &CommandSender,
         now: Instant,
     ) {
-        if !self.mouse_enabled
+        if self.too_small
+            || !self.mouse_enabled
             || self.mode != Mode::Normal
             || self.help
             || self.filter_edit.is_some()

@@ -2673,3 +2673,108 @@ fn jump_waits_for_a_fresh_page_even_when_the_filter_is_unchanged() {
         "Esc cancels a partial sequence"
     );
 }
+
+#[test]
+fn small_terminal_blocks_actions_and_defers_search_until_visible() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let data = view();
+    let (sender, receiver) = command::channel(16);
+    for (width, height) in [(39, 16), (40, 15), (0, 0)] {
+        let mut app = App::default();
+        app.key(key(KeyCode::Char(':')), &data, &sender);
+        app.editor.set("station remove frozen-id");
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(app.confirmation.is_some());
+        app.update_size(width, height);
+        assert!(app.confirmation.is_none());
+        app.search_due = Some(Instant::now());
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Char('n'),
+            KeyCode::Char('r'),
+            KeyCode::Char('D'),
+            KeyCode::Char('y'),
+            KeyCode::Char(':'),
+        ] {
+            app.key(key(code), &data, &sender);
+        }
+        app.mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            &data,
+            &sender,
+        );
+        app.flush_search(&sender);
+        assert!(receiver.try_recv().is_err());
+        assert!(app.search_due.is_some());
+        app.update_size(80, 24);
+        app.flush_search(&sender);
+        assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
+        assert!(app.search_due.is_none());
+    }
+    let mut app = App::default();
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    app.editor.set("play draft");
+    app.update_size(39, 16);
+    app.key(key(KeyCode::Enter), &data, &sender);
+    app.update_size(80, 24);
+    assert_eq!(app.editor.text, "play draft");
+    assert_eq!(app.mode, Mode::Command);
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn deletion_confirmation_keeps_target_and_survives_queue_rejection() {
+    let mut data = view();
+    let (sender, receiver) = command::channel(1);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char(':')), &data, &sender);
+    let id = data.rows[0].stationuuid.clone();
+    app.editor.set(&format!("station remove {id}"));
+    app.key(key(KeyCode::Enter), &data, &sender);
+    app.message = "unrelated background message".into();
+    let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let rendered = text(&terminal);
+    assert!(rendered.contains(&id));
+    assert!(rendered.contains(crate::t!("confirm_delete")));
+    let mut repeat = key(KeyCode::Char('y'));
+    repeat.kind = crossterm::event::KeyEventKind::Repeat;
+    app.key(repeat, &data, &sender);
+    assert!(app.confirmation.is_some());
+    sender.send(Command::Random(Filter::default())).unwrap();
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert!(
+        app.confirmation
+            .as_ref()
+            .is_some_and(|c| !c.error.is_empty())
+    );
+    receiver.try_recv().unwrap();
+    data.rows = vec![station("replacement")].into();
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv(), Ok(Command::Station(crate::cli::StationAction::Remove { uuid, .. })) if uuid == id)
+    );
+    assert!(app.confirmation.is_none());
+    for cancel in [
+        KeyCode::Enter,
+        KeyCode::Char('q'),
+        KeyCode::Char('n'),
+        KeyCode::Esc,
+    ] {
+        app.key(key(KeyCode::Char(':')), &data, &sender);
+        app.editor.set("station remove frozen");
+        app.key(key(KeyCode::Enter), &data, &sender);
+        for blocked in [KeyCode::Char(' '), KeyCode::Char('r'), KeyCode::Char('m')] {
+            app.key(key(blocked), &data, &sender);
+        }
+        app.key(key(cancel), &data, &sender);
+        assert!(app.confirmation.is_none());
+        assert!(!app.quit);
+        assert!(receiver.try_recv().is_err());
+    }
+}
