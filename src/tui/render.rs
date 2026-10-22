@@ -1,3 +1,4 @@
+use super::styles::{Role, style};
 use super::{
     state::{App, Focus, Mode, ScrollExtent, Source},
     worker::{PageStatus, View},
@@ -36,7 +37,7 @@ impl DetailsCache {
     }
 }
 
-fn panel(title: String, active: bool) -> Block<'static> {
+fn panel(theme: crate::config::Theme, title: String, active: bool) -> Block<'static> {
     Block::default()
         .title(if active {
             format!(" ▶ {title} ")
@@ -50,18 +51,14 @@ fn panel(title: String, active: bool) -> Block<'static> {
             BorderType::Rounded
         })
         .border_style(if active {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            style(theme, Role::Focus).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            style(theme, Role::Border)
         })
         .title_style(if active {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            style(theme, Role::Focus).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            style(theme, Role::Muted)
         })
 }
 fn bitrate(station: &Station) -> String {
@@ -350,6 +347,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     };
     frame.render_widget(
         Paragraph::new(player_text).block(panel(
+            app.theme,
             crate::t!("player_panel").into(),
             active(Focus::Player),
         )),
@@ -358,7 +356,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
 
     let source_rect = app.rects[Focus::Sources.index()];
     frame.render_widget(
-        panel(crate::t!("sources_panel").into(), active(Focus::Sources)),
+        panel(
+            app.theme,
+            crate::t!("sources_panel").into(),
+            active(Focus::Sources),
+        ),
         source_rect,
     );
     let inner = source_rect.inner(ratatui::layout::Margin::new(1, 1));
@@ -373,9 +375,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                     source.label()
                 ))
                 .style(if app.source == source {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    style(app.theme, Role::Focus).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 }),
@@ -384,8 +384,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         }
         if inner.height > 6 {
             frame.render_widget(
-                Paragraph::new(crate::t!("sources_keys"))
-                    .style(Style::default().fg(Color::DarkGray)),
+                Paragraph::new(crate::t!("sources_keys")).style(style(app.theme, Role::Border)),
                 Rect::new(inner.x, inner.y + 6, inner.width, inner.height - 6),
             );
         }
@@ -404,9 +403,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                     source.short_label()
                 ))
                 .style(if app.source == source {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    style(app.theme, Role::Focus).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 }),
@@ -457,7 +454,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         } else {
             let state = &view.status.playback_state;
             let marker = super::display::playback_glyph(state)
-                .map(|glyph| (glyph, super::display::playback_tone(state).style()));
+                .map(|glyph| (glyph, super::display::playback_tone(state).style(app.theme)));
             view.stations_for(&app.filter)
                 .iter()
                 .map(|s| {
@@ -485,22 +482,17 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                     },
                 )
                 .wrap(Wrap { trim: true })
-                .block(panel(title, active(Focus::List))),
+                .block(panel(app.theme, title, active(Focus::List))),
                 rect,
             );
         } else {
             frame.render_stateful_widget(
                 List::new(items)
-                    .block(panel(title, active(Focus::List)))
+                    .block(panel(app.theme, title, active(Focus::List)))
                     .highlight_style(if active(Focus::List) {
-                        Style::default()
-                            .bg(Color::Cyan)
-                            .fg(Color::Black)
-                            .add_modifier(Modifier::BOLD)
+                        style(app.theme, Role::Selected).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default()
-                            .fg(Color::Gray)
-                            .add_modifier(Modifier::BOLD)
+                        style(app.theme, Role::Muted).add_modifier(Modifier::BOLD)
                     })
                     .highlight_symbol(if active(Focus::List) { "› " } else { "· " }),
                 rect,
@@ -556,6 +548,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             super::artwork::image(app, view, area).map(|(image, rect)| (image.clone(), rect));
         let text_rect = app.rects[Focus::Details.index()];
         let block = panel(
+            app.theme,
             if layout.shared {
                 crate::t!("details_shared")
             } else {
@@ -601,11 +594,14 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     let start = end.saturating_sub(visible);
     let mut logs = vec![Line::from(Span::styled(
         crate::clean_text(&super::display::diagnostic(&task)),
-        Style::default().fg(if view.task_active {
-            Color::Yellow
-        } else {
-            Color::Gray
-        }),
+        style(
+            app.theme,
+            if view.task_active {
+                Role::Warning
+            } else {
+                Role::Muted
+            },
+        ),
     ))];
     logs.extend(
         view.logs
@@ -626,6 +622,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     } else {
         frame.render_widget(
             Paragraph::new(logs).block(panel(
+                app.theme,
                 format!(
                     "{}{}{}",
                     crate::t!("activity_panel"),
@@ -660,9 +657,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             Paragraph::new(Line::from(vec![
                 Span::styled(
                     format!("{label} "),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    style(app.theme, Role::Warning).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(text),
             ])),
@@ -680,7 +675,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         };
         frame.render_widget(
             Paragraph::new(super::display::diagnostic(hint))
-                .style(Style::default().fg(Color::Yellow))
+                .style(style(app.theme, Role::Warning))
                 .wrap(Wrap { trim: true }),
             Rect::new(bottom.x, bottom.y + 1, bottom.width, 2),
         );
@@ -752,7 +747,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 Line::from(vec![
                     Span::styled(
                         badge,
-                        Style::default().bg(Color::Cyan).fg(Color::Black),
+                        style(app.theme, Role::Selected),
                     ),
                     Span::raw(filter),
                 ]),
@@ -818,7 +813,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                         }
                     ),
                     if i == *selected {
-                        Style::default().fg(Color::Yellow)
+                        style(app.theme, Role::Warning)
                     } else {
                         Style::default()
                     },
@@ -884,7 +879,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             ));
         }
         frame.render_widget(
-            Paragraph::new(text).block(panel(crate::t!("filter_title").into(), true)),
+            Paragraph::new(text).block(panel(app.theme, crate::t!("filter_title").into(), true)),
             rect,
         );
         let (_, cursor) = input_window(
@@ -903,12 +898,17 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         let inner = rect.width.saturating_sub(2);
         let lines = match &app.help_content {
             Some(content) => wrapped_lines(&super::display::diagnostic(content), inner),
-            None => super::help::lines(crate::messages::locale(), &app.jump_binding, inner),
+            None => super::help::lines_in(
+                crate::messages::locale(),
+                &app.jump_binding,
+                inner,
+                app.theme,
+            ),
         };
         let (paragraph, extent) = scroll_lines(lines, rect, &mut app.help_scroll);
         app.popup = extent;
         let title = app.help_title.unwrap_or(crate::t!("help_title"));
-        let mut block = panel(title.into(), true);
+        let mut block = panel(app.theme, title.into(), true);
         if let Some((first, last)) = extent.span(app.help_scroll) {
             let position = format!(" {first}-{last}/{} ", extent.total);
             // The title and a border cell on each side come first; drop the
@@ -923,7 +923,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         let rect = popup(area, 72, area.height.saturating_sub(2));
         clear_popup(frame, rect);
         let inner = rect.inner(ratatui::layout::Margin::new(1, 1));
-        frame.render_widget(panel(crate::t!("confirm_delete").into(), true), rect);
+        frame.render_widget(
+            panel(app.theme, crate::t!("confirm_delete").into(), true),
+            rect,
+        );
         let body = format!(
             "{}\n{}\n{}\n{}",
             fit(&confirmation.summary, usize::from(inner.width)).trim_end(),

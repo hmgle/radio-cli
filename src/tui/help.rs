@@ -7,7 +7,7 @@
 use super::text;
 use crate::messages::{self, Locale};
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
@@ -109,29 +109,43 @@ pub(super) fn sections(locale: Locale, jump_binding: &str) -> Vec<Section> {
 }
 
 /// Help laid out for a popup body `width` cells wide.
+#[cfg(test)]
 pub(super) fn lines(locale: Locale, jump_binding: &str, width: u16) -> Vec<Line<'static>> {
-    layout(&sections(locale, jump_binding), usize::from(width))
+    lines_in(locale, jump_binding, width, crate::config::Theme::Default)
 }
 
-fn key_style() -> Style {
-    Style::default().fg(Color::Cyan)
+pub(super) fn lines_in(
+    locale: Locale,
+    jump_binding: &str,
+    width: u16,
+    theme: crate::config::Theme,
+) -> Vec<Line<'static>> {
+    layout(
+        &sections(locale, jump_binding),
+        usize::from(width.max(1)),
+        theme,
+    )
+}
+
+fn key_style(theme: crate::config::Theme) -> Style {
+    super::styles::style(theme, super::styles::Role::Focus)
 }
 
 /// A key or usage string on its own line(s); wrapped rows hang under the first.
-fn key_rows(keys: &str, inner: usize) -> Vec<Line<'static>> {
+fn key_rows(keys: &str, inner: usize, theme: crate::config::Theme) -> Vec<Line<'static>> {
     text::wrap_words(keys, inner.saturating_sub(HANG))
         .into_iter()
         .enumerate()
         .map(|(row, part)| {
             Line::from(vec![
                 Span::raw(" ".repeat(INDENT + if row == 0 { 0 } else { HANG })),
-                Span::styled(part.to_owned(), key_style()),
+                Span::styled(part.to_owned(), key_style(theme)),
             ])
         })
         .collect()
 }
 
-fn layout(sections: &[Section], width: usize) -> Vec<Line<'static>> {
+fn layout(sections: &[Section], width: usize, theme: crate::config::Theme) -> Vec<Line<'static>> {
     let inner = width.saturating_sub(INDENT).max(1);
     // Keys wider than this are stacked above their description even on wide screens.
     let cap = if inner >= STACK_BELOW {
@@ -140,7 +154,7 @@ fn layout(sections: &[Section], width: usize) -> Vec<Line<'static>> {
         0
     };
     let heading = Style::default().add_modifier(Modifier::BOLD);
-    let key_style = key_style();
+    let key_style = key_style(theme);
     let indent = |cells: usize| Span::raw(" ".repeat(cells));
     let mut out = Vec::new();
     for (index, section) in sections.iter().enumerate() {
@@ -168,7 +182,7 @@ fn layout(sections: &[Section], width: usize) -> Vec<Line<'static>> {
                     }
                 }
                 Entry::Item { keys, detail } if detail.is_empty() => {
-                    out.extend(key_rows(keys, inner));
+                    out.extend(key_rows(keys, inner, theme));
                 }
                 Entry::Item { keys, detail } if column > 0 && text::width(keys) <= column => {
                     let parts = text::wrap_words(detail, inner - column - GAP);
@@ -188,7 +202,7 @@ fn layout(sections: &[Section], width: usize) -> Vec<Line<'static>> {
                     }
                 }
                 Entry::Item { keys, detail } => {
-                    let rows = key_rows(keys, inner);
+                    let rows = key_rows(keys, inner, theme);
                     // Below a wrapped key, step in once more so the description stays distinct.
                     let hang = if rows.len() > 1 { 2 * HANG } else { HANG };
                     out.extend(rows);

@@ -1,7 +1,8 @@
 //! Display-only formatting shared by lists, details and the player header.
 
+use super::styles::{Role, style};
 use crate::engine::{PlaybackState, RecordingState, Status};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 
 /// Display diagnostics without URL secrets or terminal controls. Keep line
 /// breaks for expanded errors. Stored errors and playback URLs stay intact.
@@ -24,12 +25,12 @@ pub(super) enum Tone {
 }
 
 impl Tone {
-    pub(super) fn style(self) -> Style {
+    pub(super) fn style(self, theme: crate::config::Theme) -> Style {
         match self {
             Self::Idle => Style::default(),
-            Self::Active => Style::default().fg(Color::Green),
-            Self::Pending => Style::default().fg(Color::Yellow),
-            Self::Failed => Style::default().fg(Color::Red),
+            Self::Active => style(theme, Role::Active),
+            Self::Pending => style(theme, Role::Warning),
+            Self::Failed => style(theme, Role::Error),
         }
     }
 }
@@ -210,7 +211,7 @@ mod tests {
         );
         let styles: std::collections::HashSet<_> = [Tone::Active, Tone::Pending, Tone::Failed]
             .into_iter()
-            .map(|tone| format!("{:?}", tone.style()))
+            .map(|tone| format!("{:?}", tone.style(crate::config::Theme::Default)))
             .collect();
         assert_eq!(styles.len(), 3);
     }

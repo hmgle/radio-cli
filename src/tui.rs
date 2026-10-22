@@ -6,6 +6,7 @@ mod help;
 mod output;
 mod render;
 mod state;
+mod styles;
 #[cfg(test)]
 mod tests;
 mod text;
