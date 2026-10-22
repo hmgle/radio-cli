@@ -489,6 +489,11 @@ pub(super) struct App {
     pub inspect_playing: bool,
     pub info_request: u64,
     pub activity_scroll: u16,
+    activity_anchor: Option<u64>,
+    activity_seen_scroll: u16,
+    activity_tail: u64,
+    pub activity_new: u64,
+    pub activity_removed: bool,
     pub rects: [Rect; 5],
     pub filter_summary: Rect,
     pub source_rows: [Rect; 4],
@@ -551,6 +556,11 @@ impl Default for App {
             inspect_playing: false,
             info_request: 0,
             activity_scroll: 0,
+            activity_anchor: None,
+            activity_seen_scroll: 0,
+            activity_tail: 0,
+            activity_new: 0,
+            activity_removed: false,
             rects: [Rect::default(); 5],
             filter_summary: Rect::default(),
             source_rows: [Rect::default(); 4],
@@ -1007,6 +1017,31 @@ impl App {
             }
             Focus::Player => {}
         }
+    }
+    /// Keep the same end-of-viewport log sequence while new messages arrive.
+    pub(super) fn anchor_activity(&mut self, tail: u64, len: usize, visible: usize) {
+        if self.activity_scroll == 0 {
+            self.activity_anchor = None;
+            self.activity_new = 0;
+            self.activity_removed = false;
+        } else {
+            if self.activity_anchor.is_some() {
+                self.activity_new += tail.saturating_sub(self.activity_tail);
+            }
+            if self.activity_anchor.is_none() || self.activity_scroll != self.activity_seen_scroll {
+                self.activity_anchor = Some(tail.saturating_sub(u64::from(self.activity_scroll)));
+            }
+            let first = tail.saturating_sub(len as u64);
+            let minimum = first + visible.min(len) as u64;
+            let anchor = self.activity_anchor.as_mut().unwrap();
+            if *anchor < minimum {
+                self.activity_removed = true;
+                *anchor = minimum;
+            }
+            self.activity_scroll = tail.saturating_sub(*anchor).min(u64::from(u16::MAX)) as u16;
+        }
+        self.activity_tail = tail;
+        self.activity_seen_scroll = self.activity_scroll;
     }
     /// PgUp/PgDn: turn the catalog page in the list, scroll ten lines elsewhere.
     fn page(&mut self, forward: bool, view: &View, sender: &CommandSender) {

@@ -3942,6 +3942,44 @@ fn mute_copy_and_mouse_setting_route_without_shell_execution() {
 }
 
 #[test]
+fn scrolling_logs_keeps_the_visible_entries_as_messages_arrive() {
+    let mut data = view();
+    data.logs = Arc::new(
+        (1..=20)
+            .map(|n| Arc::from(format!("entry-{n:03}")))
+            .collect(),
+    );
+    data.logs_revision = 20;
+    let mut app = App::default();
+    app.focus = Focus::Activity;
+    app.activity_scroll = 5;
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("entry-015"));
+    Arc::make_mut(&mut data.logs).push_back(Arc::from("entry-021"));
+    data.logs_revision += 1;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let screen = text(&terminal);
+    assert!(screen.contains("entry-015"));
+    assert!(!screen.contains("entry-021"));
+    assert!(screen.contains(&crate::t!("activity_new", "count" => 1)));
+    data.logs = Arc::new(
+        (100..=299)
+            .map(|n| Arc::from(format!("entry-{n:03}")))
+            .collect(),
+    );
+    data.logs_revision = 299;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains(crate::t!("activity_removed")));
+    assert!(text(&terminal).contains("entry-100"));
+    app.activity_scroll = 0;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("entry-299"));
+    assert!(!text(&terminal).contains(crate::t!("activity_removed")));
+    assert_eq!(app.activity_new, 0);
+}
+
+#[test]
 fn artwork_checks_reuse_details_wrapping_until_content_or_width_changes() {
     let mut data = view();
     let app = App::default();

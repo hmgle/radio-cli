@@ -256,7 +256,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         && !app.help
         && app.filter_edit.is_none()
         && app.confirmation.is_none();
-    let active = |focus| normal && app.focus == focus;
+    let focused = app.focus;
+    let active = |focus| normal && focused == focus;
     let detail_width = (usize::from(area.width) / 4).clamp(12, 40);
     let playing = {
         let state = &view.status.playback_state;
@@ -588,9 +589,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     };
     let rect = app.rects[Focus::Activity.index()];
     let visible = usize::from(rect.height.saturating_sub(3));
-    app.activity_scroll = app
-        .activity_scroll
-        .min(view.logs.len().saturating_sub(visible) as u16);
+    app.anchor_activity(
+        view.logs_revision.max(view.logs.len() as u64),
+        view.logs.len(),
+        visible,
+    );
     let end = view
         .logs
         .len()
@@ -623,7 +626,20 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     } else {
         frame.render_widget(
             Paragraph::new(logs).block(panel(
-                crate::t!("activity_panel").into(),
+                format!(
+                    "{}{}{}",
+                    crate::t!("activity_panel"),
+                    if app.activity_new > 0 {
+                        crate::t!("activity_new", "count" => app.activity_new)
+                    } else {
+                        String::new()
+                    },
+                    if app.activity_removed {
+                        crate::t!("activity_removed")
+                    } else {
+                        ""
+                    }
+                ),
                 active(Focus::Activity),
             )),
             rect,
