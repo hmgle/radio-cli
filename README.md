@@ -140,7 +140,7 @@ TUI keys:
 | `H` / `M` / `L` | Select the top / middle / bottom visible list row |
 | `zt` / `zz` / `zb` | Place the selected row at the top / middle / bottom of the viewport |
 | `PgUp` / `PgDn`, `Ctrl-b` / `Ctrl-f` | Page through the station list |
-| `Ctrl-e` / `Ctrl-y` | Move down / up one line in the focused panel |
+| `Ctrl-e` / `Ctrl-y` | Scroll the focused panel's viewport down / up one line; keep selection while visible |
 | `?` | Open help or current failure details (`h` inside failure details or command usage switches to the keyboard help; scroll with `j`/`k`, `PgUp`/`PgDn`, `g`/`G`, `Ctrl-e`/`Ctrl-y`/`Ctrl-b`/`Ctrl-f`) |
 | `q` / `Ctrl-C` | Finalize recordings and quit |
 

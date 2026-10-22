@@ -271,7 +271,7 @@ gg / G, Home / End\t首项/末项
 H / M / L\t选择列表可见区域的顶部/中间/底部项
 zt / zz / zb\t将选中列表项置于视口顶部/中间/底部
 Ctrl-u / Ctrl-d\t移动十项
-Ctrl-e / Ctrl-y\t向下/向上移动或滚动一行
+Ctrl-e / Ctrl-y\t视口向下/向上滚动一行，仅在选中项将移出屏幕时调整选择
 PgUp / PgDn, Ctrl-b / Ctrl-f\t列表：上/下一数据页 · 其他面板：滚动十行
 """
 help_play_title = "播放"

@@ -272,7 +272,7 @@ gg / G, Home / End\tFirst/last item
 H / M / L\tSelect the top/middle/bottom visible list row
 zt / zz / zb\tPlace the selected list row at the top/middle/bottom
 Ctrl-u / Ctrl-d\tMove ten items
-Ctrl-e / Ctrl-y\tMove or scroll one line down / up
+Ctrl-e / Ctrl-y\tScroll the viewport down / up one line; keep the selected row visible
 PgUp / PgDn, Ctrl-b / Ctrl-f\tList: previous/next database page · other panels: scroll ten lines
 """
 help_play_title = "Playback"

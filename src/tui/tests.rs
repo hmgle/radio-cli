@@ -2872,6 +2872,188 @@ fn auto_repeat_moves_and_edits_but_never_triggers_actions() {
 }
 
 #[test]
+fn ctrl_line_scroll_moves_the_viewport_while_preserving_a_visible_selection() {
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    for source in Source::ALL {
+        let (mut app, data) = scrollable_list(source, 40);
+        let (sender, receiver) = command::channel(4);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        app.list.select(Some(15));
+        *app.list.offset_mut() = 10;
+        app.inspect_info = true;
+        app.details_scroll = 7;
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let rect = app.rects[Focus::List.index()];
+        let top_row = |terminal: &Terminal<TestBackend>| {
+            (rect.x + 1..rect.right() - 1)
+                .map(|x| terminal.backend().buffer()[(x, rect.y + 1)].symbol())
+                .collect::<String>()
+        };
+        assert!(top_row(&terminal).contains("Row 010"), "{source:?}");
+        let selected_id = if source == Source::Recordings {
+            data.recordings[15].id.clone()
+        } else {
+            data.rows[15].stationuuid.clone()
+        };
+        for (code, offset, repeat) in [
+            ('e', 11, false),
+            ('y', 10, false),
+            ('y', 9, false),
+            ('e', 10, true),
+        ] {
+            let mut event = ctrl(code);
+            if repeat {
+                event.kind = crossterm::event::KeyEventKind::Repeat;
+            }
+            app.key(event, &data, &sender);
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert_eq!(app.list.offset(), offset, "{source:?}, Ctrl-{code}");
+            assert_eq!(app.list.selected(), Some(15), "{source:?}, Ctrl-{code}");
+            assert!(top_row(&terminal).contains(&format!("Row {offset:03}")));
+            assert!(app.inspect_info);
+            assert_eq!(app.details_scroll, 7);
+        }
+        // Enter still targets the same row; scrolling itself submits no work.
+        assert!(receiver.try_recv().is_err());
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(match receiver.try_recv().unwrap() {
+            Command::Play(uuid) => uuid == selected_id,
+            Command::PlayRecording(id) => id == selected_id,
+            _ => panic!("expected playback of the selected row"),
+        });
+    }
+}
+
+#[test]
+fn ctrl_line_scroll_moves_edge_selections_just_enough_to_keep_them_visible() {
+    for source in Source::ALL {
+        for code in ['e', 'y'] {
+            let (mut app, mut data) = scrollable_list(source, 40);
+            let (sender, receiver) = command::channel(4);
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            let height = usize::from(app.rects[Focus::List.index()].height - 2);
+            let selected = if code == 'e' { 10 } else { 10 + height - 1 };
+            let expected = if code == 'e' {
+                selected + 1
+            } else {
+                selected - 1
+            };
+            app.list.select(Some(selected));
+            *app.list.offset_mut() = 10;
+            app.reconcile(&data);
+            app.inspect_info = true;
+            app.details_scroll = 7;
+            app.key(
+                KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL),
+                &data,
+                &sender,
+            );
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert_eq!(app.list.offset(), if code == 'e' { 11 } else { 9 });
+            assert_eq!(app.list.selected(), Some(expected));
+            assert!(!app.inspect_info);
+            assert_eq!(app.details_scroll, 0);
+            // A later refresh preserves the newly selected identity.
+            Arc::make_mut(&mut data.rows).reverse();
+            Arc::make_mut(&mut data.recordings).reverse();
+            data.rows_revision += 1;
+            data.recordings_revision += 1;
+            app.reconcile(&data);
+            assert_eq!(app.list.selected(), Some(39 - expected));
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+}
+
+#[test]
+fn ctrl_line_scroll_handles_short_pages_bounds_resize_and_unavailable_rows() {
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    let (sender, receiver) = command::channel(4);
+    let (mut app, mut data) = scrollable_list(Source::Stations, 3);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.list.select(Some(2));
+    for (code, offset) in [
+        ('y', 0),
+        ('e', 1),
+        ('e', 2),
+        ('e', 2),
+        ('y', 1),
+        ('y', 0),
+        ('y', 0),
+    ] {
+        app.key(ctrl(code), &data, &sender);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_eq!(app.list.offset(), offset);
+        assert_eq!(app.list.selected(), Some(2));
+    }
+    // A smaller viewport clamps the selection only when scrolling hides it.
+    let (mut resized, resized_data) = scrollable_list(Source::Stations, 40);
+    terminal
+        .draw(|f| render::draw(f, &mut resized, &resized_data))
+        .unwrap();
+    resized.list.select(Some(15));
+    *resized.list.offset_mut() = 10;
+    terminal.backend_mut().resize(40, 16);
+    terminal
+        .draw(|f| render::draw(f, &mut resized, &resized_data))
+        .unwrap();
+    let previous = resized.list.offset();
+    resized.key(ctrl('y'), &resized_data, &sender);
+    terminal
+        .draw(|f| render::draw(f, &mut resized, &resized_data))
+        .unwrap();
+    assert_eq!(resized.list.offset(), previous - 1);
+    assert_eq!(resized.list.selected(), Some(14));
+
+    for phase in [
+        worker::PagePhase::Loading,
+        worker::PagePhase::Error("query failed".into()),
+    ] {
+        data.page.as_mut().unwrap().phase = phase;
+        app.key(ctrl('e'), &data, &sender);
+        assert_eq!((app.list.offset(), app.list.selected()), (0, Some(2)));
+    }
+    data.page.as_mut().unwrap().phase = worker::PagePhase::Ready;
+    app.rects[Focus::List.index()].height = 2;
+    app.key(ctrl('e'), &data, &sender);
+    assert_eq!((app.list.offset(), app.list.selected()), (0, Some(2)));
+    let (mut empty, empty_data) = scrollable_list(Source::Stations, 0);
+    terminal
+        .draw(|f| render::draw(f, &mut empty, &empty_data))
+        .unwrap();
+    empty.key(ctrl('e'), &empty_data, &sender);
+    empty.key(ctrl('y'), &empty_data, &sender);
+    assert_eq!(empty.list.offset(), 0);
+    assert!(receiver.try_recv().is_err());
+}
+
+fn scrollable_list(source: Source, len: usize) -> (App, View) {
+    let mut app = App::default();
+    app.source = source;
+    app.filter.favorites = source == Source::Favorites;
+    app.filter.history = source == Source::History;
+    app.filter.recordings = source == Source::Recordings;
+    let mut data = view();
+    data.rows = Arc::new((0..len).map(|n| station(&format!("Row {n:03}"))).collect());
+    data.recordings = Arc::new((0..len).map(|n| {
+        serde_json::from_value(serde_json::json!({
+            "id":format!("recording-{n}"), "stationuuid":"station", "station_name":format!("Row {n:03}"),
+            "source_url_resolved":"https://example.com", "started_at":"2026-01-01", "stopped_at":null,
+            "media_duration_ms":null, "codec":"mp3", "container":"mp3", "path":"/tmp/clip.mp3",
+            "size_bytes":1, "status":"complete", "error":null
+        })).unwrap()
+    }).collect());
+    data.filter = app.filter.clone();
+    data.page.as_mut().unwrap().requested = app.filter.clone();
+    data.total = len;
+    data.recordings_total = len;
+    (app, data)
+}
+
+#[test]
 fn ctrl_aliases_scroll_and_page_by_focus_without_leaking_into_inputs() {
     let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     let mut data = view();
@@ -2879,15 +3061,19 @@ fn ctrl_aliases_scroll_and_page_by_focus_without_leaking_into_inputs() {
     data.total = 500;
     let (tx, rx) = command::channel(16);
 
-    // List: Ctrl-e/y move one row, Ctrl-f/b turn catalog pages like PgDn/PgUp.
+    // List: Ctrl-e/y scroll the viewport; Ctrl-f/b turn catalog pages.
     let mut app = App::default();
     app.focus = Focus::List;
     app.list.select(Some(5));
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     app.key(ctrl('e'), &data, &tx);
-    assert_eq!(app.list.selected(), Some(6));
+    assert_eq!(app.list.selected(), Some(5));
+    assert_eq!(app.list.offset(), 1);
     app.key(ctrl('y'), &data, &tx);
     app.key(ctrl('y'), &data, &tx);
-    assert_eq!(app.list.selected(), Some(4));
+    assert_eq!(app.list.selected(), Some(5));
+    assert_eq!(app.list.offset(), 0);
     assert!(rx.try_recv().is_err());
     app.key(ctrl('f'), &data, &tx);
     assert_eq!(app.filter.offset, app.filter.limit);

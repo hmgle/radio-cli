@@ -1018,6 +1018,40 @@ impl App {
             Focus::Player => {}
         }
     }
+    /// Scroll the viewport rather than the selection. As in Vim, move the
+    /// selected row only when it would otherwise leave the visible area.
+    fn scroll_panel(&mut self, delta: i32, view: &View) {
+        if self.focus != Focus::List {
+            self.move_selection(delta, view);
+            return;
+        }
+        let rect = self.rects[Focus::List.index()];
+        let height = usize::from(rect.height.saturating_sub(2));
+        let len = self.length(view);
+        if !view.page_ready(&self.filter) || rect.width <= 2 || height == 0 || len == 0 {
+            return;
+        }
+        // Allow the last row to reach the top, including on short pages.
+        let offset = self
+            .list
+            .offset()
+            .saturating_add_signed(delta as isize)
+            .min(len - 1);
+        if offset == self.list.offset() {
+            return;
+        }
+        *self.list.offset_mut() = offset;
+        if let Some(selected) = self.list.selected() {
+            let last = offset.saturating_add(height - 1).min(len - 1);
+            let index = selected.clamp(offset, last);
+            if index != selected {
+                self.list.select(Some(index));
+                self.selected_id = self.selection_id(view);
+                self.details_scroll = 0;
+                self.inspect_info = false;
+            }
+        }
+    }
     /// Keep the same end-of-viewport log sequence while new messages arrive.
     pub(super) fn anchor_activity(&mut self, tail: u64, len: usize, visible: usize) {
         if self.activity_scroll == 0 {
@@ -1588,8 +1622,8 @@ impl App {
                 KeyCode::Char('k') | KeyCode::Up => self.focus_direction(0, -1),
                 KeyCode::Char('u') => self.move_selection(-10, view),
                 KeyCode::Char('d') => self.move_selection(10, view),
-                KeyCode::Char('e') => self.move_selection(1, view),
-                KeyCode::Char('y') => self.move_selection(-1, view),
+                KeyCode::Char('e') => self.scroll_panel(1, view),
+                KeyCode::Char('y') => self.scroll_panel(-1, view),
                 KeyCode::Char('f') => self.page(true, view, sender),
                 KeyCode::Char('b') => self.page(false, view, sender),
                 _ => {}

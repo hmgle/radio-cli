@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make Ctrl-e/Ctrl-y scroll the list viewport by one line, preserving selection
+  unless the selected row would leave the screen, as in Vim.
 - Keep small terminals usable, isolate deletion confirmations, and make list
   query failures visible with bounded retries and stale-result protection.
 - Edit and measure complete Unicode grapheme clusters, handle bracketed paste,
