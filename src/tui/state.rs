@@ -420,6 +420,14 @@ impl Confirmation {
     }
 }
 
+/// Where the list was when `/` opened the search box, so Esc can put it back.
+struct SearchOrigin {
+    filter: Filter,
+    selected_id: Option<String>,
+    index: usize,
+    edited: bool,
+}
+
 pub(super) struct App {
     last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
@@ -444,7 +452,7 @@ pub(super) struct App {
     pub message: String,
     message_clock: Option<(String, Instant)>,
     pub search_due: Option<Instant>,
-    original_query: String,
+    search_origin: Option<SearchOrigin>,
     pub filter_edit: Option<(usize, [String; 4])>,
     pub facet_index: Option<usize>,
     pub facet_prefix: String,
@@ -504,7 +512,7 @@ impl Default for App {
             message: String::new(),
             message_clock: None,
             search_due: None,
-            original_query: String::new(),
+            search_origin: None,
             filter_edit: None,
             facet_index: None,
             facet_prefix: String::new(),
@@ -1158,7 +1166,26 @@ impl App {
         self.filter.query = self.editor.text.clone();
         self.filter.offset = 0;
         self.reset_selection();
+        if let Some(origin) = &mut self.search_origin {
+            origin.edited = true;
+        }
         self.search_due = Some(Instant::now() + Duration::from_millis(200));
+    }
+    /// Esc in the search box. Nothing changes until the text was edited; after
+    /// that the query, page and selected row from before the search return.
+    fn cancel_search(&mut self) {
+        let Some(origin) = self.search_origin.take() else {
+            return;
+        };
+        if !origin.edited {
+            return;
+        }
+        self.filter = origin.filter;
+        self.list = ListState::default().with_selected(Some(origin.index));
+        self.selected_id = origin.selected_id;
+        self.details_scroll = 0;
+        self.inspect_info = false;
+        self.search_due = Some(Instant::now());
     }
     /// Bracketed paste only ever edits an open text input; it is never
     /// interpreted as shortcuts and never submits anything.
@@ -1250,9 +1277,7 @@ impl App {
         if self.too_small {
             if key.code == KeyCode::Esc {
                 if self.mode == Mode::Search {
-                    self.filter.query = self.original_query.clone();
-                    self.filter.offset = 0;
-                    self.search_due = Some(Instant::now());
+                    self.cancel_search();
                 }
                 self.mode = Mode::Normal;
                 self.help = false;
@@ -1279,9 +1304,7 @@ impl App {
         if self.mode != Mode::Normal {
             if key.code == KeyCode::Esc {
                 if self.mode == Mode::Search {
-                    self.filter.query = self.original_query.clone();
-                    self.filter.offset = 0;
-                    self.search_due = Some(Instant::now());
+                    self.cancel_search();
                 }
                 self.mode = Mode::Normal;
                 self.message.clear();
@@ -1291,6 +1314,7 @@ impl App {
                 if self.mode == Mode::Command {
                     self.execute_line(view, sender);
                 } else {
+                    self.search_origin = None;
                     self.flush_search(sender);
                     self.mode = Mode::Normal;
                 }
@@ -1438,7 +1462,12 @@ impl App {
             }
             KeyCode::Char('/') if self.source != Source::Recordings => {
                 self.mode = Mode::Search;
-                self.original_query = self.filter.query.clone();
+                self.search_origin = Some(SearchOrigin {
+                    filter: self.filter.clone(),
+                    selected_id: self.selected_id.clone(),
+                    index: self.list.selected().unwrap_or(0),
+                    edited: false,
+                });
                 self.editor.begin(&self.filter.query);
                 self.focus = Focus::List;
             }

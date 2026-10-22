@@ -133,7 +133,7 @@ TUI keys:
 | `f` | Add / remove the selected station from favorites |
 | `r` | Start / stop recording the current station |
 | `+`, `-` | Volume |
-| `/` | Incremental search; Enter confirms, Esc restores the previous search |
+| `/` | Incremental search; Enter confirms, Esc restores the previous query, page and selection |
 | `F` | Country/region code, language, tag, and minimum-bitrate filters |
 | `[` / `]` | Stations / favorites / recent / recordings categories |
 | `gg` / `G` | First / last item in the list |

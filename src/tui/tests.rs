@@ -2999,6 +2999,114 @@ fn search_cursor_keys_keep_the_selection_and_do_not_requery() {
     assert!(app.search_due.is_some());
 }
 
+fn paged_view(app: &App, rows: Vec<Station>) -> View {
+    let mut data = view();
+    data.total = 300;
+    data.rows = rows.into();
+    data.filter = app.filter.clone();
+    data.page = Some(worker::PageState {
+        generation: 0,
+        requested: data.filter.clone(),
+        phase: worker::PagePhase::Ready,
+    });
+    data.rows_revision += 1;
+    data
+}
+
+#[test]
+fn escaping_the_search_restores_the_page_and_selected_row() {
+    let (tx, rx) = command::channel(8);
+    let mut app = App::default();
+    app.filter.offset = 100;
+    let first = station("First");
+    let second = station("Second");
+    let data = paged_view(&app, vec![first.clone(), second.clone()]);
+    app.reconcile(&data);
+    app.key(key(KeyCode::Char('j')), &data, &tx);
+    assert_eq!(app.selected(&data).unwrap().name, "Second");
+
+    app.key(key(KeyCode::Char('/')), &data, &tx);
+    for c in "xy".chars() {
+        app.key(key(KeyCode::Char(c)), &data, &tx);
+    }
+    assert_eq!((app.filter.query.as_str(), app.filter.offset), ("xy", 0));
+    assert_eq!(app.list.selected(), Some(0));
+    // Deleting the text again leaves the query as it was, but the page and
+    // the row were already reset by the edits.
+    for _ in 0..2 {
+        app.key(key(KeyCode::Backspace), &data, &tx);
+    }
+    assert_eq!(app.filter.offset, 0);
+
+    app.key(key(KeyCode::Esc), &data, &tx);
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!((app.filter.query.as_str(), app.filter.offset), ("", 100));
+    assert_eq!(app.list.selected(), Some(1));
+    app.flush_search(&tx);
+    let searches: Vec<_> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            Command::Search(filter) => Some((filter.query, filter.offset)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(searches, vec![(String::new(), 100)]);
+
+    // The page that comes back may have shifted; the row is found by its ID.
+    let mut shifted = paged_view(&app, vec![station("New"), first, second]);
+    shifted.rows_revision += 1;
+    app.reconcile(&shifted);
+    assert_eq!(app.selected(&shifted).unwrap().name, "Second");
+}
+
+#[test]
+fn escaping_an_untouched_search_changes_nothing() {
+    let (tx, rx) = command::channel(8);
+    let mut app = App::default();
+    app.filter.offset = 100;
+    app.filter.query = "radio".into();
+    let data = paged_view(&app, vec![station("First"), station("Second")]);
+    app.reconcile(&data);
+    app.key(key(KeyCode::Char('j')), &data, &tx);
+
+    app.key(key(KeyCode::Char('/')), &data, &tx);
+    for event in [key(KeyCode::Left), key(KeyCode::End), key(KeyCode::Esc)] {
+        app.key(event, &data, &tx);
+    }
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(
+        (
+            app.filter.query.as_str(),
+            app.filter.offset,
+            app.list.selected()
+        ),
+        ("radio", 100, Some(1))
+    );
+    assert!(app.search_due.is_none());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn confirming_a_search_keeps_the_new_query_and_starts_at_the_first_page() {
+    let (tx, rx) = command::channel(8);
+    let mut app = App::default();
+    app.filter.offset = 100;
+    let data = paged_view(&app, vec![station("First"), station("Second")]);
+    app.reconcile(&data);
+
+    app.key(key(KeyCode::Char('/')), &data, &tx);
+    app.key(key(KeyCode::Char('z')), &data, &tx);
+    app.key(key(KeyCode::Enter), &data, &tx);
+    assert_eq!((app.filter.query.as_str(), app.filter.offset), ("z", 0));
+    assert!(matches!(rx.try_recv(), Ok(Command::Search(f)) if f.query == "z" && f.offset == 0));
+
+    // A later, untouched search does not remember the old origin.
+    app.key(key(KeyCode::Char('/')), &data, &tx);
+    app.key(key(KeyCode::Esc), &data, &tx);
+    assert_eq!((app.filter.query.as_str(), app.filter.offset), ("z", 0));
+    assert!(rx.try_recv().is_err());
+}
+
 #[test]
 fn media_states_are_distinguishable_in_header_list_row_and_details() {
     use crate::engine::PlaybackState as P;

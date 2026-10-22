@@ -279,7 +279,7 @@ Copy and favorite act on the selected list row, not on the playing station or on
 """
 help_find_title = "Search and filters"
 help_find = """
-/\tSearch stations (Enter confirms, Esc restores the original search)
+/\tSearch stations (Enter confirms, Esc restores the previous query, page and selection)
 F\tFilters (type to narrow · Up/Down candidates · Tab/Shift-Tab field · Enter applies · Esc closes)
 Ctrl-U\tIn the filter popup: clear search and filters
 """

@@ -278,7 +278,7 @@ Y\t复制选中电台的流地址，或选中录音的文件路径（OSC 52）
 """
 help_find_title = "搜索与筛选"
 help_find = """
-/\t搜索电台（Enter 确认，Esc 恢复原搜索）
+/\t搜索电台（Enter 确认，Esc 恢复原查询、页和选中项）
 F\t筛选对话框（键入过滤 · Up/Down 候选 · Tab/Shift-Tab 切换字段 · Enter 应用 · Esc 关闭）
 Ctrl-U\t筛选窗内：清空搜索与筛选
 """
