@@ -108,29 +108,26 @@ struct ScreenLayout {
     task_main: bool,
 }
 fn screen_layout(area: Rect, focus: Focus, task_active: bool) -> ScreenLayout {
+    // All regions must agree on whether there is room for side-by-side panels.
+    let tall = area.height >= 20;
+    let side_by_side = area.width >= 100 && tall;
     let mut rects = [Rect::default(); 5];
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(if area.width >= 100 && area.height >= 20 {
-                5
-            } else {
-                4
-            }),
+            Constraint::Length(if side_by_side { 5 } else { 4 }),
             Constraint::Min(3),
-            Constraint::Length(
-                if area.height >= 20 && (task_active || focus == Focus::Activity) {
-                    4
-                } else {
-                    1
-                },
-            ),
+            Constraint::Length(if tall && (task_active || focus == Focus::Activity) {
+                4
+            } else {
+                1
+            }),
             Constraint::Length(3),
         ])
         .split(area);
     rects[Focus::Player.index()] = vertical[0];
     rects[Focus::Activity.index()] = vertical[2];
-    if area.width >= 100 && area.height >= 20 {
+    if side_by_side {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -152,7 +149,7 @@ fn screen_layout(area: Rect, focus: Focus, task_active: bool) -> ScreenLayout {
         rects[Focus::List.index()] = sources[1];
         rects[Focus::Details.index()] = sources[1];
     }
-    let task_main = area.height < 20 && focus == Focus::Activity;
+    let task_main = !tall && focus == Focus::Activity;
     if task_main {
         rects[Focus::Activity.index()] = rects[Focus::List.index()];
         rects[Focus::List.index()] = Rect::default();
@@ -161,7 +158,7 @@ fn screen_layout(area: Rect, focus: Focus, task_active: bool) -> ScreenLayout {
     ScreenLayout {
         rects,
         bottom: vertical[3],
-        shared: area.width < 100 || area.height < 20,
+        shared: !side_by_side,
         task_main,
     }
 }
@@ -171,6 +168,8 @@ fn station_row(
     marker: Option<(&'static str, Style)>,
     width: u16,
 ) -> Line<'static> {
+    // Metadata is optional; retain this many cells for the station name first.
+    const MIN_NAME_CELLS: usize = 16;
     let width = usize::from(width);
     let suffix = if station.active {
         ""
@@ -184,7 +183,7 @@ fn station_row(
         format!(" {}", bitrate(station)),
         format!(" {}", codec(station)),
     ] {
-        if available >= 16 + field.width() {
+        if available >= MIN_NAME_CELLS + field.width() {
             available -= field.width();
             metadata.push_str(&field);
         }
@@ -1020,13 +1019,16 @@ pub(super) fn station_lines(
 }
 
 pub(super) fn field_lines(content: &str, width: usize) -> Vec<Line<'static>> {
+    // Stack compact panels, or long labels that leave too little value space.
+    const INLINE_MIN_CELLS: usize = 44;
+    const MIN_VALUE_CELLS: usize = 12;
     let label_width = content
         .lines()
         .filter_map(|line| line.split_once('\t'))
         .map(|(label, _)| super::text::width(label))
         .max()
         .unwrap_or(0);
-    let stacked = width < 44 || label_width + 12 >= width;
+    let stacked = width < INLINE_MIN_CELLS || label_width + MIN_VALUE_CELLS >= width;
     let mut result = Vec::new();
     for line in content.lines() {
         let Some((label, value)) = line.split_once('\t') else {
