@@ -2280,13 +2280,52 @@ fn ctrl_aliases_scroll_and_page_by_focus_without_leaking_into_inputs() {
         for code in ['e', 'y', 'f', 'b'] {
             app.key(ctrl(code), &data, &tx);
         }
-        if open != '/' {
-            assert_eq!(app.list.selected(), Some(5), "after {open}");
-        }
+        assert_eq!(app.list.selected(), Some(5), "after {open}");
         assert_eq!((app.help_scroll, app.filter.offset), (0, 0), "after {open}");
         assert!(app.editor.text.is_empty(), "after {open}");
         assert!(rx.try_recv().is_err(), "after {open}");
     }
+}
+
+#[test]
+fn search_cursor_keys_keep_the_selection_and_do_not_requery() {
+    let data = view();
+    let (tx, rx) = command::channel(8);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('/')), &data, &tx);
+    for c in "ab".chars() {
+        app.key(key(KeyCode::Char(c)), &data, &tx);
+    }
+    assert_eq!(app.filter.query, "ab");
+    assert!(app.search_due.is_some());
+
+    app.search_due = None;
+    app.list.select(Some(1));
+    app.filter.offset = 50;
+    let ctrl = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    for event in [
+        key(KeyCode::Left),
+        key(KeyCode::Right),
+        key(KeyCode::Home),
+        key(KeyCode::End),
+        key(KeyCode::Delete),
+        ctrl('a'),
+        ctrl('e'),
+        ctrl('y'),
+    ] {
+        app.key(event, &data, &tx);
+    }
+    assert_eq!(app.mode, Mode::Search);
+    assert_eq!((app.filter.query.as_str(), app.filter.offset), ("ab", 50));
+    assert_eq!(app.list.selected(), Some(1));
+    assert!(app.search_due.is_none());
+    assert!(rx.try_recv().is_err());
+
+    // Editing the text still restarts the query from the first page.
+    app.key(key(KeyCode::Backspace), &data, &tx);
+    assert_eq!((app.filter.query.as_str(), app.filter.offset), ("a", 0));
+    assert_eq!(app.list.selected(), Some(0));
+    assert!(app.search_due.is_some());
 }
 
 #[test]

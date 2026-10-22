@@ -1064,6 +1064,11 @@ impl App {
         false
     }
     fn search_edited(&mut self) {
+        // Cursor-only keys leave the query alone and must not re-query or
+        // reset the selection and page.
+        if self.filter.query == self.editor.text {
+            return;
+        }
         self.filter.query = self.editor.text.clone();
         self.filter.offset = 0;
         self.reset_selection();
