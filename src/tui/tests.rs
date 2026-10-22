@@ -941,6 +941,30 @@ fn commands_use_cli_arguments_and_context_without_shell_execution() {
 }
 
 #[test]
+fn command_errors_come_from_the_message_catalog() {
+    let filter = Filter::default();
+    let error = |line: &str| {
+        command::parse(line, None, None, &filter)
+            .err()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(error(""), crate::t!("command_empty"));
+    assert_eq!(error("play"), crate::t!("command_need_station"));
+    assert_eq!(error("current"), crate::t!("command_nothing_playing"));
+    assert_eq!(error("record"), crate::t!("command_nothing_playing_uuid"));
+    assert_eq!(error("set mouse maybe"), crate::t!("command_usage_set"));
+    assert_eq!(error("volume 101"), crate::t!("command_usage_volume"));
+    assert_eq!(error("focus nowhere"), crate::t!("command_usage_focus"));
+    assert_eq!(
+        error("help nosuch"),
+        crate::t!("command_unknown_help", "word" => "nosuch")
+    );
+    assert_eq!(error("sync --json"), crate::t!("command_process_options"));
+    assert_eq!(error("history --all"), crate::t!("command_paging"));
+}
+
+#[test]
 fn editor_handles_unicode_cursor_completion_and_history_draft() {
     let mut editor = Editor::default();
     editor.begin("上海FM");

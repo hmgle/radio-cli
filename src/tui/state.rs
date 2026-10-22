@@ -871,7 +871,12 @@ impl App {
                 match parsed {
                     Parsed::Mouse(enabled) => {
                         self.mouse_enabled = enabled;
-                        self.message = format!("mouse = {enabled}");
+                        self.message = if enabled {
+                            crate::t!("mouse_capture_on")
+                        } else {
+                            crate::t!("mouse_capture_off")
+                        }
+                        .into();
                     }
                     Parsed::HelpText(text) => {
                         self.help = true;

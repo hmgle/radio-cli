@@ -544,7 +544,7 @@ pub(super) fn execute(
         Command::SetLanguage(language) => {
             crate::messages::init(Some(&language), None);
             engine.config.settings.language = Some(language.clone());
-            engine.status.message = format!("language = {language}");
+            engine.status.message = crate::t!("language_set", "language" => language);
         }
         Command::Stop => {
             engine.stop_playback()?;

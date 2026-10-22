@@ -55,7 +55,7 @@ impl Drop for Screen {
 
 pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        bail!("TUI 需要交互终端");
+        bail!(crate::t!("tui_requires_terminal"));
     }
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|s| !s.is_empty());
     let theme = config.settings.theme.effective(no_color);
@@ -89,7 +89,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         app.mouse_enabled = mouse;
         app.jump_binding = jump_binding;
         if let Err(error) = app.editor.load_history(history_path) {
-            app.message = format!("历史加载失败: {error}");
+            app.message = crate::t!("history_load_failed", "detail" => error);
         }
         app.theme = theme;
         let mut revision = 0;
@@ -175,9 +175,9 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
                     | crate::engine::RecordingState::Recording
                     | crate::engine::RecordingState::Finalizing
             ) {
-                "radio · 正在退出 · 正在收尾录音…"
+                crate::t!("exiting_recording")
             } else {
-                "radio · 正在退出 · 清理媒体…"
+                crate::t!("exiting_cleanup")
             };
             frame.render_widget(ratatui::widgets::Paragraph::new(hint), frame.area());
         })?;
@@ -191,7 +191,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
     drop(sender);
     let worker_result = handle
         .join()
-        .map_err(|_| anyhow::anyhow!("界面工作线程异常退出"))?;
+        .map_err(|_| anyhow::anyhow!(crate::t!("ui_worker_failed")))?;
     result?;
     worker_result
 }

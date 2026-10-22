@@ -209,12 +209,12 @@ pub(super) fn parse(
 ) -> Result<Parsed> {
     let mut words = shell_words::split(line)?;
     let Some(name) = words.first().cloned() else {
-        bail!("请输入命令；:help 查看帮助");
+        bail!(crate::t!("command_empty"));
     };
     let selected_id = || {
         selected
             .map(|s| s.stationuuid.clone())
-            .ok_or_else(|| anyhow::anyhow!("请先选择电台或指定 UUID"))
+            .ok_or_else(|| anyhow::anyhow!(crate::t!("command_need_station")))
     };
     match name.as_str() {
         "refresh" if words.len() == 1 => return Ok(Parsed::Worker(Command::Refresh)),
@@ -224,7 +224,7 @@ pub(super) fn parse(
         "current" if words.len() == 1 => {
             return Ok(Parsed::Worker(Command::Info(
                 current
-                    .ok_or_else(|| anyhow::anyhow!("尚未播放"))?
+                    .ok_or_else(|| anyhow::anyhow!(crate::t!("command_nothing_playing")))?
                     .stationuuid
                     .clone(),
                 0,
@@ -236,9 +236,9 @@ pub(super) fn parse(
             let mut root = Cli::command();
             let mut selected = &mut root;
             for word in &words[1..] {
-                selected = selected
-                    .find_subcommand_mut(word)
-                    .ok_or_else(|| anyhow::anyhow!("未知命令: {word}"))?;
+                selected = selected.find_subcommand_mut(word).ok_or_else(|| {
+                    anyhow::anyhow!(crate::t!("command_unknown_help", "word" => word))
+                })?;
             }
             return Ok(Parsed::HelpText(selected.render_long_help().to_string()));
         }
@@ -249,7 +249,7 @@ pub(super) fn parse(
             "mouse" if matches!(words[2].as_str(), "true" | "false") => {
                 return Ok(Parsed::Mouse(words[2] == "true"));
             }
-            _ => bail!("用法: set language en|zh-CN / set mouse true|false"),
+            _ => bail!(crate::t!("command_usage_set")),
         },
         "sync-cancel" if words.len() == 1 => return Ok(Parsed::Worker(Command::Cancel)),
         "pause" if words.len() == 1 => return Ok(Parsed::Worker(Command::Pause)),
@@ -261,7 +261,7 @@ pub(super) fn parse(
                 .filter(|_| words.len() == 2)
                 .and_then(|s| s.parse::<u8>().ok())
                 .filter(|n| *n <= 100)
-                .ok_or_else(|| anyhow::anyhow!("用法: volume <0–100>"))?;
+                .ok_or_else(|| anyhow::anyhow!(crate::t!("command_usage_volume")))?;
             return Ok(Parsed::Worker(Command::Volume(value)));
         }
         "focus" => {
@@ -275,7 +275,7 @@ pub(super) fn parse(
                 Some("details" | "3") => Focus::Details,
                 Some("player" | "4") => Focus::Player,
                 Some("activity" | "5") => Focus::Activity,
-                _ => bail!("用法: focus sources|list|details|player|activity"),
+                _ => bail!(crate::t!("command_usage_focus")),
             };
             return Ok(Parsed::Focus(panel));
         }
@@ -297,7 +297,7 @@ pub(super) fn parse(
             1,
             current
                 .map(|s| s.stationuuid.clone())
-                .ok_or_else(|| anyhow::anyhow!("尚未播放；请指定电台 UUID"))?,
+                .ok_or_else(|| anyhow::anyhow!(crate::t!("command_nothing_playing_uuid")))?,
         );
     }
     let cli = Cli::try_parse_from(std::iter::once("radio".to_owned()).chain(words))
@@ -310,7 +310,7 @@ pub(super) fn parse(
         || cli.json
         || cli.json_v2
     {
-        bail!("TUI 命令不接受进程级配置参数");
+        bail!(crate::t!("command_process_options"));
     }
     let parsed = match cli.command {
         Some(Action::Sync { accept_shrink }) => Parsed::Worker(Command::Sync(accept_shrink)),
@@ -362,7 +362,7 @@ pub(super) fn parse(
             action: crate::cli::StationAction::List(page),
         }) => {
             if page.all {
-                bail!("TUI 使用 PgUp/PgDn 分页；--all 仅供 CLI 导出");
+                bail!(crate::t!("command_paging"));
             }
             Parsed::Search(Filter {
                 custom: true,
@@ -372,10 +372,10 @@ pub(super) fn parse(
             })
         }
         Some(Action::Station { action }) => Parsed::Worker(Command::Station(action)),
-        _ => bail!("未知 TUI 命令；:help 查看帮助"),
+        _ => bail!(crate::t!("command_unknown")),
     };
     if matches!(&parsed, Parsed::Source(_, page) if page.all) {
-        bail!("TUI 使用 PgUp/PgDn 分页；--all 仅供 CLI 导出");
+        bail!(crate::t!("command_paging"));
     }
     Ok(parsed)
 }
