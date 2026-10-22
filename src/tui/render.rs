@@ -1,5 +1,4 @@
 use super::{
-    command::HELP,
     state::{App, Focus, Mode, Source},
     worker::{PageStatus, View},
 };
@@ -43,21 +42,21 @@ fn panel(title: String, active: bool) -> Block<'static> {
 }
 fn bitrate(station: &Station) -> String {
     if station.bitrate == 0 {
-        "码率未知".into()
+        crate::t!("bitrate_unknown").into()
     } else {
         format!("{} kbps", station.bitrate)
     }
 }
 fn codec(station: &Station) -> String {
     if station.codec.is_empty() || station.codec.eq_ignore_ascii_case("unknown") {
-        "编码未知".into()
+        crate::t!("codec_unknown").into()
     } else {
         crate::clean_text(&station.codec)
     }
 }
 fn value(text: &str) -> String {
     if text.trim().is_empty() {
-        "未知".into()
+        crate::t!("value_unknown").into()
     } else {
         crate::clean_text(text)
     }
@@ -236,7 +235,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     let active = |focus| normal && app.focus == focus;
     let playing = match &view.status.playback_state {
         crate::engine::PlaybackState::Failed { reason } => {
-            format!("播放失败: {} · ?", fit(reason, 12).trim_end())
+            format!(
+                "{} · ?",
+                crate::t!("playback_failed", "reason" => fit(reason, 12).trim_end())
+            )
         }
         state => state.label().into(),
     };
@@ -251,7 +253,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                 " ● REC {}s{}",
                 view.status.recording_ms / 1000,
                 if view.status.paused() {
-                    " · 播放暂停，录音继续"
+                    crate::t!("player_recording_continues")
                 } else {
                     ""
                 }
@@ -263,7 +265,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             view.status.recording_state,
             crate::engine::RecordingState::Failed { .. }
         ) {
-            " · ? 详情"
+            crate::t!("player_error_details")
         } else {
             ""
         }
@@ -271,34 +273,35 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     let volume = format!(
         "{}%{}",
         view.status.volume,
-        if view.status.muted { " · 静音" } else { "" }
+        if view.status.muted {
+            crate::t!("player_muted")
+        } else {
+            ""
+        }
     );
     let player_text = if let Some(station) = &view.status.station {
-        format!(
-            "{} · {} · 音量 {}\n{} · {} · {}（目录）\n{} · {} · {}",
-            playing,
-            fit_clean(
+        crate::t!(
+            "player_station",
+            "state" => playing,
+            "name" => fit_clean(
                 &value(&station.name),
                 usize::from(area.width.saturating_sub(40))
             )
             .trim_end(),
-            volume,
-            recording,
-            codec(station),
-            bitrate(station),
-            value(&station.countrycode),
-            value(&station.language),
-            if view.status.title.is_empty() {
-                "暂无曲名".into()
+            "volume" => volume,
+            "recording" => recording,
+            "codec" => codec(station),
+            "bitrate" => bitrate(station),
+            "country" => value(&station.countrycode),
+            "language" => value(&station.language),
+            "title" => if view.status.title.is_empty() {
+                crate::t!("player_no_title").into()
             } else {
                 value(&view.status.title)
             }
         )
     } else {
-        format!(
-            "尚未播放 · 音量 {}{}\n在列表选择电台，Enter 播放；:sync 同步目录",
-            volume, recording
-        )
+        crate::t!("player_idle_panel", "volume" => volume, "recording" => recording)
     };
     let player_text = if layout.shared {
         let width = usize::from(area.width.saturating_sub(2));
@@ -348,14 +351,17 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     };
     frame.render_widget(
         Paragraph::new(player_text).block(panel(
-            "radio · 4 播放器 · 当前电台".into(),
+            crate::t!("player_panel").into(),
             active(Focus::Player),
         )),
         app.rects[Focus::Player.index()],
     );
 
     let source_rect = app.rects[Focus::Sources.index()];
-    frame.render_widget(panel("1 来源".into(), active(Focus::Sources)), source_rect);
+    frame.render_widget(
+        panel(crate::t!("sources_panel").into(), active(Focus::Sources)),
+        source_rect,
+    );
     let inner = source_rect.inner(ratatui::layout::Margin::new(1, 1));
     if source_rect.height >= 6 {
         for source in Source::ALL {
@@ -379,7 +385,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         }
         if inner.height > 6 {
             frame.render_widget(
-                Paragraph::new("j/k 选择\nEnter 进入\n[ / ] 切分类")
+                Paragraph::new(crate::t!("sources_keys"))
                     .style(Style::default().fg(Color::DarkGray)),
                 Rect::new(inner.x, inner.y + 6, inner.width, inner.height - 6),
             );
@@ -411,17 +417,17 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     }
     let show_details = !layout.task_main && (!layout.shared || app.focus == Focus::Details);
     if !layout.task_main && (!layout.shared || app.focus != Focus::Details) {
-        let title = format!(
-            "{} {} · {}/{} 项 · 页 {}",
-            if layout.shared { "[2/3] 列表" } else { "2" },
-            app.source.label(),
-            app.length(view),
-            if app.source == Source::Recordings {
+        let title = crate::t!(
+            "list_title",
+            "prefix" => if layout.shared { crate::t!("list_shared") } else { "2" },
+            "source" => app.source.label(),
+            "count" => app.length(view),
+            "total" => if app.source == Source::Recordings {
                 view.recordings_total
             } else {
                 view.total
             },
-            app.filter.offset / app.filter.limit.max(1) + 1
+            "page" => app.filter.offset / app.filter.limit.max(1) + 1
         );
         let items: Vec<ListItem> = if app.source == Source::Recordings {
             view.recordings_for(&app.filter)
@@ -504,35 +510,35 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     if show_details {
         let text = if app.source == Source::Recordings && !app.inspect_info {
             view.recordings_for(&app.filter).get(app.list.selected().unwrap_or(0)).map(|r| {
-                format!(
-                    "{}\n状态: {}\n编码: {} / {}\n时长: {}\n大小: {} bytes\n开始: {}\n结束: {}\n电台 UUID: {}\n地址: {}\n文件: {}\n{}{}",
-                    value(&r.station_name),
-                    r.status,
-                    r.codec,
-                    r.container,
-                    r.media_duration_ms
+                crate::t!(
+                    "recording_details",
+                    "name" => value(&r.station_name),
+                    "status" => r.status,
+                    "codec" => r.codec,
+                    "container" => r.container,
+                    "duration" => r.media_duration_ms
                         .map(|ms| format!("{:.1}s", ms as f64 / 1000.))
-                        .unwrap_or_else(|| "未知".into()),
-                    r.size_bytes,
-                    r.started_at,
-                    r.stopped_at.as_deref().unwrap_or("录制中"),
-                    r.stationuuid,
-                    crate::clean_text(&r.source_url_resolved),
-                    crate::clean_text(&r.path),
-                    if r.reconnects > 0 {
+                        .unwrap_or_else(|| crate::t!("value_unknown").into()),
+                    "size" => r.size_bytes,
+                    "started" => r.started_at,
+                    "stopped" => r.stopped_at.as_deref().unwrap_or(crate::t!("recording_in_progress")),
+                    "uuid" => r.stationuuid,
+                    "url" => crate::clean_text(&r.source_url_resolved),
+                    "path" => crate::clean_text(&r.path),
+                    "reconnects" => if r.reconnects > 0 {
                         format!("{}\n", crate::t!("recording_reconnected", "count" => r.reconnects))
                     } else {
                         String::new()
                     },
-                    r.error.as_deref().map(|error| if app.recording_error_expanded {
+                    "error" => r.error.as_deref().map(|error| if app.recording_error_expanded {
                         error.lines().map(crate::clean_text).collect::<Vec<_>>().join("\n")
                     } else {
-                        format!("{} · e 展开错误", crate::clean_text(error.lines().next().unwrap_or("")))
+                        crate::t!("recording_expand_error", "detail" => crate::clean_text(error.lines().next().unwrap_or("")))
                     }).unwrap_or_default()
                 )
-            }).unwrap_or_else(|| "暂无录音记录".into())
+            }).unwrap_or_else(|| crate::t!("no_recording_records").into())
         } else if app.inspect_info && view.inspected_request != app.info_request {
-            "正在查询详情…".into()
+            crate::t!("details_loading").into()
         } else if app.inspect_info && view.inspected_error.is_some() {
             view.inspected_error.clone().unwrap()
         } else if let Some(station) = if app.inspect_info {
@@ -542,16 +548,16 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         } {
             station_details(station, view)
         } else {
-            "选择电台查看码率、编码、国家/地区、标签和地址。\n4 查看当前播放电台。".into()
+            crate::t!("details_empty").into()
         };
         let image =
             super::artwork::image(app, view, area).map(|(image, rect)| (image.clone(), rect));
         let text_rect = app.rects[Focus::Details.index()];
         let block = panel(
             if layout.shared {
-                "[2/3] 详情 · 2 返回 · j/k 滚动"
+                crate::t!("details_shared")
             } else {
-                "3 详情 · j/k 滚动"
+                crate::t!("details_panel")
             }
             .into(),
             active(Focus::Details),
@@ -606,7 +612,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
     } else {
         frame.render_widget(
             Paragraph::new(logs).block(panel(
-                "5 任务与消息 · :sync / :sync-cancel".into(),
+                crate::t!("activity_panel").into(),
                 active(Focus::Activity),
             )),
             rect,
@@ -638,9 +644,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         frame.set_cursor_position((input.x + cursor_start + cursor, input.y));
         let hint = if app.message.is_empty() {
             if app.mode == Mode::Command {
-                "Enter 执行 · Esc 返回 · Tab 补全 · ↑/↓ 历史 · :help 帮助"
+                crate::t!("command_keys")
             } else {
-                "Enter 确认 · Esc 恢复搜索 · ←/→ 移动光标"
+                crate::t!("search_keys")
             }
         } else {
             &app.message
@@ -653,14 +659,20 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
         );
     } else {
         let filter = if app.source == Source::Recordings {
-            "本地录音 · 不使用电台筛选".into()
+            crate::t!("recordings_no_filters").into()
         } else {
             crate::clean_text(&format!(
                 "/{}  {} {} {} ≥{}k",
                 crate::clean_text(&app.filter.query),
-                app.filter.country.as_deref().unwrap_or("全部国家/地区"),
-                app.filter.language.as_deref().unwrap_or("全部语言"),
-                app.filter.tag.as_deref().unwrap_or("全部标签"),
+                app.filter
+                    .country
+                    .as_deref()
+                    .unwrap_or(crate::t!("all_countries")),
+                app.filter
+                    .language
+                    .as_deref()
+                    .unwrap_or(crate::t!("all_languages")),
+                app.filter.tag.as_deref().unwrap_or(crate::t!("all_tags")),
                 app.filter.min_bitrate
             ))
         };
@@ -776,9 +788,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                 .saturating_sub(count / 2)
                 .min(candidates.len().saturating_sub(count));
             text.push(Line::from(if view.facets_loading {
-                "正在加载本地候选…"
+                crate::t!("facets_loading")
             } else {
-                "本地候选（电台数，最多100项；输入缩小）:"
+                crate::t!("facets_hint")
             }));
             if let Some(error) = &view.facets_error {
                 text.push(Line::from(crate::clean_text(error)));
@@ -792,7 +804,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                         } else {
                             " "
                         },
-                        crate::clean_text(&if *selected == 0 {
+                        crate::clean_text(&if *selected == 0
+                            && crate::messages::locale() == crate::messages::Locale::ZhCn
+                        {
                             crate::territories::display_zh(&facet.value)
                         } else {
                             facet.value.clone()
@@ -802,7 +816,10 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
                 },
             ));
         }
-        frame.render_widget(Paragraph::new(text).block(panel("筛选".into(), true)), rect);
+        frame.render_widget(
+            Paragraph::new(text).block(panel(crate::t!("filter_title").into(), true)),
+            rect,
+        );
         let (_, cursor) = input_window(
             &values[*selected],
             app.filter_input.cursor.min(values[*selected].len()),
@@ -876,7 +893,8 @@ fn empty_hint(app: &App) -> &'static str {
 
 pub(super) fn help_text(locale: crate::messages::Locale, jump_binding: &str) -> String {
     let help = format!(
-        "{HELP}\n{}\n{}",
+        "{}\n{}\n{}",
+        crate::messages::text_in(locale, "tui_help"),
         crate::messages::text_in(locale, "catalog_source_notice"),
         crate::messages::text_in(locale, "core_help_notice")
     );
@@ -884,8 +902,11 @@ pub(super) fn help_text(locale: crate::messages::Locale, jump_binding: &str) -> 
         return help;
     }
     format!(
-        "{help}\n{}  定位当前播放电台（可在 keybindings.jump_to_playing 配置）",
-        jump_binding
+        "{help}\n{}",
+        crate::messages::format_text(
+            crate::messages::text_in(locale, "help_jump"),
+            &[("key", jump_binding.to_owned())]
+        )
     )
 }
 
@@ -895,35 +916,32 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
         .station
         .as_ref()
         .filter(|s| s.stationuuid == station.stationuuid);
-    format!(
-        "{}{}\n国家/地区: {}\n语言: {}\n州/省/区域: {}\n码率: {}（目录）\n编码: {}（目录）\nHLS: {}\n标签: {}\n收藏: {} · 目录: {}\nUUID: {}\n流地址: {}\n备用地址: {}\n{}官网: {}",
-        value(&station.name),
-        if current.is_some() && view.status.playing() {
-            " · 正在播放"
+    crate::t!(
+        "station_details",
+        "name" => value(&station.name),
+        "context" => if current.is_some() && view.status.playing() {
+            crate::t!("station_playing")
         } else {
-            " · 列表选中 / 指定电台"
+            crate::t!("station_selected")
         },
-        value(&crate::territories::display_zh_or(
-            &station.countrycode,
-            &station.country,
-        )),
-        value(&station.language),
-        value(&station.state),
-        bitrate(station),
-        codec(station),
-        if station.hls != 0 { "是" } else { "否" },
-        value(&station.tags),
-        if station.favorite { "是" } else { "否" },
-        if station.custom {
-            "自定义"
+        "country" => value(&crate::territories::display_in(crate::messages::locale(), &station.countrycode, &station.country)),
+        "language" => value(&station.language),
+        "subdivision" => value(&station.state),
+        "bitrate" => bitrate(station),
+        "codec" => codec(station),
+        "hls" => if station.hls != 0 { crate::t!("value_yes") } else { crate::t!("value_no") },
+        "tags" => value(&station.tags),
+        "favorite" => if station.favorite { crate::t!("value_yes") } else { crate::t!("value_no") },
+        "catalog" => if station.custom {
+            crate::t!("station_custom")
         } else if station.active {
-            "有效"
+            crate::t!("station_active")
         } else {
-            "已失效"
+            crate::t!("station_inactive")
         },
-        station.stationuuid,
-        crate::clean_text(station.primary_url()),
-        if let Some(error) = view.backups_errors.get(&station.stationuuid) {
+        "uuid" => station.stationuuid,
+        "url" => crate::clean_text(station.primary_url()),
+        "backups" => if let Some(error) = view.backups_errors.get(&station.stationuuid) {
             crate::clean_text(error)
         } else {
             view.backups
@@ -936,15 +954,12 @@ pub(super) fn station_details(station: &Station, view: &View) -> String {
                 })
                 .unwrap_or_default()
         },
-        if current.is_some() {
-            format!(
-                "当前播放请求地址: {}\n",
-                crate::clean_text(&view.status.source_url)
-            )
+        "request" => if current.is_some() {
+            crate::t!("current_request_url", "url" => crate::clean_text(&view.status.source_url))
         } else {
             String::new()
         },
-        value(&station.homepage)
+        "homepage" => value(&station.homepage)
     )
 }
 
@@ -1010,14 +1025,14 @@ fn clear_popup(frame: &mut Frame, rect: Rect) {
 
 pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {
     match (source, focus) {
-        (_, Focus::Sources) => "j/k 分类 · Enter 进入列表",
+        (_, Focus::Sources) => crate::t!("context_sources"),
         (Source::Recordings, Focus::List) => {
-            "Enter 播放 · D 删除 · o 目录 · e 错误 · PgUp/PgDn 翻页"
+            crate::t!("context_recordings")
         }
-        (_, Focus::List) => "j/k 选择 · Enter 播放 · f 收藏 · gg/G 首尾 · PgUp/PgDn 翻页",
-        (_, Focus::Details) => "j/k / PgUp/PgDn 滚动详情",
-        (_, Focus::Player) => "Enter 当前电台详情 · Space 暂停 · r 录音 · +/- 音量 · :stop 停止",
-        (_, Focus::Activity) => "j/k 滚动消息 · :sync 同步 · :sync-cancel 取消",
+        (_, Focus::List) => crate::t!("context_stations"),
+        (_, Focus::Details) => crate::t!("context_details"),
+        (_, Focus::Player) => crate::t!("context_player"),
+        (_, Focus::Activity) => crate::t!("context_activity"),
     }
 }
 

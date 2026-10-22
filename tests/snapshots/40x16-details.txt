@@ -1,0 +1,16 @@
+╭ radio · 4 Player · Current station ──╮
+│Current Station · Playing             │
+│Song title                            │
+╰──────────────────────────────────────╯
+╭ 1 Sources ───────────────────────────╮
+│>All       Saved    Recent    Files   │
+╰──────────────────────────────────────╯
+┏ ▶ [2/3] Details · 2 back · j/k scroll┓
+┃Selected Station · Selected / inspecte┃
+┃d station                             ┃
+┃Country: France (FR)                  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+5 Catalog ready · Playing               
+ NORMAL · Details /  All countri…[Clear]
+j/k / PgUp/PgDn scroll details          
+1-5 panels · : · ? help · q quit        

@@ -31,11 +31,11 @@ impl Focus {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Sources => "来源",
-            Self::List => "列表",
-            Self::Details => "详情",
-            Self::Player => "播放器",
-            Self::Activity => "任务与消息",
+            Self::Sources => crate::t!("focus_sources"),
+            Self::List => crate::t!("focus_list"),
+            Self::Details => crate::t!("focus_details"),
+            Self::Player => crate::t!("focus_player"),
+            Self::Activity => crate::t!("focus_activity"),
         }
     }
 }
@@ -111,10 +111,10 @@ impl Source {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Stations => "全部电台",
-            Self::Favorites => "收藏电台",
-            Self::History => "最近播放",
-            Self::Recordings => "本地录音",
+            Self::Stations => crate::t!("source_stations"),
+            Self::Favorites => crate::t!("source_favorites"),
+            Self::History => crate::t!("source_history"),
+            Self::Recordings => crate::t!("source_recordings"),
         }
     }
 }
@@ -709,7 +709,7 @@ impl App {
         match sender.try_send(command) {
             Ok(()) => true,
             Err(error) => {
-                self.message = format!("无法提交操作，请稍后重试: {error}");
+                self.message = crate::t!("command_submit_failed", "detail" => error);
                 false
             }
         }
@@ -753,7 +753,7 @@ impl App {
         self.filter_edit = None;
         self.reset_selection();
         self.flush_search(sender);
-        self.message = "已清空筛选".into();
+        self.message = crate::t!("filters_cleared").into();
     }
     fn switch_source(
         &mut self,
@@ -857,7 +857,7 @@ impl App {
                 self.mode = Mode::Normal;
                 self.message.clear();
                 if let Err(error) = self.editor.remember() {
-                    self.message = format!("历史保存失败: {error}");
+                    self.message = crate::t!("history_save_failed", "detail" => error);
                 }
                 // A command supersedes any pending incremental search.
                 if self.search_due.is_some()
@@ -927,7 +927,7 @@ impl App {
                             self.focus = Focus::Activity;
                         }
                         if self.send(sender, command) {
-                            self.message = "命令已提交".into();
+                            self.message = crate::t!("command_submitted").into();
                         }
                     }
                 }
@@ -1165,7 +1165,7 @@ impl App {
                         self.reset_selection();
                         self.flush_search(sender);
                     }
-                    Err(_) => self.message = "最低码率必须为非负整数".into(),
+                    Err(_) => self.message = crate::t!("invalid_min_bitrate").into(),
                 },
                 _ => {
                     self.filter_input.key(key, false);
@@ -1214,19 +1214,19 @@ impl App {
                 }
                 if let crate::engine::PlaybackState::Failed { reason } = &view.status.playback_state
                 {
-                    errors.push(format!("播放失败\n{reason}"));
+                    errors.push(crate::t!("playback_failed", "reason" => reason));
                 }
                 if let crate::engine::RecordingState::Failed { reason } =
                     &view.status.recording_state
                 {
-                    errors.push(format!("录音失败\n{reason}"));
+                    errors.push(crate::t!("recording_failed_detail", "reason" => reason));
                 }
                 self.help_title = (!errors.is_empty()).then_some(crate::t!("error_details_title"));
                 if !errors.is_empty() && !self.message.is_empty() {
                     errors.push(self.message.clone());
                 }
                 self.help_content = (!errors.is_empty())
-                    .then(|| format!("{}\n\nEsc / ? 关闭；j/k 滚动。", errors.join("\n\n")));
+                    .then(|| crate::t!("error_details_body", "detail" => errors.join("\n\n")));
                 self.help = true;
                 self.help_scroll = 0;
             }
@@ -1383,7 +1383,7 @@ impl App {
                     })
                 };
                 if self.clipboard.is_some() {
-                    self.message = "已发送到终端剪贴板".into();
+                    self.message = crate::t!("clipboard_sent").into();
                 }
             }
             KeyCode::Char(' ') => {

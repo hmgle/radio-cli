@@ -1,24 +1,24 @@
-╭ radio · 4 播放器 · 当前电台 ─────────────────────────────────────────────────╮
-│Current Station · 播放中 · 80%                                                │
-│Song title · 录音待机                                                         │
+╭ radio · 4 Player · Current station ──────────────────────────────────────────╮
+│Current Station · Playing · 80%                                               │
+│Song title · Recording idle                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-╭ 1 来源 ──────────────────────────────────────────────────────────────────────╮
+╭ 1 Sources ───────────────────────────────────────────────────────────────────╮
 │>All                 Saved              Recent              Files             │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-┏ ▶ [2/3] 详情 · 2 返回 · j/k 滚动 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃Selected Station · 列表选中 / 指定电台                                        ┃
-┃国家/地区: 法国 (FR)                                                          ┃
-┃语言: french                                                                  ┃
-┃州/省/区域: 未知                                                              ┃
-┃码率: 96 kbps（目录）                                                         ┃
-┃编码: MP3（目录）                                                             ┃
-┃HLS: 否                                                                       ┃
-┃标签: 未知                                                                    ┃
-┃收藏: 否 · 目录: 有效                                                         ┃
+┏ ▶ [2/3] Details · 2 back · j/k scroll ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Selected Station · Selected / inspected station                               ┃
+┃Country: France (FR)                                                          ┃
+┃Language: french                                                              ┃
+┃State/province/area: Unknown                                                  ┃
+┃Bitrate: 96 kbps (catalog)                                                    ┃
+┃Codec: MP3 (catalog)                                                          ┃
+┃HLS: No                                                                       ┃
+┃Tags: Unknown                                                                 ┃
+┃Favorite: No · Catalog: Active                                                ┃
 ┃UUID: 00000000-0000-0000-0000-000000000000                                    ┃
-┃流地址:                                                                       ┃
+┃Stream URL:                                                                   ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-5 目录已就绪 · 播放中                                                           
- NORMAL · 详情 /  全部国家/地区 全部语言 全部标签 ≥0k                    [Clear]
-j/k / PgUp/PgDn 滚动详情                                                        
+5 Catalog ready · Playing                                                       
+ NORMAL · Details /  All countries All languages All tags ≥0k            [Clear]
+j/k / PgUp/PgDn scroll details                                                  
 Tab focus · 1-5 panels · [/] source · / search · : · ? help · q quit            

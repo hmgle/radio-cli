@@ -122,7 +122,7 @@ impl Engine {
             station: None,
             title: String::new(),
             message: if recovery_warnings.is_empty() {
-                "就绪".into()
+                crate::t!("status_ready").into()
             } else {
                 recovery_warnings.join("\n")
             },

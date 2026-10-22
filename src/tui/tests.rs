@@ -48,7 +48,7 @@ fn view() -> View {
     let mut data = View::new(Status {
         station: Some(playing),
         title: "Song title".into(),
-        message: "播放中".into(),
+        message: "Playing".into(),
         playback_state: crate::engine::PlaybackState::Playing,
         volume: 80,
         muted: false,
@@ -80,6 +80,15 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
     text
 }
 
+fn assert_no_cjk(rendered: &str) {
+    assert!(
+        !rendered
+            .chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+        "{rendered}"
+    );
+}
+
 #[test]
 fn station_details_localize_territory_codes_without_changing_catalog_values() {
     let data = view();
@@ -104,14 +113,17 @@ fn station_details_localize_territory_codes_without_changing_catalog_values() {
         row.countrycode = code.into();
         row.state = "Catalog subdivision".into();
         let details = render::station_details(&row, &data);
+        let chinese = crate::territories::display_in(crate::messages::Locale::ZhCn, code, original);
+        assert_eq!(chinese, expected);
+        let country = crate::territories::display_in(crate::messages::Locale::En, code, original);
         assert!(
-            details.contains(&format!("\n国家/地区: {expected}\n")),
+            details.contains(&format!("\nCountry: {country}\n")),
             "{code}: {details}"
         );
-        assert!(details.contains("\n州/省/区域: Catalog subdivision\n"));
+        assert!(details.contains("\nState/province/area: Catalog subdivision\n"));
         assert_eq!(
             keeps_upstream,
-            details.contains(original),
+            chinese.contains(original),
             "{code}: {details}"
         );
         let json = serde_json::to_value(&row).unwrap();
@@ -297,11 +309,18 @@ fn help_notice_follows_the_selected_locale() {
         (crate::messages::Locale::En, &english),
         (crate::messages::Locale::ZhCn, &chinese),
     ] {
-        assert!(text.starts_with(command::HELP), "{locale:?}");
+        assert!(
+            text.starts_with(crate::messages::text_in(locale, "tui_help")),
+            "{locale:?}"
+        );
         assert!(!text.contains("Unknown message"), "{locale:?}");
     }
     let with_binding = render::help_text(crate::messages::Locale::En, "''");
-    assert!(with_binding.contains("定位当前播放电台"), "{with_binding}");
+    assert!(
+        with_binding.contains("Locate the playing station"),
+        "{with_binding}"
+    );
+    assert_no_cjk(&with_binding);
     assert!(with_binding.starts_with(&english), "{with_binding}");
 }
 
@@ -321,7 +340,7 @@ fn territory_filter_displays_names_but_selects_original_codes() {
         .unwrap();
     let rendered = text(&terminal);
     assert!(rendered.contains(crate::t!("filter_country")));
-    assert!(rendered.contains("台湾 (TW) (3)"));
+    assert!(rendered.contains("TW (3)"));
     app.key(key(KeyCode::Down), &data, &sender);
     app.key(key(KeyCode::Enter), &data, &sender);
     assert_eq!(app.filter.country.as_deref(), Some("TW"));
@@ -560,8 +579,8 @@ fn context_hints_match_source_and_focus_actions() {
             assert!(!hint.is_empty());
             if focus == Focus::List {
                 let station_actions = source != Source::Recordings;
-                assert!(hint.contains("Enter 播放"));
-                assert_eq!(hint.contains("f 收藏"), station_actions);
+                assert!(hint.contains("Enter play"));
+                assert_eq!(hint.contains("f favorite"), station_actions);
                 app.focus = focus;
                 app.key(key(KeyCode::Enter), &data, &sender);
                 assert_eq!(
@@ -680,7 +699,7 @@ fn filter_popup_selects_local_candidates_with_the_keyboard() {
     terminal
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
-    assert!(text(&terminal).contains("法国 (FR) (3)"));
+    assert!(text(&terminal).contains("FR (3)"));
     app.key(key(KeyCode::Enter), &data, &sender);
     assert_eq!(app.filter.country.as_deref(), Some("FR"));
     assert!(
@@ -1023,7 +1042,7 @@ fn renderer_marks_focus_and_distinguishes_current_from_selected_station() {
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
     assert!(app.details_scroll < 4096);
-    assert!(text(&terminal).contains("当前播放请求地址:"));
+    assert!(text(&terminal).contains(crate::t!("current_request_url", "url" => "").trim()));
     let details = app.rects[Focus::Details.index()];
     let detail_text = (details.y + 1..details.bottom() - 1)
         .map(|y| {
@@ -1040,7 +1059,7 @@ fn renderer_marks_focus_and_distinguishes_current_from_selected_station() {
     terminal
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
-    assert!(text(&terminal).contains("关闭帮助"));
+    assert!(text(&terminal).contains("close help"));
     app.help = false;
     data.status.station.as_mut().unwrap().bitrate = 0;
     data.status.station.as_mut().unwrap().codec = "UNKNOWN".into();
@@ -1052,7 +1071,7 @@ fn renderer_marks_focus_and_distinguishes_current_from_selected_station() {
             .draw(|frame| render::draw(frame, &mut app, &data))
             .unwrap();
         if width >= 100 && height >= 20 {
-            assert!(text(&terminal).contains("码率未知"));
+            assert!(text(&terminal).contains(crate::t!("bitrate_unknown")));
         } else if width >= 40 && height >= 16 {
             assert!(text(&terminal).contains("Current Station"));
         }
@@ -1832,9 +1851,9 @@ fn recordings_keys_play_confirm_delete_open_and_expand_errors() {
 fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
     let mut data = view();
     // Keep fixtures independent of generated station identities and clock time.
-    data.catalog_note = "目录已就绪".into();
+    data.catalog_note = "Catalog ready".into();
     Arc::make_mut(&mut data.rows)[0].stationuuid = "00000000-0000-0000-0000-000000000000".into();
-    for (width, height) in [(80, 24), (100, 24), (160, 48)] {
+    for (width, height) in [(40, 16), (80, 24), (100, 24), (160, 48)] {
         for details in [false, true] {
             let mut app = App::default();
             if details {
@@ -1853,6 +1872,7 @@ fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
                 &data.rows[0].stationuuid,
                 "00000000-0000-0000-0000-000000000000",
             );
+            assert_no_cjk(&rendered);
             let name = format!(
                 "{}x{}-{}.txt",
                 width,
@@ -1881,6 +1901,56 @@ fn layout_snapshots_cover_standard_sizes_and_activity_expansion() {
         .draw(|frame| render::draw(frame, &mut app, &data))
         .unwrap();
     assert_eq!(app.rects[Focus::Activity.index()].height, 4);
+}
+
+#[test]
+fn english_panels_and_editors_use_consistent_interface_language() {
+    let mut data = view();
+    data.recordings = vec![
+        serde_json::from_value(serde_json::json!({
+            "id":"saved", "stationuuid":"s", "station_name":"Saved audio",
+            "source_url_resolved":"https://example.com", "started_at":"2026-01-01",
+            "stopped_at":null, "media_duration_ms":null, "codec":"mp3", "container":"mp3",
+            "path":"/tmp/sample", "size_bytes":1, "status":"failed", "error":"Disk error"
+        }))
+        .unwrap(),
+    ]
+    .into();
+    for (width, height) in [(40, 16), (80, 24), (160, 48)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        for source in Source::ALL {
+            for focus in Focus::ALL {
+                let mut app = App::default();
+                app.source = source;
+                app.focus = focus;
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                assert_no_cjk(&text(&terminal));
+            }
+        }
+        for mode in [Mode::Search, Mode::Command] {
+            let mut app = App::default();
+            app.mode = mode;
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert_no_cjk(&text(&terminal));
+        }
+        let mut app = App::default();
+        app.help = true;
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_no_cjk(&text(&terminal));
+        app.help = false;
+        app.filter_edit = Some((0, Default::default()));
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_no_cjk(&text(&terminal));
+    }
+    data.status.station = None;
+    data.status.title.clear();
+    data.status.muted = true;
+    for width in [40, 80, 160] {
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_no_cjk(&text(&terminal));
+    }
 }
 
 #[test]
@@ -1953,6 +2023,7 @@ fn every_media_stage_is_visible_and_failures_have_details() {
                 .draw(|frame| render::draw(frame, &mut app, &data))
                 .unwrap();
             let rendered = text(&terminal);
+            assert_no_cjk(&rendered);
             assert!(rendered.contains(playback.label()), "{rendered}");
             assert!(rendered.contains(recording.label()), "{rendered}");
         }
@@ -2301,7 +2372,7 @@ fn muted_state_is_visible_without_color() {
     app.theme = crate::config::Theme::Mono;
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
-    assert!(text(&terminal).contains("静音"));
+    assert!(text(&terminal).contains(crate::t!("player_muted")));
 }
 
 #[test]
@@ -2325,7 +2396,7 @@ fn narrow_details_focus_and_recording_random_match_the_visible_source() {
     assert_eq!(app.focus, Focus::List);
     app.source = Source::Recordings;
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
-    assert!(text(&terminal).contains("不使用电台筛选"));
+    assert!(text(&terminal).contains(crate::t!("recordings_no_filters")));
     assert_eq!(app.filter_summary.width, 0);
     app.key(key(KeyCode::Char('n')), &data, &tx);
     assert_eq!(app.source, Source::Stations);
@@ -2908,7 +2979,14 @@ fn minimum_layout_keeps_list_rows_names_and_task_navigation() {
             app.focus = Focus::Activity;
             terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
             assert!(app.rects[Focus::Activity.index()].height >= 5);
-            assert_eq!(app.rects[Focus::List.index()].height, 0);
+            assert_eq!(
+                app.rects[Focus::List.index()],
+                ratatui::layout::Rect::default()
+            );
+            assert_eq!(
+                app.rects[Focus::Details.index()],
+                ratatui::layout::Rect::default()
+            );
             app.focus = Focus::List;
             terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
             assert!(app.rects[Focus::List.index()].height >= 5);

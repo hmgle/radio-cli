@@ -380,53 +380,6 @@ pub(super) fn parse(
     Ok(parsed)
 }
 
-pub(super) const HELP: &str = "NORMAL 普通模式\n\
-Tab / Shift-Tab  切换面板     1–5  直达面板\n\
-Ctrl-h/j/k/l 或 Ctrl-方向键  按空间移动焦点\n\
-[ / ] 切换目录分类     j/k、方向键  导航/滚动\n\
-gg / G  首项/末项     Ctrl-u/d  移动十项\n\
-Enter  播放列表选中项（来源面板中进入列表）\n\
-Space 暂停  m 静音  n 随机  f 收藏选中项  r 录音  +/- 音量\n\
-y 复制 UUID/录音 ID · Y 复制 URL/文件路径（OSC 52）\n\
-/  搜索模式（Enter 确认，Esc 恢复原搜索）\n\
-F  筛选对话框（键入过滤 · ↑/↓ 候选 · Tab 字段）\n\
-筛选窗 Ctrl-U 清空搜索与筛选     F5 刷新     ?  帮助     q / Ctrl-C 退出\n\n\
-COMMAND 命令模式\n\
-: 输入命令；Enter 执行；Esc 返回普通模式；Ctrl-c 收尾并退出\n\
-Tab / Shift-Tab 补全；↑/↓ 历史；←/→ 编辑光标\n\
-Home / Ctrl-a 行首；End / Ctrl-e 行尾；Ctrl-u 清空\n\n\
-:sync [--accept-shrink]  后台同步目录（不停止播放）\n\
-:refresh                刷新当前列表\n\
-:sync-cancel            取消目录任务，保留旧目录\n\
-:search jazz --country FR --min-bitrate 128\n\
-:play [UUID|URL]        播放选中电台、指定 UUID 或直接试听流地址\n\
-:random [搜索筛选参数]   不传参数时沿用当前筛选\n\
-:info [UUID]            在详情面板查看电台\n\
-:current                查看当前播放电台完整详情\n\
-:favorites list|add|remove [UUID]\n\
-:history                最近播放\n\
-:recordings list        录音记录\n\
-录音列表: Enter 播放 · D 删除(y 确认) · o 打开目录 · e 展开错误\n\
-:recordings play ID / :recordings remove ID [--index-only]\n\
-:open recordings        打开录音目录\n\
-:station add '我的电台' https://example.com/live\n\
-:station list / :station edit UUID --name 名称 --url URL\n\
-:station remove UUID [--keep-references]  y 确认删除\n\
-:station backups UUID [--add URL] [--remove URL]\n\
-:record [UUID] [--duration 30m] [--output-dir 目录]\n\
-:record stop            收尾录音\n\
-:pause / :mute / :stop / :volume 70\n\
-:help record            查看 CLI 命令用法\n\
-:set language en|zh-CN  切换消息语言（静态面板仍为中文）\n\
-:set mouse true|false   鼠标捕获；false 可用终端选择文本\n\
-命令历史持久保存最近 100 条（数据目录 command-history.json）\n\
-:doctor                 检查音频依赖与目录权限\n\
-:focus sources|list|details|player|activity\n\
-:quit / :q              收尾并退出\n\n\
-命令只调用内置操作，不执行 shell。输入支持引号和中文。\n\
-码率/编码来自目录，可能滞后；实际音频由播放器处理。\n\
-Esc / ? 关闭帮助；j/k / PgUp/PgDn 滚动。";
-
 pub(super) fn completion_candidates(
     text: &str,
     stations: &[String],

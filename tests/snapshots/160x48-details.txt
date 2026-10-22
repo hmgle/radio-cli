@@ -1,22 +1,22 @@
-╭ radio · 4 播放器 · 当前电台 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│播放中 · Current Station · 音量 80%                                                                                                                           │
-│录音待机 · AAC · 192 kbps（目录）                                                                                                                             │
+╭ radio · 4 Player · Current station ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Playing · Current Station · Volume 80%                                                                                                                        │
+│Recording idle · AAC · 192 kbps (catalog)                                                                                                                     │
 │FR · french · Song title                                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭ 1 来源 ────────╮╭ 2 全部电台 · 2/0 项 · 页 1 ───────────────────────────────────────────────╮┏ ▶ 3 详情 · j/k 滚动 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-│› 全部电台      ││·    Selected Station                                      [FR] 96 kbps MP3│┃Selected Station · 列表选中 / 指定电台                         ┃
-│  收藏电台      ││     Another Station                                      [FR] 192 kbps AAC│┃国家/地区: 法国 (FR)                                           ┃
-│  最近播放      ││                                                                           │┃语言: french                                                   ┃
-│  本地录音      ││                                                                           │┃州/省/区域: 未知                                               ┃
-│                ││                                                                           │┃码率: 96 kbps（目录）                                          ┃
-│                ││                                                                           │┃编码: MP3（目录）                                              ┃
-│j/k 选择        ││                                                                           │┃HLS: 否                                                        ┃
-│Enter 进入      ││                                                                           │┃标签: 未知                                                     ┃
-│[ / ] 切分类    ││                                                                           │┃收藏: 否 · 目录: 有效                                          ┃
+╭ 1 Sources ─────╮╭ 2 All stations · 2/0 items · Page 1 ──────────────────────────────────────╮┏ ▶ 3 Details · j/k scroll ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│› All stations  ││·    Selected Station                                      [FR] 96 kbps MP3│┃Selected Station · Selected / inspected station                ┃
+│  Favorites     ││     Another Station                                      [FR] 192 kbps AAC│┃Country: France (FR)                                           ┃
+│  Recent plays  ││                                                                           │┃Language: french                                               ┃
+│  Recordings    ││                                                                           │┃State/province/area: Unknown                                   ┃
+│                ││                                                                           │┃Bitrate: 96 kbps (catalog)                                     ┃
+│                ││                                                                           │┃Codec: MP3 (catalog)                                           ┃
+│j/k select      ││                                                                           │┃HLS: No                                                        ┃
+│Enter open      ││                                                                           │┃Tags: Unknown                                                  ┃
+│[ / ] categories││                                                                           │┃Favorite: No · Catalog: Active                                 ┃
 │                ││                                                                           │┃UUID: 00000000-0000-0000-0000-000000000000                     ┃
-│                ││                                                                           │┃流地址:                                                        ┃
-│                ││                                                                           │┃备用地址:                                                      ┃
-│                ││                                                                           │┃官网: 未知                                                     ┃
+│                ││                                                                           │┃Stream URL:                                                    ┃
+│                ││                                                                           │┃Backup URLs:                                                   ┃
+│                ││                                                                           │┃Homepage: Unknown                                              ┃
 │                ││                                                                           │┃                                                               ┃
 │                ││                                                                           │┃                                                               ┃
 │                ││                                                                           │┃                                                               ┃
@@ -42,7 +42,7 @@
 │                ││                                                                           │┃                                                               ┃
 │                ││                                                                           │┃                                                               ┃
 ╰────────────────╯╰───────────────────────────────────────────────────────────────────────────╯┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-5 目录已就绪 · 播放中                                                                                                                                           
- NORMAL · 详情 /  全部国家/地区 全部语言 全部标签 ≥0k                                                                                                    [Clear]
-j/k / PgUp/PgDn 滚动详情                                                                                                                                        
+5 Catalog ready · Playing                                                                                                                                       
+ NORMAL · Details /  All countries All languages All tags ≥0k                                                                                            [Clear]
+j/k / PgUp/PgDn scroll details                                                                                                                                  
 Tab focus · 1-5 panels · [/] source · / search · : · ? help · q quit                                                                                            

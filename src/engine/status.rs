@@ -15,12 +15,12 @@ pub enum PlaybackState {
 impl PlaybackState {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Idle => "待机",
-            Self::Connecting => "连接中",
-            Self::Reconnecting { .. } => "重连中",
-            Self::Playing => "播放中",
-            Self::Paused => "暂停",
-            Self::Failed { .. } => "播放失败",
+            Self::Idle => crate::t!("state_playback_idle"),
+            Self::Connecting => crate::t!("state_playback_connecting"),
+            Self::Reconnecting { .. } => crate::t!("state_playback_reconnecting"),
+            Self::Playing => crate::t!("state_playback_playing"),
+            Self::Paused => crate::t!("state_playback_paused"),
+            Self::Failed { .. } => crate::t!("state_playback_failed"),
         }
     }
 }
@@ -40,12 +40,12 @@ pub enum RecordingState {
 impl RecordingState {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Idle => "录音待机",
-            Self::Probing => "检测编码",
-            Self::Recording => "正在录音",
-            Self::Finalizing => "录音收尾中",
-            Self::Done => "录音已保存",
-            Self::Failed { .. } => "录音失败",
+            Self::Idle => crate::t!("state_recording_idle"),
+            Self::Probing => crate::t!("state_recording_probing"),
+            Self::Recording => crate::t!("state_recording_recording"),
+            Self::Finalizing => crate::t!("state_recording_finalizing"),
+            Self::Done => crate::t!("state_recording_done"),
+            Self::Failed { .. } => crate::t!("state_recording_failed"),
         }
     }
 }

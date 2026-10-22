@@ -1,11 +1,11 @@
-╭ radio · 4 播放器 · 当前电台 ─────────────────────────────────────────────────╮
-│Current Station · 播放中 · 80%                                                │
-│Song title · 录音待机                                                         │
+╭ radio · 4 Player · Current station ──────────────────────────────────────────╮
+│Current Station · Playing · 80%                                               │
+│Song title · Recording idle                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-╭ 1 来源 ──────────────────────────────────────────────────────────────────────╮
+╭ 1 Sources ───────────────────────────────────────────────────────────────────╮
 │>All                 Saved              Recent              Files             │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-┏ ▶ [2/3] 列表 全部电台 · 2/0 项 · 页 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┏ ▶ [2/3] List All stations · 2/0 items · Page 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃›    Selected Station                                         [FR] 96 kbps MP3┃
 ┃     Another Station                                         [FR] 192 kbps AAC┃
 ┃                                                                              ┃
@@ -18,7 +18,7 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-5 目录已就绪 · 播放中                                                           
- NORMAL · 列表 /  全部国家/地区 全部语言 全部标签 ≥0k                    [Clear]
-j/k 选择 · Enter 播放 · f 收藏 · gg/G 首尾 · PgUp/PgDn 翻页                     
+5 Catalog ready · Playing                                                       
+ NORMAL · List /  All countries All languages All tags ≥0k               [Clear]
+j/k select · Enter play · f favorite · gg/G first/last · PgUp/PgDn page         
 Tab focus · 1-5 panels · [/] source · / search · : · ? help · q quit            

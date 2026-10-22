@@ -28,9 +28,11 @@ pub(crate) fn display_zh(code: &str) -> String {
 
 /// Localized label that keeps the upstream catalog name when the code is
 /// missing or absent from the CLDR table, so no catalog metadata is dropped.
-pub(crate) fn display_zh_or(code: &str, upstream: &str) -> String {
+pub(crate) fn display_in(locale: crate::messages::Locale, code: &str, upstream: &str) -> String {
     let code = code.trim().to_ascii_uppercase();
-    if let Some(name) = name_zh(&code) {
+    if locale == crate::messages::Locale::ZhCn
+        && let Some(name) = name_zh(&code)
+    {
         return format!("{name} ({code})");
     }
     let upstream = upstream.trim();

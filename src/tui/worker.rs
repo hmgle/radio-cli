@@ -116,7 +116,7 @@ impl View {
             rows: Default::default(),
             recordings: Default::default(),
             status,
-            catalog_note: "目录加载中…".into(),
+            catalog_note: crate::t!("catalog_loading").into(),
             task: String::new(),
             task_active: false,
             logs: Default::default(),
@@ -301,11 +301,11 @@ fn catalog_note(store: &Store, days: u16) -> Result<String> {
                     || chrono::Utc::now().signed_duration_since(time).num_days()
                         < i64::from(days) =>
             {
-                format!("目录同步: {time}")
+                crate::t!("catalog_synced", "time" => time)
             }
-            _ => "目录已过期；:sync 刷新".into(),
+            _ => crate::t!("catalog_stale").into(),
         },
-        None => "热门目录 · 尚未完整同步；:sync 获取全部电台".into(),
+        None => crate::t!("catalog_partial").into(),
     })
 }
 
