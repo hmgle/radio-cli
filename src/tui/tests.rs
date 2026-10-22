@@ -58,6 +58,11 @@ fn view() -> View {
         source_url: "https://example.com/backup".into(),
     });
     data.rows = vec![selected, station("Another Station")].into();
+    data.page = Some(worker::PageState {
+        generation: 0,
+        requested: data.filter.clone(),
+        phase: worker::PagePhase::Ready,
+    });
     data
 }
 fn text(terminal: &Terminal<TestBackend>) -> String {
@@ -372,6 +377,11 @@ fn selection_resume_restores_source_and_page_once_without_playback() {
     app.reconcile(&data); // Wait for the first query to finish.
     data.rows = engine.store.search(&app.filter).unwrap().into();
     data.rows_revision = 1;
+    data.page = Some(worker::PageState {
+        generation: 0,
+        requested: data.filter.clone(),
+        phase: worker::PagePhase::Ready,
+    });
     app.reconcile(&data);
     assert_eq!(app.selected(&data).unwrap().name, "Station 1");
     // The target can disappear between restoration and the first query.
@@ -2855,6 +2865,26 @@ fn corrected_page_is_adopted_only_for_the_current_request() {
     app.filter.query = "new search".into();
     app.reconcile(&data);
     assert_eq!(app.filter.query, "new search");
+}
+
+#[test]
+fn unqueried_page_shows_loading_and_disables_row_actions() {
+    let mut data = view();
+    data.page = None;
+    let mut app = App::default();
+    let (sender, receiver) = command::channel(10);
+    assert!(!data.page_ready(&app.filter));
+    assert!(app.selected(&data).is_none());
+    for code in [KeyCode::Enter, KeyCode::Char('f'), KeyCode::Char('y')] {
+        app.key(key(code), &data, &sender);
+    }
+    assert!(receiver.try_recv().is_err());
+    assert!(app.clipboard.is_none());
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains(crate::t!("page_loading")));
+    assert!(!text(&terminal).contains("Selected Station"));
+    assert!(!text(&terminal).contains(crate::t!("empty_stations")));
 }
 
 #[test]

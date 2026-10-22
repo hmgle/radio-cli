@@ -13,6 +13,11 @@ pub struct Store {
 }
 
 impl Store {
+    #[cfg(test)]
+    pub(crate) fn test_connection(&self) -> &Connection {
+        &self.conn
+    }
+
     pub(crate) fn open_reader(path: &Path) -> Result<Self> {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.busy_timeout(std::time::Duration::from_millis(100))?;

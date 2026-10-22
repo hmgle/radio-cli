@@ -18,7 +18,7 @@ use std::{
         mpsc::{self, Receiver},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone)]
@@ -35,6 +35,7 @@ pub(super) enum PagePhase {
 }
 #[derive(Clone)]
 pub(super) struct PageState {
+    // Diagnostic request identity; reader publication is guarded by Pending.
     pub generation: u64,
     pub requested: Filter,
     pub phase: PagePhase,
@@ -48,6 +49,9 @@ pub(super) struct View {
     queries: Option<query::Sender>,
     store_revision: Option<(u64, u64)>,
     refresh_requested: bool,
+    page_retry_at: Option<Instant>,
+    page_retry_attempt: u32,
+    page_failure: Option<(Filter, String)>,
     pub immediate_revision: u64,
     pub recordings_revision: u64,
     pub logs_revision: u64,
@@ -86,6 +90,9 @@ impl View {
             queries: None,
             store_revision: None,
             refresh_requested: false,
+            page_retry_at: None,
+            page_retry_attempt: 0,
+            page_failure: None,
             immediate_revision: 1,
             recordings_revision: 0,
             logs_revision: 0,
@@ -124,7 +131,7 @@ impl View {
             && self
                 .page
                 .as_ref()
-                .is_none_or(|p| p.phase == PagePhase::Ready)
+                .is_some_and(|p| p.phase == PagePhase::Ready)
     }
     pub fn page_error(&self, filter: &Filter) -> Option<&str> {
         self.page
@@ -139,13 +146,35 @@ impl View {
             })
     }
     fn fail_page(&mut self, filter: &Filter, error: String) {
+        if self.page_failure.as_ref().is_none_or(|(f, _)| f != filter) {
+            self.page_retry_attempt = 0;
+        }
+        let delay = Duration::from_millis((500_u64 << self.page_retry_attempt.min(6)).min(30_000));
+        self.page_retry_at = Some(Instant::now() + delay);
+        self.page_retry_attempt = self.page_retry_attempt.saturating_add(1);
+        // The retry deadline now owns this request, even if revision() failed.
+        self.refresh_requested = false;
         let generation = self.page.as_ref().map_or(0, |p| p.generation);
         self.page = Some(PageState {
             generation,
             requested: filter.clone(),
             phase: PagePhase::Error(error.clone()),
         });
-        self.log(&crate::t!("list_query_failed", "detail" => error));
+        if self
+            .page_failure
+            .as_ref()
+            .is_none_or(|(f, e)| f != filter || e != &error)
+        {
+            self.log(&crate::t!("list_query_failed", "detail" => error));
+        }
+        self.page_failure = Some((filter.clone(), error));
+        self.revision += 1;
+        self.immediate_revision += 1;
+    }
+    fn page_succeeded(&mut self) {
+        self.page_retry_at = None;
+        self.page_retry_attempt = 0;
+        self.page_failure = None;
     }
     pub fn snapshot(&mut self) -> Arc<Self> {
         if let Some((revision, view)) = &self.published
@@ -261,7 +290,6 @@ fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<
     let result = refresh_page(engine, filter, view);
     if let Err(error) = &result {
         let mut data = view.lock().unwrap();
-        data.refresh_requested = false;
         data.fail_page(filter, format!("{error:#}"));
     }
     result
@@ -276,6 +304,7 @@ fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Re
         if let Some(sender) = data.queries.clone() {
             data.store_revision = Some(store_revision);
             data.refresh_requested = false;
+            data.page_retry_at = None;
             let generation = sender.page(filter.clone(), store_revision, note);
             data.page = Some(PageState {
                 generation,
@@ -307,6 +336,7 @@ fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Re
     let mut data = view.lock().unwrap();
     data.store_revision = Some(store_revision);
     data.refresh_requested = false;
+    data.page_succeeded();
     data.catalog_note = note;
     data.filter = filter.clone();
     data.page = Some(PageState {
@@ -320,7 +350,10 @@ fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Re
 }
 
 fn request_refresh(view: &Arc<Mutex<View>>) {
-    view.lock().unwrap().refresh_requested = true;
+    let mut data = view.lock().unwrap();
+    data.refresh_requested = true;
+    data.page_retry_at = None;
+    data.page_retry_attempt = 0;
 }
 
 pub(super) fn refresh_if_needed(
@@ -329,19 +362,27 @@ pub(super) fn refresh_if_needed(
     view: &Arc<Mutex<View>>,
     recording_ended: bool,
 ) -> Result<()> {
+    let data = view.lock().unwrap();
+    if !data.refresh_requested
+        && !recording_ended
+        && data.page_retry_at.is_some_and(|at| Instant::now() < at)
+    {
+        return Ok(());
+    }
+    drop(data);
     let revision = match engine.store.revision() {
         Ok(revision) => revision,
         Err(error) => {
             let mut data = view.lock().unwrap();
-            if data.refresh_requested || data.page_error(filter).is_none() {
-                data.refresh_requested = false;
-                data.fail_page(filter, format!("{error:#}"));
-            }
+            data.fail_page(filter, format!("{error:#}"));
             return Ok(());
         }
     };
     let data = view.lock().unwrap();
-    let needed = data.refresh_requested || data.store_revision != Some(revision) || recording_ended;
+    let needed = data.refresh_requested
+        || data.store_revision != Some(revision)
+        || recording_ended
+        || data.page_retry_at.is_some_and(|at| Instant::now() >= at);
     drop(data);
     if needed {
         let _ = refresh(engine, filter, view);

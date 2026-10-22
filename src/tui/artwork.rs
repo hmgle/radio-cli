@@ -274,6 +274,11 @@ mod tests {
             ..Station::default()
         }]);
         view.total = 1;
+        view.page = Some(super::super::worker::PageState {
+            generation: 0,
+            requested: view.filter.clone(),
+            phase: super::super::worker::PagePhase::Ready,
+        });
         (dir, config, App::default(), view)
     }
 

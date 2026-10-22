@@ -268,13 +268,9 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                             phase: PagePhase::Ready,
                         });
                         data.catalog_note = page.note;
+                        data.page_succeeded();
                     }
                     Err(error) => {
-                        data.page = Some(PageState {
-                            generation,
-                            requested: page.filter.clone(),
-                            phase: PagePhase::Loading,
-                        });
                         data.fail_page(&page.filter, format!("{error:#}"));
                     }
                 }
@@ -621,6 +617,126 @@ mod tests {
         let data = view.lock().unwrap();
         assert!(data.page_ready(&filter));
         assert!(data.logs.is_empty());
+    }
+
+    #[test]
+    fn owner_revision_failure_retries_the_pending_request_without_a_store_change() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+        config.prepare().unwrap();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let mut filter = Filter {
+            limit: 100,
+            ..Filter::default()
+        };
+        worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+        let mut job = None;
+        for command in [
+            Command::Search(Filter {
+                query: "needle".into(),
+                ..filter.clone()
+            }),
+            Command::Recordings(filter.clone()),
+            Command::Refresh,
+        ] {
+            worker::execute(command, &mut engine, &mut filter, &mut job, &view).unwrap();
+            let revision = engine.store.revision().unwrap();
+            engine
+                .store
+                .test_connection()
+                .authorizer(Some(|context: AuthContext<'_>| {
+                    if matches!(
+                        context.action,
+                        AuthAction::Pragma {
+                            pragma_name: "data_version",
+                            ..
+                        }
+                    ) {
+                        Authorization::Deny
+                    } else {
+                        Authorization::Allow
+                    }
+                }));
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            assert!(view.lock().unwrap().page_error(&filter).is_some());
+            engine
+                .store
+                .test_connection()
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+            assert_eq!(engine.store.revision().unwrap(), revision);
+            let logs = view.lock().unwrap().logs.len();
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            assert_eq!(view.lock().unwrap().logs.len(), logs);
+            assert!(view.lock().unwrap().page_error(&filter).is_some());
+            view.lock().unwrap().page_retry_at = Some(Instant::now());
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            let data = view.lock().unwrap();
+            assert!(data.page_ready(&filter));
+            assert!(data.page_retry_at.is_none());
+        }
+    }
+
+    #[test]
+    fn reader_failure_retries_with_backoff_and_deduplicates_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
+        config.prepare().unwrap();
+        let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let path = dir.path().join("radio.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO recordings(id,status,json) VALUES ('broken','complete','bad')",
+            [],
+        )
+        .unwrap();
+        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let worker = Worker::start(&path, &view).unwrap();
+        view.lock().unwrap().queries = Some(worker.sender.clone());
+        let filter = Filter {
+            recordings: true,
+            limit: 100,
+            ..Filter::default()
+        };
+        worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+        wait(&view, |v| v.page_error(&filter).is_some());
+        for attempt in 1..=8 {
+            let data = view.lock().unwrap();
+            assert_eq!(data.page_retry_attempt, attempt);
+            let remaining = data
+                .page_retry_at
+                .unwrap()
+                .saturating_duration_since(Instant::now());
+            assert!(remaining <= Duration::from_secs(30));
+            let revision = data.revision;
+            drop(data);
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            assert_eq!(
+                view.lock().unwrap().revision,
+                revision,
+                "retried before its deadline"
+            );
+            view.lock().unwrap().page_retry_at = Some(Instant::now());
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            wait(&view, |v| {
+                v.page_error(&filter).is_some() && v.page_retry_attempt > attempt
+            });
+            assert_eq!(view.lock().unwrap().logs.len(), 1);
+        }
+        // Acknowledge the repair's revision first, so only the retry deadline
+        // can trigger recovery rather than detection of an external commit.
+        let before = engine.store.revision().unwrap();
+        conn.execute("DELETE FROM recordings", []).unwrap();
+        let after = engine.store.revision().unwrap();
+        view.lock().unwrap().store_revision = Some(after);
+        assert_ne!(before, after);
+        view.lock().unwrap().page_retry_at = Some(Instant::now());
+        worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+        wait(&view, |v| v.page_ready(&filter));
+        let data = view.lock().unwrap();
+        assert!(data.page_retry_at.is_none());
+        assert_eq!(data.page_retry_attempt, 0);
     }
 
     #[test]
