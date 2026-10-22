@@ -92,12 +92,22 @@ fn fit_clean(text: &str, width: usize) -> String {
 }
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
-    draw_content(frame, app, view);
+    let image = draw_content(frame, app, view);
     let theme = app.theme;
     if theme == crate::config::Theme::Default {
         return;
     }
-    for cell in &mut frame.buffer_mut().content {
+    let width = usize::from(frame.area().width);
+    for (index, cell) in frame.buffer_mut().content.iter_mut().enumerate() {
+        // Artwork colors are picture data, not interface colors.
+        if let Some(image) = image
+            && image.contains(ratatui::layout::Position::new(
+                (index % width) as u16,
+                (index / width) as u16,
+            ))
+        {
+            continue;
+        }
         if theme == crate::config::Theme::Mono {
             cell.fg = Color::Reset;
             cell.bg = Color::Reset;
@@ -212,7 +222,9 @@ fn station_row(station: &Station, current: bool, width: u16) -> String {
     )
 }
 
-fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
+/// Returns the area covered by artwork, if any was painted.
+fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
+    let mut painted = None;
     let area = frame.area();
     app.source_rows = [Rect::default(); 4];
     app.filter_summary = Rect::default();
@@ -224,7 +236,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             ),
             area,
         );
-        return;
+        return None;
     }
     let layout = screen_layout(area, app.focus, view.task_active);
     app.set_rects(layout.rects);
@@ -568,7 +580,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             text_rect,
         );
         if let Some((image, rect)) = image {
-            super::artwork::render(frame, &image, rect);
+            painted = Some(super::artwork::render(frame, &image, rect));
         }
     }
     let task = if view.task.is_empty() {
@@ -875,6 +887,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) {
             Rect::new(inner.x, inner.bottom().saturating_sub(3), inner.width, 3),
         );
     }
+    painted
 }
 
 fn empty_hint(app: &App) -> &'static str {

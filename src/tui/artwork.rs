@@ -78,7 +78,8 @@ pub(super) fn area(app: &App, view: &View, screen: Rect) -> Option<Rect> {
     })
 }
 
-pub(super) fn render(frame: &mut Frame, image: &Protocol, rect: Rect) {
+/// Draws the image centered in `rect` and returns the cells it covers.
+pub(super) fn render(frame: &mut Frame, image: &Protocol, rect: Rect) -> Rect {
     let size = image.area().as_size();
     let width = size.width.min(rect.width);
     let height = size.height.min(rect.height);
@@ -101,6 +102,7 @@ pub(super) fn render(frame: &mut Frame, image: &Protocol, rect: Rect) {
             }
         }
     }
+    rect
 }
 
 fn target(app: &App, view: &View, screen: Rect) -> Option<Target> {
@@ -343,6 +345,41 @@ mod tests {
     }
 
     #[test]
+    fn light_theme_keeps_artwork_colors_and_recolors_the_interface() {
+        use ratatui::style::Color;
+        let (_dir, _, mut app, view) = fixture();
+        let screen = Rect::new(0, 0, 160, 60);
+        draw(&mut app, &view, 160, 60);
+        app.artwork.target = target(&app, &view, screen);
+        let color = Color::Rgb(210, 20, 50);
+        app.artwork.protocol = Some(Arc::new(
+            Picker::halfblocks()
+                .new_protocol(
+                    ::image::DynamicImage::ImageRgb8(::image::RgbImage::from_pixel(
+                        40,
+                        40,
+                        ::image::Rgb([210, 20, 50]),
+                    )),
+                    SIZE.into(),
+                    Resize::Fit(None),
+                )
+                .unwrap(),
+        ));
+        app.theme = Theme::Light;
+        let terminal = draw(&mut app, &view, 160, 60);
+        let buffer = terminal.backend().buffer();
+        let rect = area(&app, &view, screen).unwrap();
+        let image: Vec<_> = (rect.y..rect.bottom())
+            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+            .filter(|&(x, y)| buffer[(x, y)].fg == color)
+            .collect();
+        assert!(!image.is_empty());
+        assert!(image.iter().all(|&p| buffer[p].bg == color));
+        let player = app.rects[Focus::Player.index()];
+        assert_eq!(buffer[(player.x, player.y)].bg, Color::White);
+    }
+
+    #[test]
     fn images_use_remaining_details_space_without_moving_text() {
         let (_dir, _, mut app, view) = fixture();
         let screen = Rect::new(0, 0, 160, 60);
@@ -391,7 +428,9 @@ mod tests {
                 .unwrap();
             let mut terminal = Terminal::new(TestBackend::new(40, 18)).unwrap();
             terminal
-                .draw(|frame| super::render(frame, &protocol, bounds))
+                .draw(|frame| {
+                    super::render(frame, &protocol, bounds);
+                })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let colored: Vec<_> = (0..18)
@@ -444,7 +483,9 @@ mod tests {
                 )
                 .unwrap();
                 terminal
-                    .draw(|frame| super::render(frame, &protocol, Rect::new(0, 0, 12, 6)))
+                    .draw(|frame| {
+                        super::render(frame, &protocol, Rect::new(0, 0, 12, 6));
+                    })
                     .unwrap();
                 terminal
                     .draw(|frame| {
@@ -455,7 +496,9 @@ mod tests {
                     })
                     .unwrap();
                 terminal
-                    .draw(|frame| super::render(frame, &protocol, Rect::new(0, 0, 12, 6)))
+                    .draw(|frame| {
+                        super::render(frame, &protocol, Rect::new(0, 0, 12, 6));
+                    })
                     .unwrap();
             }
             let text = String::from_utf8_lossy(&bytes);
