@@ -72,6 +72,9 @@ be started manually with `workflow_dispatch`: select the existing `vX.Y.Z` tag
 as the workflow ref. Both publishing workflows reject branch refs and tags
 that do not exactly match the version in `Cargo.toml`.
 
+If a rerun reports that the crate version already exists, treat that as evidence
+the previous upload succeeded; do not bump the version to recover.
+
 The npm distribution is four packages that share the crate version:
 `@hmgle/radio-cli` holds the launcher, and `@hmgle/radio-cli-linux-x64`,
 `@hmgle/radio-cli-darwin-x64`, and `@hmgle/radio-cli-darwin-arm64` hold the
