@@ -21,4 +21,4 @@
 5 Catalog ready · Playing                                                       
  NORMAL · List /  All countries All languages All tags ≥0k               [Clear]
 j/k select · Enter play · f favorite · gg/G first/last · PgUp/PgDn page         
-Tab focus · 1-5 panels · [/] source · / search · : · ? help · q quit            
+Tab focus · 1-5 panels · [/] source · / search · F filters · : · ? help · q quit
