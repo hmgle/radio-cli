@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.3 — 2026-10-23
 
 - Keep TUI shortcut key highlighting consistent in filter and confirmation
   dialogs and command/search hints, and clarify the English panel and search
@@ -11,6 +11,8 @@
   allow npm release jobs to skip versions uploaded before a partial failure.
 - Anchor crate package inputs to the repository root so npm templates and
   generated packages stay out of the crates.io archive.
+- Check the resolved crate package list in CI and before crates.io upload, and
+  document how to interpret a duplicate-version result when rerunning.
 
 ## 0.8.2 — 2026-10-23
 
