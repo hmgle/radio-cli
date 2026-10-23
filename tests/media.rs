@@ -1010,7 +1010,11 @@ fn live_stream_reconnects_across_outages_without_duplicate_history() {
     let station = sample(&server.url);
     engine.store.upsert(&station).unwrap();
     engine.play(&station.stationuuid).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Two recoveries span the four-second fixture, the ten-second refusal
+    // window and the 1/3/7-second reconnect backoff, so the fast-machine
+    // timeline already approaches thirty seconds; the slowest CI runner
+    // shares the suite's parallelism and needs the extra headroom.
+    let deadline = Instant::now() + Duration::from_secs(45);
     let mut first_played = false;
     let mut reconnecting = false;
     let mut recoveries = 0;
@@ -1121,8 +1125,10 @@ fn engine_uses_explicit_backup_without_merging_names() {
         .add_backup(&station.stationuuid, &server.url)
         .unwrap();
     engine.play(&station.stationuuid).unwrap();
-    // Allow startup of both the failing primary and the backup player.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Allow startup of both the failing primary and the backup player. Two
+    // real mpv startups share the media suite's parallelism, and the slowest
+    // CI runner needs far more than the fast-machine baseline of two seconds.
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !engine.status.playing() && Instant::now() < deadline {
         engine.tick().unwrap();
         thread::sleep(Duration::from_millis(20));
@@ -1133,10 +1139,11 @@ fn engine_uses_explicit_backup_without_merging_names() {
     assert!(engine.status.recording());
     // Finalizing before FFmpeg captured any audio would correctly be
     // reported as a failed recording; wait until the partial file holds a
-    // real audio track so the stop always finalizes a verifiable file.
+    // real audio track so the stop always finalizes a verifiable file. The
+    // capture shares the suite's parallelism on the slowest CI runner.
     let partial = PathBuf::from(&engine.status.recording_path);
     let wait_stop = Arc::new(AtomicBool::new(false));
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let captured = recorder::probe(&engine.config, &partial.to_string_lossy(), &wait_stop)
             .ok()
