@@ -13,4 +13,4 @@
 5 Catalog ready · Playing               
  NORMAL · List /  All countries …[Clear]
 j/k select · Enter play · f favorite · g
-1-5 panel · : cmd · ? help · q quit     
+1-5 panels · : · ? help · q quit        

@@ -912,8 +912,7 @@ fn bottom_shortcuts_highlight_keys_and_disambiguate_source_keys() {
         .unwrap();
     let rendered = text(&terminal);
     assert!(rendered.contains("j/k select"));
-    assert!(rendered.contains("[ / ] src"));
-    assert!(!rendered.contains("[/] source"));
+    assert!(rendered.contains("[ / ] source"));
     assert!(!rendered.contains('`'));
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(0, 22)].fg, Color::LightBlue);
@@ -941,6 +940,155 @@ fn bottom_shortcuts_highlight_keys_and_disambiguate_source_keys() {
     assert_eq!(mono, rendered);
     for cell in &terminal.backend().buffer().content {
         assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+    }
+}
+
+fn assert_shortcut_color(
+    terminal: &Terminal<TestBackend>,
+    rect: ratatui::layout::Rect,
+    key: &str,
+    color: Color,
+) {
+    let buffer = terminal.backend().buffer();
+    let chars: Vec<_> = key.chars().map(|c| c.to_string()).collect();
+    let mut found = false;
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right().saturating_sub(chars.len() as u16) {
+            if (x == rect.x || matches!(buffer[(x - 1, y)].symbol(), " " | "│" | "┃"))
+                && chars
+                    .iter()
+                    .enumerate()
+                    .all(|(i, c)| buffer[(x + i as u16, y)].symbol() == c)
+                && buffer[(x + chars.len() as u16, y)].symbol() == " "
+            {
+                found = true;
+                for i in 0..chars.len() as u16 {
+                    assert_eq!(buffer[(x + i, y)].fg, color, "{key} at {x},{y}");
+                }
+            }
+        }
+    }
+    assert!(found, "missing {key}: {}", text(terminal));
+}
+
+#[test]
+fn localized_shortcut_rows_fit_their_terminal_widths() {
+    use crate::messages::{Locale, text_in};
+    use unicode_width::UnicodeWidthStr;
+    for locale in [Locale::En, Locale::ZhCn] {
+        for (key, width) in [
+            ("keys_compact", 40),
+            ("keys_global", 80),
+            ("keys_recordings", 80),
+        ] {
+            let text = text_in(locale, key).replace('`', "");
+            assert!(text.width() <= width, "{locale:?} {key}: {text}");
+        }
+    }
+}
+
+#[test]
+fn shortcut_styles_cover_compact_recordings_and_source_hints_in_each_theme() {
+    use crate::config::Theme;
+    let data = view();
+    for (theme, color) in [
+        (Theme::Default, Color::LightBlue),
+        (Theme::Light, Color::Blue),
+        (Theme::Mono, Color::Reset),
+    ] {
+        for width in [60, 80, 100] {
+            let mut app = App::default();
+            app.theme = theme;
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+            let bottom = ratatui::layout::Rect::new(0, 23, width, 1);
+            for source in [Source::Stations, Source::Recordings] {
+                app.source = source;
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                assert_shortcut_color(
+                    &terminal,
+                    bottom,
+                    if width < 80 { "1-5" } else { "Tab/1-5" },
+                    color,
+                );
+                assert_shortcut_color(&terminal, bottom, ":", color);
+                assert_shortcut_color(&terminal, bottom, "q", color);
+                if width >= 80 {
+                    assert_shortcut_color(&terminal, bottom, "[", color);
+                    assert_shortcut_color(&terminal, bottom, "]", color);
+                }
+                if width >= 100 {
+                    for key in ["j/k", "Enter", "[", "]"] {
+                        assert_shortcut_color(
+                            &terminal,
+                            app.rects[Focus::Sources.index()],
+                            key,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn modal_and_editor_shortcuts_share_the_theme_key_style() {
+    use crate::config::Theme;
+    let data = view();
+    let (sender, _receiver) = command::channel(16);
+    for (theme, color) in [
+        (Theme::Default, Color::LightBlue),
+        (Theme::Light, Color::Blue),
+        (Theme::Mono, Color::Reset),
+    ] {
+        for width in [60, 100] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+            let popup = ratatui::layout::Rect::new(0, 0, width, 21);
+            let bottom = ratatui::layout::Rect::new(0, 23, width, 1);
+            let mut app = App::default();
+            app.theme = theme;
+            app.key(key(KeyCode::Char('F')), &data, &sender);
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            for key in ["Tab", "Enter", "Esc"] {
+                assert_shortcut_color(&terminal, popup, key, color);
+                assert_shortcut_color(&terminal, bottom, key, color);
+            }
+            assert_shortcut_color(&terminal, popup, "Ctrl-U", color);
+            app.key(key(KeyCode::Esc), &data, &sender);
+            for code in [':', '/'] {
+                app.key(key(KeyCode::Char(code)), &data, &sender);
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                let hint = ratatui::layout::Rect::new(0, 22, width, 2);
+                assert_shortcut_color(&terminal, hint, "Enter", color);
+                assert_shortcut_color(&terminal, hint, "Esc", color);
+                // Diagnostic text is ordinary text, even when it names a key.
+                app.message = "Enter failed".into();
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                let expected = if theme == Theme::Default {
+                    Color::Yellow
+                } else if theme == Theme::Light {
+                    Color::Magenta
+                } else {
+                    Color::Reset
+                };
+                assert_shortcut_color(&terminal, hint, "Enter", expected);
+                app.message.clear();
+                app.key(key(KeyCode::Esc), &data, &sender);
+            }
+            app.key(key(KeyCode::Char('?')), &data, &sender);
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert_shortcut_color(&terminal, bottom, "Esc/?/q", color);
+            app.key(key(KeyCode::Esc), &data, &sender);
+            app.key(key(KeyCode::Char(':')), &data, &sender);
+            app.editor
+                .set(&format!("station remove {}", data.rows[0].stationuuid));
+            app.key(key(KeyCode::Enter), &data, &sender);
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            for key in ["y", "Enter/n/Esc/q"] {
+                assert_shortcut_color(&terminal, popup, key, color);
+                assert_shortcut_color(&terminal, bottom, key, color);
+            }
+        }
     }
 }
 

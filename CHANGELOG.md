@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Keep TUI shortcut key highlighting consistent in filter and confirmation
+  dialogs and command/search hints, and clarify the English panel and search
+  labels. Show the alternative detail-scrolling keys with a slash separator.
+
 ## 0.8.2 — 2026-10-23
 
 - Highlight literal keys in the TUI's bottom shortcut hints and make the

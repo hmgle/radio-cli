@@ -688,16 +688,17 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         );
         frame.set_cursor_position((input.x + cursor_start + cursor, input.y));
         let hint = if app.message.is_empty() {
-            if app.mode == Mode::Command {
+            let text = if app.mode == Mode::Command {
                 crate::t!("command_keys")
             } else {
                 crate::t!("search_keys")
-            }
+            };
+            shortcut_line(text, app.theme)
         } else {
-            &app.message
+            Line::raw(super::display::diagnostic(&app.message))
         };
         frame.render_widget(
-            Paragraph::new(super::display::diagnostic(hint))
+            Paragraph::new(hint)
                 .style(style(app.theme, Role::Warning))
                 .wrap(Wrap { trim: true }),
             Rect::new(bottom.x, bottom.y + 1, bottom.width, 2),
@@ -860,18 +861,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             })
             .chain(if rect.width >= 60 {
                 vec![
-                    Line::from(format!(
-                        "{} · {}",
-                        crate::t!("filter_keys_edit"),
-                        crate::t!("filter_keys_apply")
-                    )),
-                    Line::from(crate::t!("filter_keys_clear")),
+                    shortcut_line(
+                        &format!(
+                            "{} · {}",
+                            crate::t!("filter_keys_edit"),
+                            crate::t!("filter_keys_apply")
+                        ),
+                        app.theme,
+                    ),
+                    shortcut_line(crate::t!("filter_keys_clear"), app.theme),
                 ]
             } else {
                 vec![
-                    Line::from(crate::t!("filter_keys_edit")),
-                    Line::from(crate::t!("filter_keys_apply")),
-                    Line::from(crate::t!("filter_keys_clear")),
+                    shortcut_line(crate::t!("filter_keys_edit"), app.theme),
+                    shortcut_line(crate::t!("filter_keys_apply"), app.theme),
+                    shortcut_line(crate::t!("filter_keys_clear"), app.theme),
                 ]
             })
             .chain(
@@ -983,7 +987,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             ),
         );
         frame.render_widget(
-            Paragraph::new(crate::t!("confirm_keys")).wrap(Wrap { trim: true }),
+            Paragraph::new(shortcut_line(crate::t!("confirm_keys"), app.theme))
+                .wrap(Wrap { trim: true }),
             Rect::new(inner.x, inner.bottom().saturating_sub(3), inner.width, 3),
         );
     }
