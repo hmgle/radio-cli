@@ -17,6 +17,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Keep npm artifacts out of the packaged crate
+        run: |
+          set -euo pipefail
+          package_list=$(cargo package --list --locked --allow-dirty)
+          if grep -q '^npm/' <<<"$package_list"; then
+            echo 'crate package list unexpectedly contains npm files' >&2
+            exit 1
+          fi
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg mpv
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
