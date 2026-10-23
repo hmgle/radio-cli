@@ -12,7 +12,75 @@ use std::{
 fn radio(dir: &std::path::Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_radio"));
     c.arg("--data-dir").arg(dir);
+    // Isolate from the developer's real config file. Without an explicit
+    // --config the binary reads the platform default location, so a personal
+    // language or playback setting would leak into every test. Config::load
+    // rejects a --config path that does not exist, and /dev/null is an
+    // always-present empty file on every supported platform.
+    c.arg("--config").arg("/dev/null");
     c
+}
+
+fn radio_with(dir: &std::path::Path, config: &std::path::Path) -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_radio"));
+    c.arg("--data-dir").arg(dir).arg("--config").arg(config);
+    c
+}
+
+#[test]
+fn cli_tests_ignore_the_developer_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    // Plant a configuration where each supported platform looks for the
+    // default config.toml. Reading it switches the CLI to Chinese, which is
+    // what a developer machine with a personal config would otherwise do.
+    for relative in [
+        std::path::Path::new("radio-cli"),
+        std::path::Path::new("Library/Application Support/radio-cli"),
+    ] {
+        let path = dir.path().join(relative);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("config.toml"), "language = \"zh-CN\"\n").unwrap();
+    }
+    fn duplicate_error(url: &str, build: impl Fn() -> Command) -> String {
+        let added = build()
+            .args(["station", "add", "Planted", url])
+            .output()
+            .unwrap();
+        assert!(
+            added.status.success(),
+            "{}",
+            String::from_utf8_lossy(&added.stderr)
+        );
+        let duplicate = build()
+            .args(["station", "add", "Planted", url])
+            .output()
+            .unwrap();
+        assert!(!duplicate.status.success());
+        String::from_utf8_lossy(&duplicate.stderr).into_owned()
+    }
+    // Without an explicit --config the planted configuration is read, so the
+    // duplicate-station error arrives in Chinese.
+    let leaked = duplicate_error("https://example.com/leaked", || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_radio"));
+        command.arg("--data-dir").arg(dir.path());
+        command
+            .env("XDG_CONFIG_HOME", dir.path())
+            .env("HOME", dir.path());
+        command
+    });
+    assert!(leaked.contains("疑似已存在"), "{leaked}");
+    // The helper pins an explicit --config, so the same error stays in English
+    // even with the planted configuration present.
+    let isolated = duplicate_error("https://example.com/isolated", || {
+        let mut command = radio(dir.path());
+        command
+            .env_remove("RADIO_LANG")
+            .env("LC_ALL", "C")
+            .env("XDG_CONFIG_HOME", dir.path())
+            .env("HOME", dir.path());
+        command
+    });
+    assert!(isolated.contains("already exists"), "{isolated}");
 }
 
 #[test]
@@ -85,9 +153,7 @@ fn recordings_open_creates_the_directory_and_passes_it_to_the_platform_opener() 
     .unwrap();
     fs::set_permissions(&opener, fs::Permissions::from_mode(0o700)).unwrap();
     let log = dir.path().join("open.log");
-    let output = radio(&dir.path().join("data"))
-        .arg("--config")
-        .arg(&config)
+    let output = radio_with(&dir.path().join("data"), &config)
         .args(["recordings", "open"])
         .env("PATH", &bin)
         .env("RADIO_TEST_OPEN_LOG", &log)
@@ -191,9 +257,7 @@ fn playback_device_failure_preserves_the_json_error_code() {
         .unwrap(),
     )
     .unwrap();
-    let output = radio(dir.path())
-        .arg("--config")
-        .arg(&config)
+    let output = radio_with(dir.path(), &config)
         .args(["--json-v2", "play", "https://example.com/live"])
         .output()
         .unwrap();
@@ -214,9 +278,7 @@ fn devices_lists_the_configured_mpv_outputs_in_text_and_json() {
     )
     .unwrap();
     for flag in ["--json", "--json-v2"] {
-        let output = radio(dir.path())
-            .arg("--config")
-            .arg(&config)
+        let output = radio_with(dir.path(), &config)
             .args([flag, "devices"])
             .output()
             .unwrap();
@@ -235,9 +297,7 @@ fn devices_lists_the_configured_mpv_outputs_in_text_and_json() {
         assert_eq!(devices[0]["name"], "auto");
         assert_eq!(devices[1]["description"], "Test headphones");
     }
-    let output = radio(dir.path())
-        .arg("--config")
-        .arg(&config)
+    let output = radio_with(dir.path(), &config)
         .arg("devices")
         .output()
         .unwrap();
@@ -251,9 +311,7 @@ fn bad_config_is_reported_without_panicking() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("bad.toml");
     fs::write(&config, "volume = 200\n").unwrap();
-    let output = radio(dir.path())
-        .arg("--config")
-        .arg(&config)
+    let output = radio_with(dir.path(), &config)
         .arg("doctor")
         .output()
         .unwrap();
@@ -326,9 +384,7 @@ fn cli_language_precedence_and_unknown_locale_notice() {
             "Station not found",
         ),
     ] {
-        let result = radio(dir.path())
-            .arg("--config")
-            .arg(&config)
+        let result = radio_with(dir.path(), &config)
             .args(args)
             .args(["info", &uuid::Uuid::new_v4().to_string()])
             .env("RADIO_LANG", radio_lang)
@@ -880,9 +936,7 @@ fn json_v2_is_atomic_preserves_legacy_and_has_stable_exit_codes() {
     let missing_config = dir.path().join("missing-player.toml");
     fs::write(&missing_config, "mpv = '/does/not/exist'\n").unwrap();
     let dependency = read_json(
-        radio(dir.path())
-            .arg("--config")
-            .arg(missing_config)
+        radio_with(dir.path(), &missing_config)
             .args([
                 "--json-v2",
                 "play",
@@ -984,9 +1038,7 @@ fn doctor_missing_dependencies_return_one_error_envelope_with_exit_three() {
         "mpv='/missing/mpv'\nffmpeg='/missing/ffmpeg'\nffprobe='/missing/ffprobe'\n",
     )
     .unwrap();
-    let output = radio(dir.path())
-        .arg("--config")
-        .arg(config)
+    let output = radio_with(dir.path(), &config)
         .args(["--json-v2", "doctor"])
         .output()
         .unwrap();
@@ -1066,11 +1118,9 @@ fn help_about_uses_the_language_before_clap_exits() {
         (vec!["--help", "--lang", "en"], "Lightweight terminal radio"),
         (vec!["--help"], "轻量终端收音机"),
     ] {
-        let output = radio(dir.path())
+        let output = radio_with(dir.path(), &config)
             .env("RADIO_LANG", "")
             .env("LC_ALL", "C")
-            .arg("--config")
-            .arg(&config)
             .args(args)
             .output()
             .unwrap();
@@ -1094,9 +1144,7 @@ fn doctor_space_detail_follows_the_cli_language() {
     )
     .unwrap();
     for (language, expected) in [("en", "bytes available"), ("zh-CN", "可用")] {
-        let output = radio(dir.path())
-            .arg("--config")
-            .arg(&config)
+        let output = radio_with(dir.path(), &config)
             .args(["--lang", language, "--json", "doctor"])
             .output()
             .unwrap();
@@ -1133,9 +1181,7 @@ fn play_and_random_progress_follow_the_cli_language() {
         ("zh-CN", "播放失败:", "Playback failed:"),
     ] {
         for command in [vec!["play", station.stationuuid.as_str()], vec!["random"]] {
-            let output = radio(dir.path())
-                .arg("--config")
-                .arg(&config)
+            let output = radio_with(dir.path(), &config)
                 .args(["--lang", language])
                 .args(command)
                 .output()
