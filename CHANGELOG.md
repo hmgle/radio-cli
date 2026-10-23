@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.2 — 2026-10-23
+
+- Highlight literal keys in the TUI's bottom shortcut hints and make the
+  separate `[` and `]` source-switching keys visually distinct from the slash
+  separator.
+- Move detailed installation instructions into paired English and Chinese
+  guides and keep the README quick start short.
+
 ## 0.8.1 — 2026-10-23
 
 - Distribute the binary through npm as `@hmgle/radio-cli`, with per-platform
