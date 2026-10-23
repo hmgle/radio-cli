@@ -87,6 +87,12 @@ jobs:
       # attestation tied to the real build.
       - name: Publish the platform package to npm
         run: npm publish "npm/dist/@hmgle/radio-cli-${{ matrix.platform }}" --provenance
+        env:
+          # setup-node writes a literal ${NODE_AUTH_TOKEN} placeholder into
+          # .npmrc, which npm expands from this variable at publish time. The
+          # secret is temporary: it stays empty once trusted publishing is
+          # configured, and the OIDC flow ignores it.
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
 
   wrapper:
     name: Publish the wrapper package
@@ -104,3 +110,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: scripts/package-npm.sh --wrapper
       - run: npm publish npm/dist/@hmgle/radio-cli --provenance
+        env:
+          # See the platform job: setup-node writes a ${NODE_AUTH_TOKEN}
+          # placeholder that npm expands from this variable.
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
