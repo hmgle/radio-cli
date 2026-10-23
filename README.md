@@ -33,7 +33,8 @@ Native Windows is not supported because the code uses Unix APIs.
 [Watch the 90-second demo on asciinema](https://asciinema.org/a/1269102).
 It shows the Chinese UI browsing a synced catalog, filtering by `CN`, searching,
 playing, saving favorites, locating the playing station, and recording a short
-clip. The recording is silent.
+clip. The recording is silent and shows an earlier interface; shortcut hints
+have since been updated.
 
 ## Quick start
 
