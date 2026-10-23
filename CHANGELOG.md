@@ -7,6 +7,10 @@
   labels. Show the alternative detail-scrolling keys with a slash separator.
 - Handle both string and array registry responses when skipping an already
   published npm version, and report unexpected lookup responses explicitly.
+- Require matching version tags for manual crates.io and npm publishing;
+  allow npm release jobs to skip versions uploaded before a partial failure.
+- Anchor crate package inputs to the repository root so npm templates and
+  generated packages stay out of the crates.io archive.
 
 ## 0.8.2 — 2026-10-23
 
