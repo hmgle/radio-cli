@@ -10,6 +10,9 @@ streams as stream copies.
 npm install -g @hmgle/radio-cli
 ```
 
+Requires Node.js 18 or newer. Prebuilt binaries are available for Linux x64,
+macOS Intel x64, and macOS Apple Silicon arm64.
+
 This installs the prebuilt `radio` binary for your platform. Playback and
 recording still need `mpv`, `ffmpeg`, and `ffprobe` installed separately:
 
