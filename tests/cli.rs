@@ -64,6 +64,7 @@ fn cli_tests_ignore_the_developer_configuration() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_radio"));
         command.arg("--data-dir").arg(dir.path());
         command
+            .env_remove("RADIO_LANG")
             .env("XDG_CONFIG_HOME", dir.path())
             .env("HOME", dir.path());
         command
