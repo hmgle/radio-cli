@@ -20,8 +20,18 @@ if npm view "$package_spec" version --json --prefer-online >"$lookup_dir/result"
     node -e '
         const fs = require("node:fs");
         const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-        const version = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-        if (version !== pkg.version) process.exit(1);
+        try {
+            const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+            const versions = Array.isArray(value) ? value : [value];
+            if (versions.length !== 1 || versions[0] !== pkg.version) {
+                throw new Error("expected exactly one matching version");
+            }
+        } catch (error) {
+            const spec = pkg.name + "@" + pkg.version;
+            process.stderr.write("Unexpected registry response for " + spec +
+                ": " + error.message + "\n");
+            process.exit(1);
+        }
     ' "$package_dir/package.json" "$lookup_dir/result"
     printf 'Already published %s; skipping.\n' "$package_spec"
 else

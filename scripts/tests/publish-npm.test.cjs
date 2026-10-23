@@ -42,12 +42,18 @@ process.exit(99);
   return { result, commands, packageDir };
 }
 
-test('an existing exact version is skipped', (t) => {
-  const { result, commands } = publish(t, '"1.2.3"');
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Already published @hmgle\/radio-cli@1\.2\.3/);
-  assert.equal(commands.length, 1);
-});
+// Preserve both response shapes observed in real exact-version lookups.
+for (const [format, response] of [
+  ['array', '[\n  "1.2.3"\n]\n'], // npm 12.2.1
+  ['string', '"1.2.3"\n'], // npm 11.13.0
+]) {
+  test(`an existing exact version is skipped with the ${format} response`, (t) => {
+    const { result, commands } = publish(t, response);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Already published @hmgle\/radio-cli@1\.2\.3/);
+    assert.equal(commands.length, 1);
+  });
+}
 
 test('a missing version is published with provenance', (t) => {
   const { result, commands, packageDir } = publish(t, '{"error":{"code":"E404"}}', 1);
@@ -65,11 +71,18 @@ test('registry errors never trigger an upload', (t) => {
 });
 
 test('unexpected lookup responses fail closed', (t) => {
-  for (const response of ['', 'not JSON', '[]', 'null', '"1.2.4"']) {
+  for (const response of [
+    '', 'not JSON', '[]', 'null', '"1.2.4"', '["1.2.4"]',
+    '["1.2.3", "1.2.4"]', '["1.2.3", "1.2.3"]',
+    '[["1.2.3"]]', '{"version":"1.2.3"}',
+  ]) {
     for (const status of [0, 1]) {
       const { result, commands } = publish(t, response, status);
       assert.notEqual(result.status, 0);
       assert.equal(commands.length, 1);
+      if (status === 0) {
+        assert.match(result.stderr, /Unexpected registry response for @hmgle\/radio-cli@1\.2\.3:/);
+      }
     }
   }
 });

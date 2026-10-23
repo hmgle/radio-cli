@@ -5,6 +5,8 @@
 - Keep TUI shortcut key highlighting consistent in filter and confirmation
   dialogs and command/search hints, and clarify the English panel and search
   labels. Show the alternative detail-scrolling keys with a slash separator.
+- Handle both string and array registry responses when skipping an already
+  published npm version, and report unexpected lookup responses explicitly.
 
 ## 0.8.2 — 2026-10-23
 
