@@ -12,15 +12,15 @@ categories = ["command-line-utilities", "multimedia"]
 # Keep internal design notes, packaging scripts, and test fixtures out of the
 # published crate; only build inputs and user-facing files are packaged.
 include = [
-    "Cargo.lock",
-    "Cargo.toml",
-    "CHANGELOG.md",
-    "LICENSE",
-    "README.md",
-    "README.zh-CN.md",
-    "config.example.toml",
-    "locales/**/*",
-    "src/**/*",
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/README.md",
+    "/README.zh-CN.md",
+    "/config.example.toml",
+    "/locales/**/*",
+    "/src/**/*",
 ]
 
 [[bin]]
