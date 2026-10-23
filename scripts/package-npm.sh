@@ -11,7 +11,7 @@
 # crate always agree.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -1)
 test -n "$version" || {
