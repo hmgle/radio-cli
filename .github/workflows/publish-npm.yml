@@ -38,6 +38,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - name: Check that the release tag matches the crate version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          test "$GITHUB_REF_TYPE" = tag || {
+            echo "Publishing requires a version tag; select vX.Y.Z when running manually." >&2
+            exit 1
+          }
+          version=$(cargo metadata --no-deps --locked --format-version 1 | jq -er '.packages[] | select(.name == "radio-cli") | .version')
+          test "$TAG_NAME" = "v$version" || {
+            echo "Release tag $TAG_NAME does not match crate version $version." >&2
+            exit 1
+          }
       # Trusted publishing needs npm 11.5.1 or newer; Node 24 ships one.
       - uses: actions/setup-node@v4
         with:
@@ -54,16 +67,6 @@ jobs:
             brew install ffmpeg-full mpv gnu-tar
             echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
           fi
-      - name: Check that the release tag matches the crate version
-        if: github.event_name == 'release'
-        env:
-          TAG_NAME: ${{ github.event.release.tag_name }}
-        run: |
-          version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -1)
-          test "${TAG_NAME#v}" = "$version" || {
-            echo "Release tag $TAG_NAME does not match crate version $version." >&2
-            exit 1
-          }
       - run: scripts/package-release.sh "${{ matrix.target }}"
       - run: scripts/package-npm.sh "${{ matrix.target }}"
       - name: Verify an isolated install of the packed packages

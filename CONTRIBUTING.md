@@ -68,8 +68,9 @@ required reviewers.
 
 Uploads to crates.io are permanent: a published version cannot be replaced or
 deleted, so confirm the tag and version before publishing. The workflow can also
-be started manually with `workflow_dispatch` to publish the version currently in
-`Cargo.toml`; a failed or interrupted upload can simply be run again.
+be started manually with `workflow_dispatch`: select the existing `vX.Y.Z` tag
+as the workflow ref. Both publishing workflows reject branch refs and tags
+that do not exactly match the version in `Cargo.toml`.
 
 The npm distribution is four packages that share the crate version:
 `@hmgle/radio-cli` holds the launcher, and `@hmgle/radio-cli-linux-x64`,
