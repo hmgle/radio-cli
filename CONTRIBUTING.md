@@ -94,9 +94,12 @@ environment `release`, and `npm publish` allowed. A newly created publisher
 must complete its first successful verified publish within two days. npm may
 require interactive WebAuthn for publisher changes; configure them through the
 package settings page or `npm trust github <package> --file publish-npm.yml
---repo hmgle/radio-cli --env release --allow-publish`. GitHub only repeats jobs
-that did not succeed, so a platform job that failed after its upload can be
-re-run on its own.
+--repo hmgle/radio-cli --env release --allow-publish`. After a partial failure,
+use GitHub's **Re-run failed jobs** to retry only unfinished jobs. Re-running all
+jobs or manually dispatching the same version tag also works: the publish
+script checks the exact package version and skips an existing upload. Registry
+lookup failures other than a missing version, and publish failures, still fail
+the job. Trusted publishing uses OIDC without a `NODE_AUTH_TOKEN` secret.
 
 ## Tests
 
