@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Distribute the binary through npm as `@hmgle/radio-cli`, with per-platform
+  packages that carry the prebuilt binary, published from GitHub Actions with
+  trusted publishing and provenance. Install with `npm install -g
+  @hmgle/radio-cli`.
 - Publish the crate to crates.io from a GitHub Actions workflow through trusted
   publishing, so no long-lived API token is stored, and install the binary with
   `cargo install radio-cli --locked`.

@@ -3,6 +3,7 @@
 [![CI](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml)
 [![最新版本](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
 [![Crates.io](https://img.shields.io/crates/v/radio-cli.svg?logo=rust)](https://crates.io/crates/radio-cli)
+[![npm](https://img.shields.io/npm/v/@hmgle/radio-cli.svg?logo=npm)](https://www.npmjs.com/package/@hmgle/radio-cli)
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
 [![Linux 与 macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#环境要求)
 [![MIT 许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -92,6 +93,16 @@ cargo install radio-cli --locked
 
 `cargo install` 会从源码构建，因此需要 Rust 1.88 或更新版本的工具链，
 并把 `radio` 安装到 `~/.cargo/bin`。运行时仍需要 `mpv`、`ffmpeg` 和 `ffprobe`。
+
+### 从 npm 安装
+
+```sh
+npm install -g @hmgle/radio-cli
+```
+
+此方式安装对应平台的预编译 `radio` 二进制（Linux x86_64、macOS Intel 或
+Apple Silicon），需要 Node.js 18 或更新版本。运行时仍需要 `mpv`、`ffmpeg`
+和 `ffprobe`。
 
 ### 从源码构建
 

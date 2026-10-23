@@ -1,3 +1,4 @@
 /target/
 *.part
 docs/recording-investigation-*.md
+/npm/dist/

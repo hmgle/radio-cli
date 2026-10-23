@@ -71,6 +71,30 @@ deleted, so confirm the tag and version before publishing. The workflow can also
 be started manually with `workflow_dispatch` to publish the version currently in
 `Cargo.toml`; a failed or interrupted upload can simply be run again.
 
+The npm distribution is four packages that share the crate version:
+`@hmgle/radio-cli` holds the launcher, and `@hmgle/radio-cli-linux-x64`,
+`@hmgle/radio-cli-darwin-x64`, and `@hmgle/radio-cli-darwin-arm64` hold the
+prebuilt binaries as optional dependencies. `scripts/package-npm.sh <target>`
+stamps the versions from `Cargo.toml` and assembles `npm/dist/` from the binary
+that `scripts/package-release.sh` produced; `scripts/package-npm.sh --wrapper`
+assembles only the launcher package.
+
+Publishing the release also runs `.github/workflows/publish-npm.yml`. Each
+platform job builds and smoke-tests its binary, packs the npm packages, verifies
+an isolated install with `radio --version` and `radio doctor`, and publishes the
+platform package with `npm publish --provenance`; the wrapper package is
+published last, after every platform package succeeded. npm trusted publishing
+needs npm 11.5.1 or newer (the workflow pins Node 24) and one trusted publisher
+per package on npmjs.com. A package has to exist before a trusted publisher can
+be configured, so the first version of each of the four packages is published by
+hand with a granular access token. Afterwards configure each package under
+Settings → Trusted Publisher → GitHub Actions with organization or user `hmgle`,
+repository `radio-cli`, workflow filename `publish-npm.yml`, environment
+`release`, and `npm publish` allowed; `npm trust github <package> --file
+publish-npm.yml --repo hmgle/radio-cli --env release --allow-publish` does the
+same from the CLI. GitHub only repeats jobs that did not succeed, so a platform
+job that failed after its upload can be re-run on its own.
+
 ## Tests
 
 - Tests use local HTTP/ICY/HLS sources and never depend on public radio

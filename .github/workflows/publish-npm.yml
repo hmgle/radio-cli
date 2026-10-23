@@ -1,0 +1,106 @@
+name: Publish npm packages
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+jobs:
+  package:
+    name: Package and publish ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            platform: linux-x64
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+    runs-on: ${{ matrix.runner }}
+    # The environment name has to match the trusted publisher configuration on
+    # npmjs.com. GitHub creates the environment on the first run if it does not
+    # exist; create it beforehand to add protection rules.
+    environment: release
+    permissions:
+      contents: read
+      # Required for the OpenID Connect token exchange with npm.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Trusted publishing needs npm 11.5.1 or newer; Node 24 ships one.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install build dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y musl-tools ffmpeg mpv
+          else
+            brew install ffmpeg-full mpv gnu-tar
+            echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Check that the release tag matches the crate version
+        if: github.event_name == 'release'
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -1)
+          test "${TAG_NAME#v}" = "$version" || {
+            echo "Release tag $TAG_NAME does not match crate version $version." >&2
+            exit 1
+          }
+      - run: scripts/package-release.sh "${{ matrix.target }}"
+      - run: scripts/package-npm.sh "${{ matrix.target }}"
+      - name: Verify an isolated install of the packed packages
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -1)
+          npm pack "npm/dist/@hmgle/radio-cli-${{ matrix.platform }}" --pack-destination "$work" >/dev/null
+          npm pack npm/dist/@hmgle/radio-cli --pack-destination "$work" >/dev/null
+          prefix="$work/prefix"
+          # The platform tarball satisfies the wrapper's optional dependency at
+          # the exact version, so the install never reaches the registry.
+          npm install --prefix "$prefix" --no-audit --no-fund \
+            "$work/hmgle-radio-cli-${{ matrix.platform }}-$version.tgz"
+          npm install --prefix "$prefix" --no-audit --no-fund \
+            "$work/hmgle-radio-cli-$version.tgz"
+          "$prefix/node_modules/.bin/radio" --version
+          : >"$work/radio.toml"
+          "$prefix/node_modules/.bin/radio" --data-dir "$work/data" --config "$work/radio.toml" doctor
+      # Publishing from the runner that built the binary keeps the provenance
+      # attestation tied to the real build.
+      - name: Publish the platform package to npm
+        run: npm publish "npm/dist/@hmgle/radio-cli-${{ matrix.platform }}" --provenance
+
+  wrapper:
+    name: Publish the wrapper package
+    needs: package
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: scripts/package-npm.sh --wrapper
+      - run: npm publish npm/dist/@hmgle/radio-cli --provenance

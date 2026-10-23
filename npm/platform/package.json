@@ -1,0 +1,31 @@
+{
+  "name": "@hmgle/radio-cli-__PLATFORM__",
+  "version": "__VERSION__",
+  "description": "Prebuilt radio binary for __PLATFORM__",
+  "license": "MIT",
+  "homepage": "https://github.com/hmgle/radio-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hmgle/radio-cli.git"
+  },
+  "os": [
+    "__OS__"
+  ],
+  "cpu": [
+    "__CPU__"
+  ],
+  "bin": {
+    "radio": "bin/radio"
+  },
+  "files": [
+    "bin/radio",
+    "README.md"
+  ],
+  "exports": {
+    "./bin/radio": "./bin/radio",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
