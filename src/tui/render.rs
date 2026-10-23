@@ -93,6 +93,55 @@ fn fit_clean(text: &str, width: usize) -> String {
     super::text::fit(text, width)
 }
 
+fn shortcut_line(text: &str, theme: crate::config::Theme) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, segment) in text.split(" · ").enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" · "));
+        }
+        if segment.contains('`') {
+            let mut current = String::new();
+            let mut marked = false;
+            for character in segment.chars() {
+                match character {
+                    '`' => {
+                        if marked {
+                            spans.push(Span::styled(
+                                std::mem::take(&mut current),
+                                style(theme, Role::Shortcut),
+                            ));
+                        } else if !current.is_empty() {
+                            spans.push(Span::raw(std::mem::take(&mut current)));
+                        }
+                        marked = !marked;
+                    }
+                    _ => current.push(character),
+                }
+            }
+            if !current.is_empty() {
+                spans.push(Span::raw(current));
+            }
+            continue;
+        }
+        match segment.split_once(' ') {
+            Some((shortcut, description)) => {
+                spans.push(Span::styled(
+                    shortcut.to_owned(),
+                    style(theme, Role::Shortcut),
+                ));
+                if !description.is_empty() {
+                    spans.push(Span::raw(format!(" {description}")));
+                }
+            }
+            None => spans.push(Span::styled(
+                segment.to_owned(),
+                style(theme, Role::Shortcut),
+            )),
+        }
+    }
+    Line::from(spans)
+}
+
 pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
     let area = frame.area();
     frame
@@ -353,8 +402,12 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             );
         }
         if inner.height > 6 {
+            let source_keys = crate::t!("sources_keys")
+                .split('\n')
+                .map(|line| shortcut_line(line, app.theme))
+                .collect::<Vec<_>>();
             frame.render_widget(
-                Paragraph::new(crate::t!("sources_keys")).style(style(app.theme, Role::Border)),
+                Paragraph::new(source_keys).style(style(app.theme, Role::Border)),
                 Rect::new(inner.x, inner.y + 6, inner.width, inner.height - 6),
             );
         }
@@ -714,12 +767,14 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         );
         let operation_failed = view.operation_error_id > app.dismissed_error;
         let wrap_notice = !operation_failed && !app.message.is_empty() && modal_keys.is_none();
+        let context_line = shortcut_line(context, app.theme);
         let message = if operation_failed {
-            crate::t!("operation_failed", "detail" => fit(&super::display::diagnostic(&view.operation_error), usize::from(bottom.width).saturating_sub(crate::t!("operation_failed", "detail" => "").width())).trim_end())
+            Line::raw(crate::t!("operation_failed", "detail" => fit(&super::display::diagnostic(&view.operation_error), usize::from(bottom.width).saturating_sub(crate::t!("operation_failed", "detail" => "").width())).trim_end())
+                .to_owned())
         } else if app.message.is_empty() {
-            context.into()
+            context_line
         } else {
-            super::display::diagnostic(&app.message)
+            Line::raw(super::display::diagnostic(&app.message))
         };
         let keys = if let Some(keys) = modal_keys {
             keys
@@ -739,10 +794,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         );
         // Long notices use the shortcut row too. Keep the mode/filter row fixed
         // and leave modal shortcuts visible when a dialog owns the keyboard.
+        let key_line = shortcut_line(&keys, app.theme);
         let body = if wrap_notice {
-            Paragraph::new(format!("{message}\n{keys}")).wrap(Wrap { trim: true })
+            Paragraph::new(vec![message, key_line]).wrap(Wrap { trim: true })
         } else {
-            Paragraph::new(vec![Line::from(message), Line::from(keys)])
+            Paragraph::new(vec![message, key_line])
         };
         frame.render_widget(
             body,

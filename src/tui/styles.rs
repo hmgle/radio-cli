@@ -12,6 +12,7 @@ pub(super) enum Role {
     Warning,
     Active,
     Error,
+    Shortcut,
 }
 
 pub(super) fn base(theme: Theme) -> Style {
@@ -34,6 +35,7 @@ pub(super) fn style(theme: Theme, role: Role) -> Style {
             Role::Warning => Style::default().fg(Color::Magenta),
             Role::Active => Style::default().fg(Color::Green),
             Role::Error => Style::default().fg(Color::Red),
+            Role::Shortcut => Style::default().fg(Color::Blue),
         };
     }
     match role {
@@ -44,6 +46,7 @@ pub(super) fn style(theme: Theme, role: Role) -> Style {
         Role::Warning => Style::default().fg(Color::Yellow),
         Role::Active => Style::default().fg(Color::Green),
         Role::Error => Style::default().fg(Color::Red),
+        Role::Shortcut => Style::default().fg(Color::LightBlue),
     }
 }
 
@@ -61,6 +64,7 @@ mod tests {
             Role::Warning,
             Role::Active,
             Role::Error,
+            Role::Shortcut,
         ] {
             let mono = style(Theme::Mono, role);
             assert_eq!(mono.fg, Some(Color::Reset));

@@ -902,6 +902,49 @@ fn context_hints_match_source_and_focus_actions() {
 }
 
 #[test]
+fn bottom_shortcuts_highlight_keys_and_disambiguate_source_keys() {
+    use crate::config::Theme;
+    let data = view();
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let rendered = text(&terminal);
+    assert!(rendered.contains("j/k select"));
+    assert!(rendered.contains("[ / ] src"));
+    assert!(!rendered.contains("[/] source"));
+    assert!(!rendered.contains('`'));
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(0, 22)].fg, Color::LightBlue);
+    assert_eq!(buffer[(4, 22)].fg, Color::Reset);
+    let source_keys = (1..80 - 5).find(|&x| {
+        buffer[(x - 1, 23)].symbol() == " "
+            && buffer[(x, 23)].symbol() == "["
+            && buffer[(x, 23)].fg == Color::LightBlue
+            && buffer[(x + 1, 23)].symbol() == " "
+            && buffer[(x + 2, 23)].symbol() == "/"
+            && buffer[(x + 2, 23)].fg == Color::Reset
+            && buffer[(x + 3, 23)].symbol() == " "
+            && buffer[(x + 4, 23)].symbol() == "]"
+            && buffer[(x + 4, 23)].fg == Color::LightBlue
+            && buffer[(x + 5, 23)].symbol() == " "
+            && buffer[(x + 5, 23)].fg == Color::Reset
+    });
+    assert!(source_keys.is_some(), "{rendered}");
+
+    app.theme = Theme::Mono;
+    terminal
+        .draw(|frame| render::draw(frame, &mut app, &data))
+        .unwrap();
+    let mono = text(&terminal);
+    assert_eq!(mono, rendered);
+    for cell in &terminal.backend().buffer().content {
+        assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+    }
+}
+
+#[test]
 fn station_removal_requires_a_second_confirmation_in_tui() {
     let data = view();
     let (sender, receiver) = command::channel(10);
@@ -5322,9 +5365,10 @@ fn long_notices_use_both_bottom_rows_without_losing_the_reason() {
                 crate::t!("keys_compact")
             } else {
                 crate::t!("keys_global")
-            };
+            }
+            .replace('`', "");
             let rendered = text(&terminal);
-            assert!(rendered.lines().last().unwrap().starts_with(keys));
+            assert!(rendered.lines().last().unwrap().starts_with(&keys));
             // Dismissing the notice restores the ordinary context row.
             app.message.clear();
             terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
@@ -5345,13 +5389,13 @@ fn bottom_bar_names_the_open_modal_instead_of_the_panel_behind_it() {
     let mut app = App::default();
     let normal = draw_text(&mut app);
     assert!(normal.contains(&format!(" {} · ", crate::t!("mode_normal"))));
-    assert!(normal.contains(crate::t!("keys_global")));
+    assert!(normal.contains(&crate::t!("keys_global").replace('`', "")));
     app.key(key(KeyCode::Char('?')), &data, &sender);
     let help = draw_text(&mut app);
     assert!(help.contains(&format!(" {} ", crate::t!("mode_help"))));
     assert!(help.contains(crate::t!("help_keys")));
     assert!(!help.contains(&format!(" {} · ", crate::t!("mode_normal"))));
-    assert!(!help.contains(crate::t!("keys_global")));
+    assert!(!help.contains(&crate::t!("keys_global").replace('`', "")));
     app.key(key(KeyCode::Esc), &data, &sender);
     app.key(key(KeyCode::Char('F')), &data, &sender);
     let filters = draw_text(&mut app);

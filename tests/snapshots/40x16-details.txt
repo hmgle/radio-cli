@@ -12,5 +12,5 @@
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 5 Catalog ready · Playing               
  NORMAL · Details /  All countri…[Clear]
-j/k / PgUp/PgDn scroll details          
-1-5 panels · : · ? help · q quit        
+j/k · PgUp/PgDn scroll details          
+1-5 panel · : cmd · ? help · q quit     
