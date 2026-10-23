@@ -86,14 +86,16 @@ platform package with `npm publish --provenance`; the wrapper package is
 published last, after every platform package succeeded. npm trusted publishing
 needs npm 11.5.1 or newer (the workflow pins Node 24) and one trusted publisher
 per package on npmjs.com. A package has to exist before a trusted publisher can
-be configured, so the first version of each of the four packages is published by
-hand with a granular access token. Afterwards configure each package under
-Settings → Trusted Publisher → GitHub Actions with organization or user `hmgle`,
-repository `radio-cli`, workflow filename `publish-npm.yml`, environment
-`release`, and `npm publish` allowed; `npm trust github <package> --file
-publish-npm.yml --repo hmgle/radio-cli --env release --allow-publish` does the
-same from the CLI. GitHub only repeats jobs that did not succeed, so a platform
-job that failed after its upload can be re-run on its own.
+be configured, so a brand-new package needs one manual publish; these four
+packages are already configured. Each publisher uses organization or user
+`hmgle`, repository `radio-cli`, workflow filename `publish-npm.yml`,
+environment `release`, and `npm publish` allowed. A newly created publisher
+must complete its first successful verified publish within two days. npm may
+require interactive WebAuthn for publisher changes; configure them through the
+package settings page or `npm trust github <package> --file publish-npm.yml
+--repo hmgle/radio-cli --env release --allow-publish`. GitHub only repeats jobs
+that did not succeed, so a platform job that failed after its upload can be
+re-run on its own.
 
 ## Tests
 
