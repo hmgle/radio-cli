@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 — 2026-10-23
 
 - Distribute the binary through npm as `@hmgle/radio-cli`, with per-platform
   packages that carry the prebuilt binary, published from GitHub Actions with
