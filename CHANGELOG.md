@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Publish the crate to crates.io from a GitHub Actions workflow through trusted
+  publishing, so no long-lived API token is stored, and install the binary with
+  `cargo install radio-cli --locked`.
+- Package only build inputs and user-facing files, keeping internal design
+  notes, packaging scripts, and test fixtures out of the published crate.
+
 ## 0.8.0 — 2026-10-22
 
 - Reorganize the public documentation into synchronized English and Chinese

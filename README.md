@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
+[![Crates.io](https://img.shields.io/crates/v/radio-cli.svg?logo=rust)](https://crates.io/crates/radio-cli)
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
 [![Linux and macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#requirements)
 [![MIT license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -18,7 +19,7 @@ records streams without re-encoding. No account or API key is required.
   `--json-v2` output.
 - Keep favorites, history, custom stations, settings, and recordings on your
   machine.
-- Play HTTP(S) streams directly or save custom stations with backup URLs.
+- Play any HTTP(S) stream URL, or save custom stations with backup URLs.
 - Record MP3, AAC, Vorbis, and Opus streams as stream copies with metadata.
 
 Linux is the primary platform. macOS supports the core CLI/TUI workflow.
@@ -66,27 +67,38 @@ a Rust toolchain.
 | macOS Apple Silicon | `aarch64-apple-darwin` | Experimental |
 | macOS Intel | `x86_64-apple-darwin` | Experimental |
 
-Download `SHA256SUMS` and the archive for your platform, then verify and extract
-it without hardcoding a release version:
+Download `SHA256SUMS` and the archive for your platform, then verify, extract,
+and run it from the download directory. Substitute your platform's target from
+the table above for `x86_64-unknown-linux-musl`; the `*` in the archive names
+matches the release version, so the same commands work for every release:
 
 ```sh
-target=x86_64-unknown-linux-musl   # or aarch64-apple-darwin / x86_64-apple-darwin
-archive=$(awk -v t="$target" '$2 ~ "-" t ".tar.gz$" {sub(/^\*/, "", $2); print $2; exit}' SHA256SUMS)
-test -n "$archive" || { echo "archive for $target not found in SHA256SUMS" >&2; exit 1; }
-grep -F -- "$archive" SHA256SUMS | sha256sum -c -
-tar -xzf "$archive"
-cd "${archive%.tar.gz}"
+# Verify the download against the published checksums.
+grep -F 'x86_64-unknown-linux-musl' SHA256SUMS | sha256sum -c -
+# On macOS: grep -F 'aarch64-apple-darwin' SHA256SUMS | shasum -a 256 -c -
+
+# Extract the archive and start radio.
+tar -xzf radio-cli-v*-x86_64-unknown-linux-musl.tar.gz
+cd radio-cli-v*-x86_64-unknown-linux-musl
 ./radio doctor
 ./radio sync
 ./radio tui
 ```
 
-On macOS, replace `sha256sum -c -` with `shasum -a 256 -c -`.
-
 The macOS packages are not Developer ID-signed or notarized. If Gatekeeper
 blocks a download you trust, verify its checksum first, then remove quarantine
 from the extracted binary with `xattr -d com.apple.quarantine ./radio`. See
 [Apple's guidance](https://support.apple.com/en-us/102445).
+
+### Install from crates.io
+
+```sh
+cargo install radio-cli --locked
+```
+
+`cargo install` builds from source, so it needs a Rust 1.88 or newer toolchain
+and installs the `radio` binary into `~/.cargo/bin`. `mpv`, `ffmpeg`, and
+`ffprobe` are still required at runtime.
 
 ### Build from source
 

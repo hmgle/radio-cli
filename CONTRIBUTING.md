@@ -13,8 +13,9 @@ requests are welcome.
   TUI design reference, and other design and validation notes are internal
   unless explicitly designated public.
 - Keep English and Chinese public docs structurally synchronized in the same
-  pull request. Do not hardcode release versions in install commands; derive
-  archive names from `SHA256SUMS` or link to the releases page.
+  pull request. Do not hardcode release versions in install commands; use a
+  wildcard for the version, derive archive names from `SHA256SUMS`, or link to
+  the releases page.
 - Keep pull requests focused. One logical change per PR is easiest to review.
 
 ## Local development
@@ -45,6 +46,30 @@ Each archive includes `BUILDINFO`, English completions and the manual. CI only
 assembles the `release-archives` artifact and combined `SHA256SUMS` after all
 test, MSRV, packaging and audit jobs pass; publishing a GitHub Release is a
 separate step.
+
+## Publishing a release
+
+Tag releases as `vX.Y.Z`; the tag has to match the `version` in `Cargo.toml`.
+For each release: move the `Unreleased` notes in `CHANGELOG.md` under the new
+version, bump `version`, commit, push the tag, and create the GitHub Release
+with the `release-archives` artifact. Publishing that release runs the
+`Publish to crates.io` workflow, which verifies the tag and runs
+`cargo publish --locked`.
+
+crates.io publishing uses trusted publishing, so the workflow needs no API token
+secret. The first version of a crate cannot use it: create a crates.io API token
+with the `publish-new` and `publish-update` scopes, run `cargo login`, and
+publish that version by hand. Afterwards configure the crate on crates.io under
+Settings → Trusted Publishing with repository owner `hmgle`, repository name
+`radio-cli`, workflow filename `publish-crates-io.yml`, and environment
+`release`. The workflow creates the `release` environment on its first run if it
+does not exist; create it beforehand only to add protection rules such as
+required reviewers.
+
+Uploads to crates.io are permanent: a published version cannot be replaced or
+deleted, so confirm the tag and version before publishing. The workflow can also
+be started manually with `workflow_dispatch` to publish the version currently in
+`Cargo.toml`; a failed or interrupted upload can simply be run again.
 
 ## Tests
 

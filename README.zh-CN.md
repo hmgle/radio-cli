@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hmgle/radio-cli/actions/workflows/ci.yml)
 [![最新版本](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
+[![Crates.io](https://img.shields.io/crates/v/radio-cli.svg?logo=rust)](https://crates.io/crates/radio-cli)
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
 [![Linux 与 macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#环境要求)
 [![MIT 许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -16,7 +17,7 @@ mpv 负责播放，FFmpeg 以流拷贝方式录音。无需账号或 API Key。
 - 使用键盘优先的 TUI，或用 CLI 编写脚本；支持兼容旧格式的 `--json` 和稳定的
   `--json-v2` 输出。
 - 收藏、历史、自定义电台、设置和录音都保存在本机。
-- 可直接试听 HTTP(S) 流，也可保存带备用地址的自定义电台。
+- 可播放任意 HTTP(S) 流地址，或保存带备用地址的自定义电台。
 - 以流拷贝方式录制 MP3、AAC、Vorbis 和 Opus，并生成元数据。
 
 Linux 是主要支持平台。macOS 支持核心 CLI/TUI 流程。代码依赖 Unix API，
@@ -61,26 +62,36 @@ brew install mpv ffmpeg
 | macOS Apple Silicon | `aarch64-apple-darwin` | 实验性 |
 | macOS Intel | `x86_64-apple-darwin` | 实验性 |
 
-下载 `SHA256SUMS` 和对应平台的归档后，按下面的方式校验并解压，无需写死版本号：
+下载 `SHA256SUMS` 和对应平台的归档，然后在下载目录中校验、解压并运行。
+把下面命令中的 `x86_64-unknown-linux-musl` 换成上表中你的平台目标；
+归档名里的 `*` 对应版本号，因此同一套命令适用于任何版本：
 
 ```sh
-target=x86_64-unknown-linux-musl   # 或 aarch64-apple-darwin / x86_64-apple-darwin
-archive=$(awk -v t="$target" '$2 ~ "-" t ".tar.gz$" {sub(/^\*/, "", $2); print $2; exit}' SHA256SUMS)
-test -n "$archive" || { echo "SHA256SUMS 中未找到 $target 的归档" >&2; exit 1; }
-grep -F -- "$archive" SHA256SUMS | sha256sum -c -
-tar -xzf "$archive"
-cd "${archive%.tar.gz}"
+# 校验下载文件与发布的校验和一致。
+grep -F 'x86_64-unknown-linux-musl' SHA256SUMS | sha256sum -c -
+# macOS 上：grep -F 'aarch64-apple-darwin' SHA256SUMS | shasum -a 256 -c -
+
+# 解压归档并启动 radio。
+tar -xzf radio-cli-v*-x86_64-unknown-linux-musl.tar.gz
+cd radio-cli-v*-x86_64-unknown-linux-musl
 ./radio doctor
 ./radio sync
 ./radio tui
 ```
 
-macOS 上请把 `sha256sum -c -` 换成 `shasum -a 256 -c -`。
-
 macOS 发行包未经 Developer ID 签名或公证。若 Gatekeeper 阻止运行你信任的下载文件，
 请先校验校验和，再对解压出的程序执行
 `xattr -d com.apple.quarantine ./radio`。另见
 [Apple 关于打开下载软件的说明](https://support.apple.com/en-us/102445)。
+
+### 从 crates.io 安装
+
+```sh
+cargo install radio-cli --locked
+```
+
+`cargo install` 会从源码构建，因此需要 Rust 1.88 或更新版本的工具链，
+并把 `radio` 安装到 `~/.cargo/bin`。运行时仍需要 `mpv`、`ffmpeg` 和 `ffprobe`。
 
 ### 从源码构建
 
