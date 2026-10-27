@@ -524,6 +524,10 @@ pub fn manage(
             action: ModelAction::List,
         } => model_list(config),
         Action::Models { action } => {
+            if matches!(action, ModelAction::Install { .. }) {
+                cancelled(stop)?;
+                ensure_runtime_platform()?;
+            }
             let id = match &action {
                 ModelAction::Install { id }
                 | ModelAction::Verify { id }
@@ -583,19 +587,52 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_runtime_checks_do_not_start_setup_or_mask_the_error() {
+    fn cancelled_runtime_checks_do_not_start_installation_or_mask_the_error() {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         let stop = std::sync::Arc::new(AtomicBool::new(true));
         for error in [
             runtime_check(&config, &stop).unwrap_err(),
             manage(&config, Action::Setup, &stop).unwrap_err(),
+            manage(
+                &config,
+                Action::Models {
+                    action: ModelAction::Install {
+                        id: "sensevoice-small-yue-int8".into(),
+                    },
+                },
+                &stop,
+            )
+            .unwrap_err(),
         ] {
             assert_eq!(
                 error.downcast_ref::<DomainError>().unwrap().code,
                 ErrorCode::Cancelled
             );
         }
+        assert!(!root(&config).exists());
+    }
+
+    #[test]
+    fn model_install_checks_platform_before_model_lookup_or_disk_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let expected = if ensure_runtime_platform().is_ok() {
+            ErrorCode::SubtitleModel
+        } else {
+            ErrorCode::SubtitlePlatform
+        };
+        let error = manage(
+            &config,
+            Action::Models {
+                action: ModelAction::Install {
+                    id: "unknown-model".into(),
+                },
+            },
+            &std::sync::Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert_eq!(error.downcast_ref::<DomainError>().unwrap().code, expected);
         assert!(!root(&config).exists());
     }
 
