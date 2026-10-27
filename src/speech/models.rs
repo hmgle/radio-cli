@@ -56,11 +56,24 @@ pub(super) fn manifest() -> Vec<Model> {
     serde_json::from_str(include_str!("models.json")).expect("embedded speech manifest")
 }
 
-pub(super) fn model(id: &str) -> Result<Model> {
-    manifest()
-        .into_iter()
-        .find(|m| m.id == id && id != "silero-vad")
-        .with_context(|| DomainError::new(ErrorCode::SubtitleModel).with("id", id))
+fn required_models(id: &str) -> Result<[Model; 2]> {
+    required_from(manifest(), id)
+}
+
+fn required_from(models: Vec<Model>, id: &str) -> Result<[Model; 2]> {
+    let mut selected = None;
+    let mut vad = None;
+    for model in models {
+        if model.id == "silero-vad" {
+            vad = Some(model);
+        } else if model.id == id {
+            selected = Some(model);
+        }
+    }
+    Ok([
+        selected.with_context(|| DomainError::new(ErrorCode::SubtitleModel).with("id", id))?,
+        vad.context("embedded speech manifest has no silero-vad")?,
+    ])
 }
 
 pub(super) fn root(config: &Config) -> PathBuf {
@@ -123,19 +136,26 @@ fn digest(path: &Path, stop: &AtomicBool) -> Result<String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn valid(path: &Path, file: &ModelFile, stop: &AtomicBool) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|s| s.is_file() && s.len() == file.size)
-        && digest(path, stop).is_ok_and(|hash| hash == file.sha256)
+fn present(path: &Path, file: &ModelFile) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(s) => Ok(s.is_file() && s.len() == file.size),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("cannot inspect {}", path.display())),
+    }
+}
+
+fn valid(path: &Path, file: &ModelFile, stop: &AtomicBool) -> Result<bool> {
+    cancelled(stop)?;
+    Ok(present(path, file)? && digest(path, stop)? == file.sha256)
 }
 
 pub(super) fn verify(config: &Config, id: &str, stop: &AtomicBool) -> Result<()> {
-    let selected = model(id)?;
-    for m in [selected, manifest().pop().unwrap()] {
+    for m in required_models(id)? {
         for file in &m.files {
             cancelled(stop)?;
             let path = model_dir(config, &m.id).join(&file.path);
             ensure!(
-                valid(&path, file, stop),
+                valid(&path, file, stop)?,
                 DomainError::new(ErrorCode::SubtitleIntegrity)
                     .with("id", id)
                     .with("path", path.display())
@@ -156,16 +176,13 @@ fn download(
         .enable_all()
         .build()?;
     let _enter = runtime.enter();
-    if valid(path, file, stop) {
+    if valid(path, file, stop)? {
         return Ok(());
     }
     fs::create_dir_all(path.parent().unwrap())?;
-    let partial = path.with_extension(format!(
-        "{}.part",
-        path.extension().unwrap_or_default().to_string_lossy()
-    ));
+    let partial = partial_path(path);
     let mut have = fs::metadata(&partial).map_or(0, |m| m.len());
-    if have == file.size && valid(&partial, file, stop) {
+    if have == file.size && valid(&partial, file, stop)? {
         fs::rename(partial, path)?;
         return Ok(());
     }
@@ -231,7 +248,7 @@ fn download(
     if have != file.size {
         bail!("model download truncated: {have}/{}", file.size);
     }
-    if !valid(&partial, file, stop) {
+    if !valid(&partial, file, stop)? {
         let _ = fs::remove_file(&partial);
         bail!(
             DomainError::new(ErrorCode::SubtitleIntegrity)
@@ -241,6 +258,30 @@ fn download(
     }
     fs::rename(partial, path)?;
     Ok(())
+}
+
+fn partial_path(path: &Path) -> PathBuf {
+    path.with_extension(format!(
+        "{}.part",
+        path.extension().unwrap_or_default().to_string_lossy()
+    ))
+}
+
+fn model_list(config: &Config) -> Result<serde_json::Value> {
+    let _lock = lock(config, false)?;
+    let mut rows = Vec::new();
+    for model in manifest().into_iter().filter(|m| m.id != "silero-vad") {
+        let mut bytes = 0;
+        let mut all_present = true;
+        for required in required_models(&model.id)? {
+            for file in &required.files {
+                bytes += file.size;
+                all_present &= present(&model_dir(config, &required.id).join(&file.path), file)?;
+            }
+        }
+        rows.push(serde_json::json!({"id":model.id,"bytes":bytes,"license":model.license,"license_url":model.license_url,"present":all_present}));
+    }
+    Ok(serde_json::json!(rows))
 }
 
 async fn network<T>(future: impl std::future::Future<Output = T>, stop: &AtomicBool) -> Result<T> {
@@ -280,8 +321,30 @@ pub fn manage(
                     eprintln!("{}", String::from_utf8_lossy(&bytes));
                     Ok(())
                 };
-                run(Command::new(&config.settings.subtitles.uv).args(["--no-config", "venv", "--python", "3.12", "--managed-python", "--clear"]).arg(runtime(config)))?;
-                run(Command::new(&config.settings.subtitles.uv).args(["--no-config", "pip", "sync", "--require-hashes", "--only-binary", ":all:", "--default-index", "https://pypi.org/simple/", "--python"]).arg(python(config)).arg(requirements))?;
+                run(Command::new(&config.settings.subtitles.uv)
+                    .args([
+                        "--no-config",
+                        "venv",
+                        "--python",
+                        "3.12",
+                        "--managed-python",
+                        "--clear",
+                    ])
+                    .arg(runtime(config)))?;
+                run(Command::new(&config.settings.subtitles.uv)
+                    .args([
+                        "--no-config",
+                        "pip",
+                        "sync",
+                        "--require-hashes",
+                        "--only-binary",
+                        ":all:",
+                        "--default-index",
+                        "https://pypi.org/simple/",
+                        "--python",
+                    ])
+                    .arg(python(config))
+                    .arg(requirements))?;
                 runtime_check(config, stop)?;
             }
             Ok(json!({"runtime":runtime(config),"ready":true}))
@@ -290,28 +353,48 @@ pub fn manage(
             let _lock = lock(config, false)?;
             runtime_check(config, stop)?;
             verify(config, &config.settings.subtitles.model, stop)?;
-            crate::process::output(Command::new(&config.settings.ffmpeg).arg("-version"), Duration::from_secs(5), stop)?;
-            Ok(json!({"ready":true,"runtime":runtime(config),"model":config.settings.subtitles.model}))
+            crate::process::output(
+                Command::new(&config.settings.ffmpeg).arg("-version"),
+                Duration::from_secs(5),
+                stop,
+            )?;
+            Ok(
+                json!({"ready":true,"runtime":runtime(config),"model":config.settings.subtitles.model}),
+            )
         }
-        Action::Models { action: ModelAction::List } => Ok(json!(manifest().into_iter().filter(|m| m.id != "silero-vad").map(|m| {
-            json!({"id":m.id,"bytes":m.files.iter().map(|f| f.size).sum::<u64>(),"license":m.license,"license_url":m.license_url,"present":m.files.iter().all(|f| fs::metadata(model_dir(config, &m.id).join(&f.path)).is_ok_and(|s| s.len() == f.size))})
-        }).collect::<Vec<_>>())),
+        Action::Models {
+            action: ModelAction::List,
+        } => model_list(config),
         Action::Models { action } => {
-            let id = match &action { ModelAction::Install{id} | ModelAction::Verify{id} | ModelAction::Remove{id} => id, ModelAction::List => unreachable!() };
-            let selected = model(id)?;
-            let _lock = lock(config, !matches!(action, ModelAction::Verify{..}))?;
+            let id = match &action {
+                ModelAction::Install { id }
+                | ModelAction::Verify { id }
+                | ModelAction::Remove { id } => id,
+                ModelAction::List => unreachable!(),
+            };
+            let required = required_models(id)?;
+            let _lock = lock(config, !matches!(action, ModelAction::Verify { .. }))?;
             match &action {
                 ModelAction::Install { .. } => {
-                    let client = reqwest::Client::builder().user_agent(crate::USER_AGENT).no_gzip().connect_timeout(Duration::from_secs(config.settings.connect_timeout_secs)).timeout(Duration::from_secs(1800)).build()?;
-                    for m in [selected, manifest().pop().unwrap()] {
-                        for f in &m.files { download(&client, &model_dir(config, &m.id).join(&f.path), f, stop)?; }
+                    let client = reqwest::Client::builder()
+                        .user_agent(crate::USER_AGENT)
+                        .no_gzip()
+                        .connect_timeout(Duration::from_secs(config.settings.connect_timeout_secs))
+                        .timeout(Duration::from_secs(1800))
+                        .build()?;
+                    for m in required {
+                        for f in &m.files {
+                            download(&client, &model_dir(config, &m.id).join(&f.path), f, stop)?;
+                        }
                     }
                     verify(config, id, stop)?;
                 }
                 ModelAction::Verify { .. } => verify(config, id, stop)?,
                 ModelAction::Remove { .. } => {
                     let dir = model_dir(config, id);
-                    if dir.exists() { fs::remove_dir_all(dir)?; }
+                    if dir.exists() {
+                        fs::remove_dir_all(dir)?;
+                    }
                 }
                 ModelAction::List => unreachable!(),
             }
@@ -324,6 +407,90 @@ pub fn manage(
 mod tests {
     use super::*;
     use crate::test_support::{Server, response};
+
+    #[test]
+    fn vad_dependencies_are_independent_of_manifest_order() {
+        let mut models = manifest();
+        models.reverse();
+        models.push(Model {
+            id: "future-model".into(),
+            license: "MIT".into(),
+            license_url: String::new(),
+            files: vec![],
+        });
+        let required = required_from(models, "qwen3-asr-0.6b-int8").unwrap();
+        assert_eq!(required[0].id, "qwen3-asr-0.6b-int8");
+        assert_eq!(required[1].id, "silero-vad");
+    }
+
+    #[test]
+    fn list_requires_vad_and_a_shared_resource_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let required = required_models("sensevoice-small-yue-int8").unwrap();
+        let create = |model: &Model| {
+            for file in &model.files {
+                let path = model_dir(&config, &model.id).join(&file.path);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                File::create(path).unwrap().set_len(file.size).unwrap();
+            }
+        };
+        create(&required[0]);
+        let listed = model_list(&config).unwrap();
+        assert_eq!(listed[0]["present"], false);
+        assert_eq!(
+            listed[0]["bytes"],
+            required
+                .iter()
+                .flat_map(|m| &m.files)
+                .map(|f| f.size)
+                .sum::<u64>()
+        );
+        create(&required[1]);
+        assert_eq!(model_list(&config).unwrap()[0]["present"], true);
+        let writer = lock(&config, true).unwrap();
+        assert_eq!(
+            model_list(&config)
+                .unwrap_err()
+                .downcast_ref::<DomainError>()
+                .unwrap()
+                .code,
+            ErrorCode::SubtitleBusy
+        );
+        drop(writer);
+    }
+
+    #[test]
+    fn validation_preserves_cancellation_and_io_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.onnx");
+        fs::write(&path, b"abcdef").unwrap();
+        let file = ModelFile {
+            path: "model.onnx".into(),
+            url: "http://127.0.0.1:1".into(),
+            size: 6,
+            sha256: format!("{:x}", Sha256::digest(b"abcdef")),
+        };
+        let stop = AtomicBool::new(true);
+        assert_eq!(
+            valid(&path, &file, &stop)
+                .unwrap_err()
+                .downcast_ref::<DomainError>()
+                .unwrap()
+                .code,
+            ErrorCode::Cancelled
+        );
+        assert_eq!(
+            download(&reqwest::Client::new(), &path, &file, &stop)
+                .unwrap_err()
+                .downcast_ref::<DomainError>()
+                .unwrap()
+                .code,
+            ErrorCode::Cancelled
+        );
+        assert!(valid(&path.join("child"), &file, &AtomicBool::new(false)).is_err());
+        assert!(valid(&path, &file, &AtomicBool::new(false)).unwrap());
+    }
 
     #[test]
     fn downloads_resume_only_a_matching_range_and_restart_on_full_response() {
@@ -407,6 +574,6 @@ mod tests {
         assert!(lock(&config, false).is_ok());
         drop(reader);
         assert!(lock(&config, true).is_ok());
-        assert!(model("../../outside").is_err());
+        assert!(required_models("../../outside").is_err());
     }
 }

@@ -96,7 +96,9 @@ stream fallback or directory refresh; the error code survives normal shutdown.
 Subtitle management always emits JSON. `subtitles setup` returns
 `{runtime,ready}`; `subtitles doctor` returns `{runtime,model,ready}` only after
 all checks pass; `subtitles models list` returns an array of
-`{id,bytes,license,license_url,present}`. `present` checks file sizes only;
+`{id,bytes,license,license_url,present}`. `bytes` and `present` cover all files
+needed to run that model, including the shared Silero VAD. `present` checks
+file types and sizes only, under a shared resource lock;
 `models verify ID` performs SHA-256 verification. Install/verify/remove return
 `{id,removed}`. V2 wraps these values in its normal envelope; progress uses
 stderr. Subtitle codes are `subtitle_settings`, `subtitle_model` (parameter

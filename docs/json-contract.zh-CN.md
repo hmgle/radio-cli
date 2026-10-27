@@ -87,7 +87,8 @@ radio --lang en --json-v2 info missing    # station_not_found；退出码 1
 字幕管理命令始终输出 JSON。`subtitles setup` 返回 `{runtime,ready}`；
 `subtitles doctor` 仅在检查全部通过后返回 `{runtime,model,ready}`；
 `subtitles models list` 返回 `{id,bytes,license,license_url,present}` 数组。
-`present` 仅检查文件大小，`models verify ID` 才执行 SHA-256 校验。
+`bytes` 和 `present` 包含运行该模型所需的所有文件，包括共用的 Silero VAD。
+`present` 在共享资源锁内检查文件类型与大小，`models verify ID` 才执行 SHA-256 校验。
 安装、校验、删除均返回 `{id,removed}`。V2 使用正常响应信封，进度输出至 stderr。
 字幕错误码为 `subtitle_settings`、`subtitle_model`（参数 `id`）、
 `subtitle_integrity`（`id`、`path`）、`subtitle_runtime`、`subtitle_busy`、
