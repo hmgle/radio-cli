@@ -644,7 +644,15 @@ fn mpv_ipc_delivers_titles_with_truncated_utf8() {
     raw.extend_from_slice(b"\xe8\x90?- \xe6\x83 (AsiaFM");
     raw.extend_from_slice("亚洲粤语".as_bytes());
     raw.extend_from_slice(b"\xe5\x8f?)");
-    exercise_icy_player(false, &raw, "蒋丽è?- æ (AsiaFM亚洲粤语å?)");
+    exercise_icy_player(false, &raw, "蒋丽�?- � (AsiaFM亚洲粤语�?)");
+
+    let mut raw = "李克".as_bytes().to_vec();
+    raw.extend_from_slice(b"\xe5\x8b?- ");
+    raw.extend_from_slice("飞".as_bytes());
+    raw.extend_from_slice(b"\xe8? (AsiaFM");
+    raw.extend_from_slice("亚洲粤语".as_bytes());
+    raw.extend_from_slice(b"\xe5\x8f?)");
+    exercise_icy_player(false, &raw, "李克�?- 飞�? (AsiaFM亚洲粤语�?)");
 }
 
 fn exercise_icy_player(normalize: bool, title_bytes: &[u8], expected_title: &str) {

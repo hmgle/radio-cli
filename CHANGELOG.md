@@ -4,6 +4,8 @@
 
 - Keep receiving track updates when mpv sends invalid UTF-8 in metadata,
   preserving readable Unicode and recoverable legacy title bytes.
+- Show a replacement character for truncated UTF-8 in Chinese ICY titles
+  instead of displaying the incomplete bytes as Latin-1 characters.
 
 ## 0.8.3 — 2026-10-23
 

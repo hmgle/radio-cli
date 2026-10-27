@@ -113,14 +113,30 @@ fn parse_ipc_message(line: &[u8]) -> serde_json::Result<Value> {
         return serde_json::from_str(valid);
     }
     // mpv can send broken UTF-8 inside JSON strings. Preserve valid Unicode
-    // and map invalid bytes to Latin-1 so ICY repair can still recover them.
-    // Replacing them with U+FFFD here would discard recoverable GBK bytes.
+    // and retain invalid bytes for ICY repair unless truncation is evident.
+    // Replacing every invalid byte would discard recoverable GBK bytes.
     let mut decoded = String::with_capacity(line.len());
-    for chunk in line.utf8_chunks() {
-        decoded.push_str(chunk.valid());
-        decoded.extend(chunk.invalid().iter().map(|&byte| char::from(byte)));
-    }
+    push_metadata_bytes(line, &mut decoded);
     serde_json::from_str(&decoded)
+}
+
+fn push_metadata_bytes(bytes: &[u8], text: &mut String) {
+    let mut offset = 0;
+    for chunk in bytes.utf8_chunks() {
+        text.push_str(chunk.valid());
+        offset += chunk.valid().len() + chunk.invalid().len();
+        // A lone three/four-byte UTF-8 lead after Han text and before ASCII
+        // suggests a truncated character. Detect this in the raw bytes, so actual
+        // Unicode accents such as "中文é?" remain intact.
+        if matches!(chunk.invalid(), [0xe0..=0xf4])
+            && chunk.valid().chars().next_back().is_some_and(is_cjk)
+            && bytes.get(offset).is_none_or(u8::is_ascii)
+        {
+            text.push('\u{fffd}');
+        } else {
+            text.extend(chunk.invalid().iter().map(|&byte| char::from(byte)));
+        }
+    }
 }
 
 pub(crate) fn icy_title(title: &str) -> String {
@@ -128,15 +144,16 @@ pub(crate) fn icy_title(title: &str) -> String {
     // UTF-8 continuation bytes. ASCII and existing Unicode delimit runs,
     // so GBK guesses cannot consume ASCII letters or span separate words.
     let mut repaired = String::with_capacity(title.len());
+    let utf8_han = title.chars().any(is_cjk);
     let mut start = 0;
     for (index, character) in title.char_indices() {
         if !matches!(character, '\u{80}'..='\u{ff}') {
-            repaired.push_str(&repair_latin1_run(&title[start..index]));
+            repaired.push_str(&repair_latin1_run(&title[start..index], utf8_han));
             repaired.push(character);
             start = index + character.len_utf8();
         }
     }
-    repaired.push_str(&repair_latin1_run(&title[start..]));
+    repaired.push_str(&repair_latin1_run(&title[start..], utf8_han));
     crate::clean_text(&repaired)
 }
 
@@ -168,24 +185,31 @@ fn decode_icy_run(bytes: &[u8], title: &mut String) {
         .any(|chunk| chunk.valid().chars().any(is_cjk));
     if !has_utf8_han {
         let latin1: String = bytes.iter().map(|&byte| char::from(byte)).collect();
-        if let Cow::Owned(repaired) = repair_latin1_run(&latin1) {
+        if let Cow::Owned(repaired) = repair_latin1_run(&latin1, false) {
             title.push_str(&repaired);
             return;
         }
     }
-    for chunk in bytes.utf8_chunks() {
-        title.push_str(chunk.valid());
-        title.extend(chunk.invalid().iter().map(|&byte| char::from(byte)));
-    }
+    push_metadata_bytes(bytes, title);
 }
 
-fn repair_latin1_run(run: &str) -> Cow<'_, str> {
+fn repair_latin1_run(run: &str, utf8_han: bool) -> Cow<'_, str> {
     if run.is_empty() {
         return Cow::Borrowed(run);
     }
     let bytes: Vec<u8> = run.chars().map(|c| c as u8).collect();
-    if let Ok(repaired) = std::str::from_utf8(&bytes) {
-        return Cow::Owned(repaired.to_owned());
+    let error = match std::str::from_utf8(&bytes) {
+        Ok(repaired) => return Cow::Owned(repaired.to_owned()),
+        Err(error) => error,
+    };
+    let incomplete_prefix = error
+        .error_len()
+        .is_none()
+        .then(|| std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap());
+    if let Some(prefix) = incomplete_prefix
+        && prefix.chars().any(is_cjk)
+    {
+        return Cow::Owned(format!("{prefix}\u{fffd}"));
     }
 
     // GBK and genuine Latin-1 text overlap. Require a contiguous run of at
@@ -193,22 +217,28 @@ fn repair_latin1_run(run: &str) -> Cow<'_, str> {
     // (e.g. the symbols in "Íõ·Æ" or "ºÓÍ¼"). Letter-only runs such as "ää"
     // and "éééé" stay untouched. This remains a conservative heuristic, not
     // encoding detection; ambiguous titles may need a source-specific policy.
-    if bytes.len() < 4
-        || !run
+    if bytes.len() >= 4
+        && run
             .chars()
             .any(|c| !c.is_alphabetic() && !c.is_control() && !c.is_whitespace())
-    {
-        return Cow::Borrowed(run);
-    }
-    if let Some(decoded) =
-        encoding_rs::GB18030.decode_without_bom_handling_and_without_replacement(&bytes)
+        && let Some(decoded) =
+            encoding_rs::GB18030.decode_without_bom_handling_and_without_replacement(&bytes)
         && decoded.chars().all(is_cjk)
         && decoded.chars().count() * 2 == bytes.len()
     {
-        Cow::Owned(decoded.into_owned())
-    } else {
-        Cow::Borrowed(run)
+        return Cow::Owned(decoded.into_owned());
     }
+
+    // With Han elsewhere in the title, mark a UTF-8 lead and continuation
+    // that remain incomplete after a lossless GBK repair was ruled out.
+    // A lone byte is ambiguous with a genuine accent and stays unchanged.
+    if let Some(prefix) = incomplete_prefix
+        && utf8_han
+        && bytes.len() - prefix.len() >= 2
+    {
+        return Cow::Owned(format!("{prefix}\u{fffd}"));
+    }
+    Cow::Borrowed(run)
 }
 
 fn is_cjk(character: char) -> bool {
@@ -596,7 +626,7 @@ mod tests {
         let title = "\u{cd}\u{f5}\u{b7}\u{c6} -  (AsiaFM亚洲粤语\u{e5}\u{8f}?)";
         assert_eq!(
             metadata_title(&json!({"icy-title": title})),
-            "王菲 -  (AsiaFM亚洲粤语å?)"
+            "王菲 -  (AsiaFM亚洲粤语�?)"
         );
         // A lone GBK pair decodes to a single character; guessing one
         // character from two ambiguous bytes is not worth the risk, so such
@@ -627,6 +657,13 @@ mod tests {
             metadata_title(&json!({"icy-title": title})),
             "河图 - 紫川录"
         );
+        // GBK can overlap with a valid UTF-8 character and a truncated prefix.
+        let title = "Ã©æ± - 中文电台";
+        assert_eq!(
+            metadata_title(&json!({"icy-title": title})),
+            "茅姹 - 中文电台"
+        );
+        assert_eq!(icy_title_bytes(title.as_bytes()), "茅姹 - 中文电台");
     }
 
     #[test]
@@ -640,6 +677,10 @@ mod tests {
             "Sigur Rós - Hoppípolla",
             "Chloéë",
             "Chloéë - 中文电台",
+            "Café - 中文电台",
+            "Björk - Jóga（中文）",
+            "Café? - 中文电台",
+            "中文é?",
             "Lääke - 中文电台",
             "Lääke - Jää（中文电台）",
             "éééé - 中文电台",
@@ -682,6 +723,33 @@ mod tests {
             "河图 - 紫川录"
         );
         assert_eq!(icy_title_bytes(b"Track\x1b\n\xff"), "Trackÿ");
+    }
+
+    #[test]
+    fn damaged_utf8_uses_replacement_characters_without_losing_gbk_or_accents() {
+        let mut raw = "李克".as_bytes().to_vec();
+        raw.extend_from_slice(b"\xe5\x8b?- ");
+        raw.extend_from_slice("飞".as_bytes());
+        raw.extend_from_slice(b"\xe8? (AsiaFM");
+        raw.extend_from_slice("亚洲粤语".as_bytes());
+        raw.extend_from_slice(b"\xe5\x8f?)");
+        let expected = "李克�?- 飞�? (AsiaFM亚洲粤语�?)";
+        assert_eq!(icy_title_bytes(&raw), expected);
+        let mut line = br#"{"icy-title":""#.to_vec();
+        line.extend_from_slice(&raw);
+        line.extend_from_slice(r#"","title":"Björk - Jóga"}"#.as_bytes());
+        let message = parse_ipc_message(&line).unwrap();
+        assert_eq!(metadata_title(&message), expected);
+        assert_eq!(message["title"], "Björk - Jóga");
+
+        let mut adjacent = b"\xcd\xf5\xb7\xc6".to_vec();
+        adjacent.extend_from_slice("中文".as_bytes());
+        adjacent.extend_from_slice(b"\xe8?");
+        assert_eq!(icy_title_bytes(&adjacent), "王菲中文�?");
+        assert_eq!(
+            metadata_title(&json!({"icy-title": "Björk - Jóga（中文）å\u{8f}?"})),
+            "Björk - Jóga（中文）�?"
+        );
     }
 
     #[test]

@@ -357,7 +357,7 @@ mod tests {
         block.extend_from_slice(&raw);
         block.extend_from_slice("';StreamUrl='https://example.test/封面.png';".as_bytes());
         let parsed = metadata(&block);
-        assert_eq!(parsed.title, "王菲 -  (AsiaFM亚洲粤语å?)");
+        assert_eq!(parsed.title, "王菲 -  (AsiaFM亚洲粤语�?)");
         assert_eq!(parsed.title, crate::player::icy_title(wrapped));
         assert_eq!(parsed.url.as_deref(), Some("https://example.test/封面.png"));
 
