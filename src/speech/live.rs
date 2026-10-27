@@ -148,6 +148,9 @@ impl Controller {
             );
             return;
         }
+        // Poll completion before draining events: once a finished job is removed,
+        // no final segment may remain stranded in its event receiver.
+        let finished = self.task.as_ref().and_then(|t| t.job.poll());
         if let Some(task) = &self.task {
             let notices: Vec<_> = task.events.try_iter().collect();
             for notice in notices {
@@ -165,7 +168,7 @@ impl Controller {
                 }
             }
         }
-        if let Some(result) = self.task.as_ref().and_then(|t| t.job.poll()) {
+        if let Some(result) = finished {
             self.task = None;
             let retry = match result {
                 Ok(retry) => retry,
