@@ -28,6 +28,41 @@ fn radio_with(dir: &std::path::Path, config: &std::path::Path) -> Command {
 }
 
 #[test]
+fn subtitles_json_management_is_explicit_and_failures_are_atomic() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = radio(dir.path())
+        .args(["--json-v2", "subtitles", "models", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["data"].as_array().unwrap().len(), 2);
+    assert_eq!(value["data"][0]["present"], false);
+    assert!(!dir.path().join("speech/runtime-2.0.1-v1").exists());
+    for (args, code) in [
+        (vec!["subtitles", "doctor"], "subtitle_runtime"),
+        (
+            vec!["subtitles", "models", "verify", "sensevoice-small-yue-int8"],
+            "subtitle_integrity",
+        ),
+        (
+            vec!["subtitles", "models", "remove", "../outside"],
+            "subtitle_model",
+        ),
+    ] {
+        let output = radio(dir.path())
+            .arg("--json-v2")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], code);
+    }
+}
+
+#[test]
 fn cli_tests_ignore_the_developer_configuration() {
     let dir = tempfile::tempdir().unwrap();
     // Plant a configuration where each supported platform looks for the

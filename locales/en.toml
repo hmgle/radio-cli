@@ -338,6 +338,8 @@ help_commands = """
 :set language en|zh-CN\tSwitch UI language
 :set mouse true|false\tCapture the mouse; false allows terminal selection
 The last 100 commands persist in command-history.json in the data directory
+:subtitles on|off|toggle|history|clear|retry\tControl live subtitles and session history
+:set subtitles.model ID\tChange the session subtitle model
 :doctor\tCheck media tools and directory permissions
 :focus sources|list|details|player|activity\t
 :quit / :q\tFinalize and quit
@@ -415,7 +417,7 @@ command_nothing_playing = "Nothing is playing"
 command_nothing_playing_uuid = "Nothing is playing; give a station UUID"
 command_unknown_help = "Unknown command: {word}"
 command_unknown = "Unknown TUI command; :help shows usage"
-command_usage_set = "Usage: set language en|zh-CN / set mouse true|false"
+command_usage_set = "Usage: set language en|zh-CN / set mouse true|false / set subtitles.model ID"
 command_usage_volume = "Usage: volume <0–100>"
 command_usage_focus = "Usage: focus sources|list|details|player|activity"
 command_process_options = "TUI commands do not accept process-level options"
@@ -431,3 +433,17 @@ subtitle_runtime = "Subtitle runtime unavailable; run radio subtitles setup, the
 subtitle_busy = "Subtitle resources are in use by another operation"
 subtitle_failed = "Speech recognition failed: {detail}"
 subtitle_install_progress = "Downloading {file}: {done}/{total} bytes"
+subtitle_off = "Subtitles off"
+subtitle_waiting = "Waiting for playback"
+subtitle_loading = "Loading speech model"
+subtitle_listening = "Listening · delayed subtitles"
+subtitle_paused = "Subtitles paused · resume reconnects to live audio"
+subtitle_gap = "Audio gap · skipped old subtitles"
+subtitle_retrying = "Subtitle connection retry {attempt}/3"
+subtitle_local = "Live subtitles do not support local recordings"
+subtitle_history = "Subtitle history · capture time"
+subtitle_empty = "No speech recognized yet"
+subtitle_interrupted = "Capture interrupted"
+subtitle_usage = "Usage: :subtitles on|off|toggle|history|clear|retry"
+subtitle_decoding = "Recognizing speech · delayed subtitles"
+subtitle_connection = "Subtitle connection ended; use :subtitles retry"

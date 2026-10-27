@@ -76,7 +76,14 @@ pub(super) fn model_dir(config: &Config, id: &str) -> PathBuf {
     root(config).join("models").join(id)
 }
 
-pub(super) fn lock(config: &Config, exclusive: bool) -> Result<File> {
+pub(super) struct ResourceLock(File);
+impl Drop for ResourceLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+pub(super) fn lock(config: &Config, exclusive: bool) -> Result<ResourceLock> {
     fs::create_dir_all(root(config))?;
     let file = OpenOptions::new()
         .create(true)
@@ -90,7 +97,7 @@ pub(super) fn lock(config: &Config, exclusive: bool) -> Result<File> {
         FileExt::try_lock_shared(&file)
     }
     .context(DomainError::new(ErrorCode::SubtitleBusy))?;
-    Ok(file)
+    Ok(ResourceLock(file))
 }
 
 fn cancelled(stop: &AtomicBool) -> Result<()> {

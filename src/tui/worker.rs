@@ -53,6 +53,7 @@ pub(super) enum PageStatus<'a> {
 
 #[derive(Clone)]
 pub(super) struct View {
+    pub subtitles: crate::speech::Snapshot,
     pub artwork_station: Option<String>,
     pub track_artwork: Option<crate::engine::artwork::TrackArtwork>,
     published: Option<(u64, Arc<View>)>,
@@ -96,6 +97,7 @@ pub(super) struct View {
 impl View {
     pub fn new(status: Status) -> Self {
         Self {
+            subtitles: crate::speech::Snapshot::default(),
             artwork_station: None,
             track_artwork: None,
             published: None,
@@ -476,6 +478,15 @@ pub(super) fn execute(
     view: &Arc<Mutex<View>>,
 ) -> Result<()> {
     match command {
+        Command::Subtitles(action) => match action.as_str() {
+            "on" => engine.set_subtitles(true),
+            "off" => engine.set_subtitles(false),
+            "toggle" => engine.set_subtitles(!engine.subtitles.snapshot.enabled),
+            "clear" => engine.clear_subtitles(),
+            "retry" => engine.retry_subtitles(),
+            _ => unreachable!(),
+        },
+        Command::SubtitleModel(id) => engine.set_subtitle_model(id)?,
         Command::LocatePlaying {
             uuid,
             request,
@@ -836,6 +847,11 @@ pub(super) fn run(
             )?;
             was_recording = engine.status.recording();
             let mut data = view.lock().unwrap();
+            if data.subtitles.revision != engine.subtitles.snapshot.revision {
+                data.subtitles = engine.subtitles.snapshot.clone();
+                data.revision += 1;
+                data.immediate_revision += 1;
+            }
             if data.track_artwork != engine.artwork.cover {
                 data.track_artwork = engine.artwork.cover.clone();
                 data.revision += 1;

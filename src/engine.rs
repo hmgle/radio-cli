@@ -77,6 +77,7 @@ pub struct Engine {
 
 /// Shared services and published session state owned by the engine.
 pub struct Session {
+    pub subtitles: crate::speech::Controller,
     pub(crate) artwork: artwork::Controller,
     pub config: Config,
     pub store: Store,
@@ -136,6 +137,7 @@ impl Engine {
         };
         Ok(Self {
             session: Session {
+                subtitles: crate::speech::Controller::default(),
                 artwork: artwork::Controller::default(),
                 config,
                 store,
@@ -232,12 +234,51 @@ impl Engine {
         self.playback.tick(&mut self.session, &mut self.recording)?;
         self.recording
             .recording_tick(&mut self.session, &mut self.playback)?;
+        self.subtitle_tick();
         self.artwork_tick();
+        Ok(())
+    }
+
+    fn subtitle_tick(&mut self) {
+        if !self.background_media {
+            return;
+        }
+        if self.subtitles.snapshot.enabled && !self.artwork.quiescent() {
+            self.artwork.cancel();
+            return;
+        }
+        let playing = self.status.playback_state == PlaybackState::Playing;
+        let paused = self.status.paused();
+        let local = self.playback.source_kind == playback::SourceKind::Local;
+        let key = (self.playback.generation, self.status.source_url.clone());
+        let session = &mut self.session;
+        session
+            .subtitles
+            .update(&session.config, key, playing, paused, local, &session.stop);
+    }
+
+    pub fn set_subtitles(&mut self, enabled: bool) {
+        self.subtitles.enabled(enabled);
+    }
+    pub fn retry_subtitles(&mut self) {
+        self.subtitles.retry();
+    }
+    pub fn clear_subtitles(&mut self) {
+        self.subtitles.clear();
+    }
+    pub fn set_subtitle_model(&mut self, id: String) -> Result<()> {
+        let mut settings = self.config.settings.subtitles.clone();
+        settings.model = id;
+        settings.validate()?;
+        self.config.settings.subtitles = settings;
+        self.subtitles.retry();
+        self.subtitles.clear();
         Ok(())
     }
 
     fn artwork_tick(&mut self) {
         let request = (self.background_media
+            && !self.subtitles.active()
             && self.config.settings.artwork == crate::config::ArtworkMode::Track
             && self.status.playback_state == PlaybackState::Playing
             && !matches!(
@@ -352,6 +393,8 @@ impl Engine {
 
     pub(crate) fn enable_background_media(&mut self) {
         self.background_media = true;
+        let enabled = self.config.settings.subtitles.enabled;
+        self.subtitles.enabled(enabled);
     }
 
     pub fn delete_recording(&mut self, id: String, index_only: bool) -> Result<()> {
@@ -402,6 +445,7 @@ impl Engine {
 
     pub fn shutdown(&mut self) -> Result<()> {
         self.stop_playback()?;
+        self.subtitles.enabled(false);
         self.playback.click_task = None;
         self.diagnostics = None;
         // Allow normal finalization, then cancel verification if its budget
@@ -410,7 +454,8 @@ impl Engine {
         while (self.recording.finalizing.is_some()
             || !self.playback.retiring.is_empty()
             || !self.recording.retiring_probes.is_empty()
-            || !self.artwork.quiescent())
+            || !self.artwork.quiescent()
+            || !self.subtitles.quiescent())
             && Instant::now() < deadline
         {
             self.poll_background()?;
@@ -421,6 +466,7 @@ impl Engine {
     }
 
     fn poll_background(&mut self) -> Result<()> {
+        self.subtitles.poll_retiring();
         if let Some(result) = self.library_task.as_ref().and_then(Background::poll) {
             self.library_task = None;
             self.status.message = match result {

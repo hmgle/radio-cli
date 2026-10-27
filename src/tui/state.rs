@@ -480,6 +480,8 @@ pub(super) struct App {
     facets_request: Option<(usize, String)>,
     facet_due: Option<Instant>,
     pub help: bool,
+    pub subtitle_history: bool,
+    pub subtitle_follow: bool,
     pub help_content: Option<String>,
     pub help_title: Option<&'static str>,
     pub help_scroll: u16,
@@ -547,6 +549,8 @@ impl Default for App {
             facets_request: None,
             facet_due: None,
             help: false,
+            subtitle_history: false,
+            subtitle_follow: true,
             help_content: None,
             help_title: None,
             help_scroll: 0,
@@ -599,6 +603,9 @@ impl App {
     /// Moves the text popup within the bounds measured by the last frame. Until a
     /// frame has measured it the bound is open and the renderer clamps afterwards.
     fn move_popup(&mut self, movement: PopupMove) {
+        if self.subtitle_history {
+            self.subtitle_follow = matches!(movement, PopupMove::Bottom);
+        }
         let limit = usize::from(u16::MAX);
         let max = if self.popup.visible == 0 {
             limit
@@ -1180,6 +1187,14 @@ impl App {
                     self.flush_search(sender);
                 }
                 match parsed {
+                    Parsed::SubtitleHistory => {
+                        self.subtitle_history = true;
+                        self.subtitle_follow = true;
+                        self.help = true;
+                        self.help_content = None;
+                        self.help_title = Some(crate::t!("subtitle_history"));
+                        self.help_scroll = u16::MAX;
+                    }
                     Parsed::Mouse(enabled) => {
                         self.mouse_enabled = enabled;
                         self.message = if enabled {
@@ -1190,6 +1205,7 @@ impl App {
                         .into();
                     }
                     Parsed::HelpText(text) => {
+                        self.subtitle_history = false;
                         self.help = true;
                         self.help_content = Some(text);
                         self.help_title = Some(crate::t!("command_help_title"));
@@ -1197,6 +1213,7 @@ impl App {
                     }
                     Parsed::Quit => self.quit = true,
                     Parsed::Help => {
+                        self.subtitle_history = false;
                         self.help_content = None;
                         self.help_title = None;
                         self.help = true;
@@ -1526,7 +1543,10 @@ impl App {
         if self.help {
             let control = key.modifiers.contains(KeyModifiers::CONTROL);
             match key.code {
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => self.help = false,
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
+                    self.help = false;
+                    self.subtitle_history = false;
+                }
                 KeyCode::Char('e') if control => self.move_popup(PopupMove::Lines(1)),
                 KeyCode::Char('y') if control => self.move_popup(PopupMove::Lines(-1)),
                 KeyCode::Char('f') if control => self.move_popup(PopupMove::Pages(1)),

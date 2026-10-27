@@ -337,6 +337,8 @@ help_commands = """
 :set language en|zh-CN\t切换界面语言
 :set mouse true|false\t鼠标捕获；false 可用终端选择文本
 命令历史持久保存最近 100 条（数据目录 command-history.json）
+:subtitles on|off|toggle|history|clear|retry\t控制直播字幕与会话历史
+:set subtitles.model ID\t切换会话字幕模型
 :doctor\t检查音频依赖与目录权限
 :focus sources|list|details|player|activity\t
 :quit / :q\t收尾并退出
@@ -430,3 +432,17 @@ subtitle_runtime = "字幕运行时不可用；请运行 radio subtitles setup�
 subtitle_busy = "字幕资源正被其他操作使用"
 subtitle_failed = "语音识别失败：{detail}"
 subtitle_install_progress = "正在下载 {file}：{done}/{total} 字节"
+subtitle_off = "字幕已关闭"
+subtitle_waiting = "等待播放"
+subtitle_loading = "正在加载语音模型"
+subtitle_listening = "正在聆听 · 字幕有延迟"
+subtitle_paused = "字幕已暂停 · 恢复后重新接入直播"
+subtitle_gap = "音频中断 · 已跳过积压字幕"
+subtitle_retrying = "字幕连接重试 {attempt}/3"
+subtitle_local = "直播字幕暂不支持本地录音"
+subtitle_history = "字幕历史 · 采集时间"
+subtitle_empty = "尚未识别到语音"
+subtitle_interrupted = "采集已中断"
+subtitle_usage = "用法：:subtitles on|off|toggle|history|clear|retry"
+subtitle_decoding = "正在识别语音 · 字幕有延迟"
+subtitle_connection = "字幕连接已结束；可用 :subtitles retry 重试"

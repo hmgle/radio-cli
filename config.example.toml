@@ -58,3 +58,12 @@ mouse = true
 # A binding takes precedence over existing normal-mode shortcuts.
 [keybindings]
 jump_to_playing = "''"
+
+# Optional TUI live captions; installation is explicit (see configuration docs).
+[subtitles]
+enabled = false
+model = "sensevoice-small-yue-int8" # or "qwen3-asr-0.6b-int8"
+language = "auto" # SenseVoice: auto/zh/yue/en/ja/ko; Qwen3: auto only
+threads = 0 # automatic: half the logical cores, capped at four; explicit: 1–32
+max_segment_secs = 8 # 2–20; VAD may include a short trailing pause
+uv = "uv"

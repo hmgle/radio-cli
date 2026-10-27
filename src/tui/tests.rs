@@ -26,6 +26,79 @@ use std::{
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
+
+#[test]
+fn subtitle_commands_toggle_and_select_models_without_running_management() {
+    let data = view();
+    for action in ["on", "off", "toggle", "clear", "retry"] {
+        let parsed = command::parse(
+            &format!("subtitles {action}"),
+            None,
+            data.status.station.as_ref(),
+            &data.filter,
+        )
+        .unwrap();
+        assert!(matches!(parsed, Parsed::Worker(Command::Subtitles(value)) if value == action));
+    }
+    assert!(matches!(
+        command::parse("subtitles history", None, None, &data.filter).unwrap(),
+        Parsed::SubtitleHistory
+    ));
+    assert!(command::parse("subtitles setup", None, None, &data.filter).is_err());
+    assert!(matches!(
+        command::parse(
+            "set subtitles.model qwen3-asr-0.6b-int8",
+            None,
+            None,
+            &data.filter
+        )
+        .unwrap(),
+        Parsed::Worker(Command::SubtitleModel(_))
+    ));
+}
+
+#[test]
+fn subtitle_history_follows_latest_until_user_scrolls_and_keeps_layout_usable() {
+    let mut data = view();
+    data.subtitles.enabled = true;
+    data.subtitles.message = "Listening".into();
+    for i in 0..80 {
+        Arc::make_mut(&mut data.subtitles.history).push_back(crate::speech::Segment {
+            epoch: 1,
+            start_ms: i * 1000,
+            end_ms: i * 1000 + 800,
+            text: format!("spoken sentence {i}"),
+        });
+    }
+    for (width, height) in [(40, 16), (80, 24), (160, 48)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut app = App::default();
+        app.subtitle_history = true;
+        app.subtitle_follow = true;
+        app.help = true;
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains("spoken sentence 79"));
+        assert!(app.rects[Focus::List.index()].height > 0);
+        let (tx, _rx) = command::channel(16);
+        app.key(key(KeyCode::Home), &data, &tx);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_eq!(app.help_scroll, 0);
+        assert!(text(&terminal).contains("spoken sentence 0"));
+        Arc::make_mut(&mut data.subtitles.history).push_back(crate::speech::Segment {
+            epoch: 1,
+            start_ms: 81000,
+            end_ms: 81800,
+            text: "new subtitle".into(),
+        });
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_eq!(app.help_scroll, 0);
+        app.key(key(KeyCode::End), &data, &tx);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains("new subtitle"));
+        app.key(key(KeyCode::Esc), &data, &tx);
+        assert!(!app.help && !app.subtitle_history);
+    }
+}
 fn station(name: &str) -> Station {
     Station {
         stationuuid: uuid::Uuid::new_v4().to_string(),

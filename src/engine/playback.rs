@@ -131,6 +131,7 @@ impl PlaybackController {
         source_kind: SourceKind,
     ) -> Result<()> {
         self.generation = self.generation.wrapping_add(1);
+        session.subtitles.clear();
         self.refresh_task = None;
         recording.stop_recording(session, self, None)?;
         self.retire_player(session, recording);
@@ -533,6 +534,7 @@ impl PlaybackController {
         session: &mut Session,
         _recording: &mut RecordingController,
     ) {
+        session.subtitles.cancel();
         session.artwork.cancel();
         if let Some((_, _, task)) = self.player_start.take() {
             // A completed task may already contain a Player. Drop it away

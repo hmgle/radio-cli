@@ -266,7 +266,56 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         );
         return None;
     }
-    let layout = screen_layout(area, app.focus, view.task_active);
+    let subtitle_height = if view.subtitles.enabled {
+        if area.height >= 24 { 3 } else { 1 }
+    } else {
+        0
+    };
+    let content_area = Rect {
+        height: area.height.saturating_sub(subtitle_height),
+        ..area
+    };
+    let layout = screen_layout(content_area, app.focus, view.task_active);
+    if subtitle_height > 0 {
+        // Leave the command/hint bar at the bottom; place captions just above it.
+        let rect = Rect {
+            x: area.x,
+            y: layout.bottom.y,
+            width: area.width,
+            height: subtitle_height,
+        };
+        let text = if subtitle_height == 1 {
+            let latest = view
+                .subtitles
+                .history
+                .back()
+                .map_or("", |s| s.text.as_str());
+            format!("{} · {}", view.subtitles.message, latest)
+        } else {
+            let lines = view
+                .subtitles
+                .history
+                .iter()
+                .rev()
+                .take(2)
+                .collect::<Vec<_>>();
+            std::iter::once(view.subtitles.message.clone())
+                .chain(lines.iter().rev().map(|s| s.text.clone()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(style(app.theme, Role::Muted)),
+            rect,
+        );
+    }
+    let layout = ScreenLayout {
+        bottom: Rect {
+            y: layout.bottom.y + subtitle_height,
+            ..layout.bottom
+        },
+        ..layout
+    };
     app.set_rects(layout.rects);
     let normal = app.mode == Mode::Normal
         && !app.help
@@ -936,17 +985,43 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         ));
     }
     if app.help {
+        if app.subtitle_history && app.subtitle_follow {
+            app.help_scroll = u16::MAX;
+        }
         let rect = popup(area, 88, area.height.saturating_sub(2));
         clear_popup(frame, rect, app.theme);
         let inner = rect.width.saturating_sub(2);
-        let lines = match &app.help_content {
-            Some(content) => wrapped_lines(&super::display::diagnostic(content), inner),
-            None => super::help::lines_in(
-                crate::messages::locale(),
-                &app.jump_binding,
-                inner,
-                app.theme,
-            ),
+        let lines = if app.subtitle_history {
+            let mut text = String::new();
+            let mut epoch = None;
+            for segment in view.subtitles.history.iter() {
+                if epoch.is_some_and(|old| old != segment.epoch) {
+                    text.push_str(&format!("\n── {} ──\n", crate::t!("subtitle_interrupted")));
+                }
+                epoch = Some(segment.epoch);
+                text.push_str(&format!(
+                    "[{}:{:02}–{}:{:02}] {}\n",
+                    segment.start_ms / 60000,
+                    segment.start_ms / 1000 % 60,
+                    segment.end_ms / 60000,
+                    segment.end_ms / 1000 % 60,
+                    segment.text
+                ));
+            }
+            if text.is_empty() {
+                text = crate::t!("subtitle_empty").into();
+            }
+            wrapped_lines(&text, inner)
+        } else {
+            match &app.help_content {
+                Some(content) => wrapped_lines(&super::display::diagnostic(content), inner),
+                None => super::help::lines_in(
+                    crate::messages::locale(),
+                    &app.jump_binding,
+                    inner,
+                    app.theme,
+                ),
+            }
         };
         let (paragraph, extent) = scroll_lines(lines, rect, &mut app.help_scroll);
         app.popup = extent;

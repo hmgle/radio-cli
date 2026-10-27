@@ -100,6 +100,8 @@ impl CommandReceiver {
 
 #[derive(Clone)]
 pub(super) enum Command {
+    Subtitles(String),
+    SubtitleModel(String),
     LocatePlaying {
         uuid: String,
         request: u64,
@@ -149,6 +151,7 @@ pub(super) enum Command {
 }
 
 pub(super) enum Parsed {
+    SubtitleHistory,
     Mouse(bool),
     HelpText(String),
     Worker(Command),
@@ -160,6 +163,14 @@ pub(super) enum Parsed {
 }
 
 pub(super) const COMPLETIONS: &[&str] = &[
+    "subtitles on",
+    "subtitles off",
+    "subtitles toggle",
+    "subtitles history",
+    "subtitles clear",
+    "subtitles retry",
+    "set subtitles.model sensevoice-small-yue-int8",
+    "set subtitles.model qwen3-asr-0.6b-int8",
     "sync",
     "refresh",
     "sync-cancel",
@@ -217,6 +228,15 @@ pub(super) fn parse(
             .ok_or_else(|| anyhow::anyhow!(crate::t!("command_need_station")))
     };
     match name.as_str() {
+        "subtitles" => {
+            return match words.get(1).map(String::as_str) {
+                Some("history") if words.len() == 2 => Ok(Parsed::SubtitleHistory),
+                Some("on" | "off" | "toggle" | "clear" | "retry") if words.len() == 2 => {
+                    Ok(Parsed::Worker(Command::Subtitles(words[1].clone())))
+                }
+                _ => bail!(crate::t!("subtitle_usage")),
+            };
+        }
         "refresh" if words.len() == 1 => return Ok(Parsed::Worker(Command::Refresh)),
         "open" if words.get(1).map(String::as_str) == Some("recordings") && words.len() == 2 => {
             return Ok(Parsed::Worker(Command::OpenRecordings));
@@ -243,6 +263,9 @@ pub(super) fn parse(
             return Ok(Parsed::HelpText(selected.render_long_help().to_string()));
         }
         "set" if words.len() == 3 => match words[1].as_str() {
+            "subtitles.model" => {
+                return Ok(Parsed::Worker(Command::SubtitleModel(words[2].clone())));
+            }
             "language" if matches!(words[2].as_str(), "en" | "zh-CN") => {
                 return Ok(Parsed::Worker(Command::SetLanguage(words[2].clone())));
             }
