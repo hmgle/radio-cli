@@ -313,6 +313,10 @@ verify SHA-256 before publishing. Use `models verify ID` to check installed
 files, `models install ID` to repair them, or `models remove ID` to remove a
 model. Stop subtitle sessions before installation or removal.
 
+Model downloads have no total time limit while data keeps arriving. Each
+network wait aborts after 20 seconds without progress, and downloads can be
+cancelled.
+
 Before downloading, installation reports the remaining bytes and checks free
 disk space, allowing for resumable files and a 64 MiB reserve. An optional
 `model_mirror` HTTP(S) base URL serves files as

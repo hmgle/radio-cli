@@ -265,6 +265,9 @@ SenseVoice 粤语预设连同词表和 Silero VAD 约下载 242 MB；
 校验后才发布。`models verify ID` 校验，`models install ID` 安装或修复，
 `models remove ID` 删除模型。安装或删除前请停止字幕会话。
 
+模型下载持续接收数据时不设总时限；每次网络等待超过 20 秒无进展时中止，
+下载过程中可随时取消。
+
 安装会在下载前提示剩余下载字节数，检查可用磁盘空间，计入可续传文件并预留
 64 MiB。可选的 `model_mirror` 为 HTTP(S) 基础 URL，文件布局为
 `<base>/<model-id>/<file-path>`，例如

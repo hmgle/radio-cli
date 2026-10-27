@@ -550,7 +550,8 @@ pub fn manage(
                         .user_agent(crate::USER_AGENT)
                         .no_gzip()
                         .connect_timeout(Duration::from_secs(config.settings.connect_timeout_secs))
-                        .timeout(Duration::from_secs(1800))
+                        // network() bounds each wait and polls cancellation;
+                        // a progressing large download has no total deadline.
                         .build()?;
                     for m in required {
                         for f in &m.files {
@@ -636,6 +637,43 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.downcast_ref::<DomainError>().unwrap().code, expected);
         assert!(!root(&config).exists());
+    }
+
+    #[test]
+    fn network_waits_remain_cancellable_and_abort_when_stalled() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let stop = AtomicBool::new(false);
+            let cancel = async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                stop.store(true, Ordering::Relaxed);
+            };
+            let wait = network(std::future::pending::<()>(), &stop);
+            let (result, ()) =
+                tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(wait, cancel) })
+                    .await
+                    .expect("network cancellation must remain responsive");
+            assert_eq!(
+                result
+                    .unwrap_err()
+                    .downcast_ref::<DomainError>()
+                    .unwrap()
+                    .code,
+                ErrorCode::Cancelled
+            );
+
+            stop.store(false, Ordering::Relaxed);
+            let result = tokio::time::timeout(
+                Duration::from_secs(25),
+                network(std::future::pending::<()>(), &stop),
+            )
+            .await
+            .expect("stalled network waits must time out");
+            assert_eq!(result.unwrap_err().to_string(), "model download stalled");
+        });
     }
 
     #[test]
