@@ -339,13 +339,15 @@ fn install_file(
         let resumed = partial_len(&partial_path(&path))? > 0;
         let mut result = download(client, &path, &source, stop);
         if resumed
+            && source.url == file.url
             && result.as_ref().is_err_and(|e| {
                 e.downcast_ref::<DomainError>()
                     .is_some_and(|e| e.code == ErrorCode::SubtitleIntegrity)
             })
         {
-            // The prefix may come from a failed mirror. A digest mismatch has
-            // deleted that partial file; retry this source once from scratch.
+            // A failed mirror may have left a corrupt prefix. Only retry the
+            // canonical source from scratch after a resumed digest mismatch;
+            // a mirror mismatch should fall back to the canonical source.
             result = download(client, &path, &source, stop);
         }
         match result {
@@ -639,8 +641,9 @@ mod tests {
     #[test]
     fn mirrors_preserve_base_paths_and_fall_back_without_changing_hashes() {
         use std::sync::{Arc, atomic::AtomicUsize};
-        // Successful mirror, bad digest, missing file, and corrupt partial.
-        for mode in 0..4 {
+        // Successful mirror, bad digest, missing file, corrupt prefix left by
+        // a mirror, and resumed mirror mismatches with Range honored/ignored.
+        for mode in 0..6 {
             let origin_calls = Arc::new(AtomicUsize::new(0));
             let calls = origin_calls.clone();
             let origin = Server::new(move |request, stream| {
@@ -653,13 +656,20 @@ mod tests {
                     response(stream, 200, "application/octet-stream", b"abcdef");
                 }
             });
+            let mirror_calls = Arc::new(AtomicUsize::new(0));
+            let calls = mirror_calls.clone();
             let mirror = Server::new(move |request, stream| {
+                calls.fetch_add(1, Ordering::Relaxed);
                 assert!(request.starts_with("GET /base/test-model/tokenizer/vocab.json "));
                 match mode {
                     0 => response(stream, 200, "application/octet-stream", b"abcdef"),
-                    1 => response(stream, 200, "application/octet-stream", b"xxxxxx"),
+                    1 | 5 => response(stream, 200, "application/octet-stream", b"xxxxxx"),
                     2 => response(stream, 404, "text/plain", b"missing"),
-                    _ => response(stream, 200, "application/octet-stream", b"xxx"),
+                    3 => response(stream, 200, "application/octet-stream", b"xxx"),
+                    _ => {
+                        assert!(request.to_ascii_lowercase().contains("range: bytes=3-"));
+                        stream.write_all(b"HTTP/1.1 206 OK\r\nContent-Range: bytes 3-5/6\r\nContent-Length: 3\r\nConnection: close\r\n\r\nxxx").unwrap();
+                    }
                 }
             });
             let dir = tempfile::tempdir().unwrap();
@@ -671,6 +681,11 @@ mod tests {
                 size: 6,
                 sha256: format!("{:x}", Sha256::digest(b"abcdef")),
             };
+            if mode >= 4 {
+                let path = model_dir(&config, "test-model").join(&file.path);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(partial_path(&path), b"abc").unwrap();
+            }
             install_file(
                 &config,
                 &reqwest::Client::new(),
@@ -691,6 +706,7 @@ mod tests {
                     _ => 1,
                 }
             );
+            assert_eq!(mirror_calls.load(Ordering::Relaxed), 1);
         }
     }
 
