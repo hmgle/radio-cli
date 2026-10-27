@@ -102,6 +102,7 @@ file types and sizes only, under a shared resource lock;
 `models verify ID` performs SHA-256 verification. Install/verify/remove return
 `{id,removed}`. V2 wraps these values in its normal envelope; progress uses
 stderr. Subtitle codes are `subtitle_settings`, `subtitle_model` (parameter
-`id`), `subtitle_integrity` (`id`, `path`), `subtitle_runtime`, `subtitle_busy`,
+`id`), `subtitle_integrity` (`id`, `path`), `subtitle_runtime`,
+`subtitle_platform` (`platform`), `subtitle_busy`,
 and `subtitle_failed` (`detail`), all exit 1. There is no CLI transcription
 stream in this version.

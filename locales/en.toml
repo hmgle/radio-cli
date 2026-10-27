@@ -430,6 +430,7 @@ subtitle_settings = "Invalid subtitle settings: choose a supported model/languag
 subtitle_model = "Unknown subtitle model: {id}"
 subtitle_integrity = "Subtitle model is missing or damaged: {path}; run radio subtitles models install {id}"
 subtitle_runtime = "Subtitle runtime unavailable; run radio subtitles setup, then radio subtitles doctor"
+subtitle_platform = "Speech runtime does not support {platform} on this host; use Linux glibc x86_64 or macOS x86_64/arm64"
 subtitle_busy = "Subtitle resources are in use by another operation"
 subtitle_failed = "Speech recognition failed: {detail}"
 subtitle_install_progress = "Downloading {file}: {done}/{total} bytes"

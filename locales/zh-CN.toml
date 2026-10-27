@@ -429,6 +429,7 @@ subtitle_settings = "字幕配置无效：请选择支持的模型与语言，th
 subtitle_model = "未知字幕模型：{id}"
 subtitle_integrity = "字幕模型缺失或损坏：{path}；请运行 radio subtitles models install {id}"
 subtitle_runtime = "字幕运行时不可用；请运行 radio subtitles setup，再运行 radio subtitles doctor"
+subtitle_platform = "此主机不支持字幕运行时：{platform}；请使用 Linux glibc x86_64 或 macOS x86_64/arm64"
 subtitle_busy = "字幕资源正被其他操作使用"
 subtitle_failed = "语音识别失败：{detail}"
 subtitle_install_progress = "正在下载 {file}：{done}/{total} 字节"

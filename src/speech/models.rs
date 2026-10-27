@@ -85,6 +85,31 @@ pub(super) fn runtime(config: &Config) -> PathBuf {
 pub(super) fn python(config: &Config) -> PathBuf {
     runtime(config).join("bin/python")
 }
+
+fn supports_runtime(os: &str, arch: &str, glibc: bool) -> bool {
+    matches!((os, arch), ("macos", "x86_64" | "aarch64"))
+        || (os == "linux" && arch == "x86_64" && glibc)
+}
+
+fn ensure_runtime_platform() -> Result<()> {
+    // A statically linked musl radio binary can still use glibc Python on a
+    // glibc host. Check the host loader rather than rejecting that binary.
+    let glibc = cfg!(target_env = "gnu")
+        || [
+            "/lib64/ld-linux-x86-64.so.2",
+            "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        ]
+        .iter()
+        .any(|path| Path::new(path).exists());
+    ensure!(
+        supports_runtime(std::env::consts::OS, std::env::consts::ARCH, glibc),
+        DomainError::new(ErrorCode::SubtitlePlatform).with(
+            "platform",
+            format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+        )
+    );
+    Ok(())
+}
 pub(super) fn model_dir(config: &Config, id: &str) -> PathBuf {
     root(config).join("models").join(id)
 }
@@ -298,8 +323,11 @@ async fn network<T>(future: impl std::future::Future<Output = T>, stop: &AtomicB
 }
 
 pub(super) fn runtime_check(config: &Config, stop: &std::sync::Arc<AtomicBool>) -> Result<()> {
-    crate::process::output(Command::new(python(config)).args(["-I", "-c", "import sherpa_onnx,numpy; assert sherpa_onnx.__version__ == '2.0.1'; assert numpy.__version__ == '2.2.6'"]), Duration::from_secs(15), stop)
-        .context(DomainError::new(ErrorCode::SubtitleRuntime))?;
+    cancelled(stop)?;
+    ensure_runtime_platform()?;
+    let result = crate::process::output(Command::new(python(config)).args(["-I", "-c", "import sherpa_onnx,numpy; assert sherpa_onnx.__version__ == '2.0.1'; assert numpy.__version__ == '2.2.6'"]), Duration::from_secs(15), stop);
+    cancelled(stop)?;
+    result.context(DomainError::new(ErrorCode::SubtitleRuntime))?;
     Ok(())
 }
 
@@ -311,8 +339,11 @@ pub fn manage(
     use serde_json::json;
     match action {
         Action::Setup => {
+            cancelled(stop)?;
+            ensure_runtime_platform()?;
             let _lock = lock(config, true)?;
             if runtime_check(config, stop).is_err() {
+                cancelled(stop)?;
                 let requirements = root(config).join("requirements-2.0.1.lock");
                 fs::write(&requirements, include_str!("requirements.lock"))?;
                 let run = |command: &mut Command| -> Result<()> {
@@ -407,6 +438,33 @@ pub fn manage(
 mod tests {
     use super::*;
     use crate::test_support::{Server, response};
+
+    #[test]
+    fn runtime_platform_support_checks_host_libc() {
+        assert!(supports_runtime("linux", "x86_64", true));
+        assert!(!supports_runtime("linux", "x86_64", false));
+        assert!(!supports_runtime("linux", "aarch64", true));
+        assert!(supports_runtime("macos", "x86_64", false));
+        assert!(supports_runtime("macos", "aarch64", false));
+        assert!(!supports_runtime("windows", "x86_64", false));
+    }
+
+    #[test]
+    fn cancelled_runtime_checks_do_not_start_setup_or_mask_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let stop = std::sync::Arc::new(AtomicBool::new(true));
+        for error in [
+            runtime_check(&config, &stop).unwrap_err(),
+            manage(&config, Action::Setup, &stop).unwrap_err(),
+        ] {
+            assert_eq!(
+                error.downcast_ref::<DomainError>().unwrap().code,
+                ErrorCode::Cancelled
+            );
+        }
+        assert!(!root(&config).exists());
+    }
 
     #[test]
     fn vad_dependencies_are_independent_of_manifest_order() {
