@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(parsed[1].name, "alsa/plughw:CARD=USB,DEV=0");
         assert_eq!(parsed[1].description, "Listener's USB (stereo)");
         let dir = tempfile::tempdir().unwrap();
-        let mut config = crate::config::Config::load(None, Some(dir.path()), None).unwrap();
+        let mut config = crate::test_support::config(dir.path());
         let socket = std::path::Path::new("/tmp/radio.sock");
         let original: Vec<_> = playback_command(&config, socket)
             .get_args()
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn normalization_changes_only_the_opt_in_filter_argument() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = crate::config::Config::load(None, Some(dir.path()), None).unwrap();
+        let mut config = crate::test_support::config(dir.path());
         let socket = std::path::Path::new("/tmp/radio-test.sock");
         let command = playback_command(&config, socket);
         let original: Vec<_> = command

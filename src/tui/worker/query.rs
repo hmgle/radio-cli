@@ -343,7 +343,6 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
 mod tests {
     use super::*;
     use crate::{
-        config::Config,
         engine::Engine,
         tui::{command::Command, worker},
     };
@@ -396,8 +395,7 @@ mod tests {
     #[test]
     fn slow_reader_coalesces_requests_without_blocking_media_controls() {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-        config.prepare().unwrap();
+        let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine
             .store
@@ -647,8 +645,7 @@ mod tests {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         for failing_reader in [false, true] {
             let dir = tempfile::tempdir().unwrap();
-            let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-            config.prepare().unwrap();
+            let config = crate::test_support::config(dir.path());
             let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
             let path = dir.path().join("radio.db");
             rusqlite::Connection::open(&path)
@@ -734,8 +731,7 @@ mod tests {
     fn external_commit_bypasses_page_retry_backoff() {
         for asynchronous in [false, true] {
             let dir = tempfile::tempdir().unwrap();
-            let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-            config.prepare().unwrap();
+            let config = crate::test_support::config(dir.path());
             let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
             let path = dir.path().join("radio.db");
             let row = Station {
@@ -898,8 +894,7 @@ mod tests {
     fn owner_revision_failure_retries_the_pending_request_without_a_store_change() {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         let dir = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-        config.prepare().unwrap();
+        let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
         let mut filter = Filter {
@@ -980,8 +975,7 @@ mod tests {
     #[test]
     fn reader_failure_retries_with_backoff_and_deduplicates_logs() {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-        config.prepare().unwrap();
+        let config = crate::test_support::config(dir.path());
         let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         let path = dir.path().join("radio.db");
         let conn = rusqlite::Connection::open(&path).unwrap();

@@ -91,11 +91,15 @@ pub fn response(stream: &mut TcpStream, status: u16, content_type: &str, body: &
     }
 }
 pub fn config(dir: &std::path::Path) -> radio_cli::config::Config {
+    config_with_api(dir, "http://127.0.0.1:1")
+}
+
+pub fn config_with_api(dir: &std::path::Path, api: &str) -> radio_cli::config::Config {
+    std::fs::create_dir_all(dir).unwrap();
+    // A data directory override does not disable the developer's config file.
     let path = dir.join("test-default.toml");
     std::fs::write(&path, "").unwrap();
-    let config =
-        radio_cli::config::Config::load(Some(&path), Some(dir), Some("http://127.0.0.1:1"))
-            .unwrap();
+    let config = radio_cli::config::Config::load(Some(&path), Some(dir), Some(api)).unwrap();
     config.prepare().unwrap();
     config
 }

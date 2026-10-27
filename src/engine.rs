@@ -460,8 +460,7 @@ mod tests {
         let mpv = fake_mpv(dir.path());
         for background in [false, true] {
             let data = dir.path().join(background.to_string());
-            let mut config = Config::load(None, Some(&data), Some(&server.url)).unwrap();
-            config.prepare().unwrap();
+            let mut config = crate::test_support::config_with_api(&data, &server.url);
             config.settings.mpv = mpv.to_string_lossy().into_owned();
             config.settings.audio_device = Some("test/fail".into());
             let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
@@ -649,8 +648,7 @@ mod tests {
     #[test]
     fn changing_station_clears_finished_recording_status() {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-        config.prepare().unwrap();
+        let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         for state in [
             RecordingState::Done,
@@ -683,8 +681,7 @@ mod tests {
     #[test]
     fn flapping_reconnects_have_a_sliding_window_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-        config.prepare().unwrap();
+        let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine.status.station = Some(Station {
             custom: true,
@@ -721,8 +718,7 @@ mod tests {
     #[test]
     fn reconnect_budget_is_bounded_and_stop_cancels_it() {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-        config.prepare().unwrap();
+        let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine.status.station = Some(Station {
             custom: true,

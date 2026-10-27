@@ -319,7 +319,7 @@ mod tests {
             serde_json::to_vec(&vec![second.clone()]).unwrap(),
         )]);
         let dir = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(dir.path()), Some(&a)).unwrap();
+        let config = crate::test_support::config_with_api(dir.path(), &a);
         let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
         let mut directory = Directory::new(&config, Arc::new(AtomicBool::new(false))).unwrap();
         directory.servers = vec![a, b];

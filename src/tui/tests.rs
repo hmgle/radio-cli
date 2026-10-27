@@ -5,7 +5,6 @@ use super::{
     worker::{self, View},
 };
 use crate::{
-    config::Config,
     engine::{Engine, Status},
     model::{Filter, Station},
     store::Store,
@@ -640,8 +639,7 @@ fn territory_filter_displays_names_but_selects_original_codes() {
 fn selection_resume_restores_source_and_page_once_without_playback() {
     use crate::config::ResumeMode;
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine.config.settings.resume = ResumeMode::Selection;
     // Any attempted playback would fail to spawn this binary.
@@ -1127,8 +1125,7 @@ fn station_removal_requires_a_second_confirmation_in_tui() {
 #[test]
 fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
     let mut filter = Filter {
@@ -1260,8 +1257,7 @@ fn expired_catalog_syncs_at_startup_and_can_be_disabled() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let api = format!("http://{}", listener.local_addr().unwrap());
-    let config = Config::load(None, Some(dir.path()), Some(&api)).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config_with_api(dir.path(), &api);
     let stop = Arc::new(AtomicBool::new(false));
     let engine = Engine::new(config, stop.clone()).unwrap();
     assert!(!worker::auto_sync_due(&engine.store, 7).unwrap());
@@ -1678,8 +1674,7 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
             let _ = stream.write_all(body);
         }
     });
-    let config = Config::load(None, Some(dir.path()), Some(&api)).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config_with_api(dir.path(), &api);
     let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
     store.upsert(&old).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
@@ -1817,8 +1812,7 @@ fn ctrl_c_quits_every_mode_and_small_screen_q_quits() {
 #[test]
 fn rapid_shortcuts_apply_against_owner_state() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine.status.volume = 80;
     let frozen = view();
@@ -1886,8 +1880,7 @@ fn full_queue_retries_every_view_query_with_latest_filter() {
 #[test]
 fn failed_info_replaces_old_details_and_external_edits_refresh() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let row = station("old detail");
     engine.store.upsert(&row).unwrap();
@@ -1946,8 +1939,7 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
 #[test]
 fn tui_recording_rejects_a_different_station() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let a = station("A");
     let b = station("B");
@@ -4101,8 +4093,7 @@ fn view_snapshots_share_partitions_and_skip_unchanged_publications() {
 #[test]
 fn station_refresh_does_not_read_recordings_until_that_source_is_selected() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine.store.upsert(&station("lazy")).unwrap();
     rusqlite::Connection::open(dir.path().join("radio.db")).unwrap()
@@ -4379,8 +4370,7 @@ fn copy_notices_name_the_row_that_was_copied() {
 #[test]
 fn favorite_log_entries_name_the_station() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let row = station("Jazz FM");
     engine.store.upsert(&row).unwrap();
@@ -4839,8 +4829,7 @@ fn failure_details_sanitize_external_control_text_and_scroll_the_full_tail() {
 #[test]
 fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let rows = [station("A"), station("B")];
     for row in &rows {
@@ -5869,8 +5858,7 @@ fn persistent_operation_error_has_details_and_explicit_dismissal() {
 #[test]
 fn source_preference_write_failure_does_not_block_list_queries() {
     let dir = tempfile::tempdir().unwrap();
-    let config = Config::load(None, Some(dir.path()), Some("http://127.0.0.1:1")).unwrap();
-    config.prepare().unwrap();
+    let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine.store.upsert(&station("needle")).unwrap();
     let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
