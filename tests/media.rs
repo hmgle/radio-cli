@@ -636,6 +636,17 @@ fn mpv_ipc_preserves_accents_and_repairs_wrapped_and_mixed_titles() {
     exercise_icy_player(false, &raw, "王菲 - 中文电台");
 }
 
+#[test]
+fn mpv_ipc_delivers_titles_with_truncated_utf8() {
+    // A live AsiaFM title mixes readable UTF-8 with truncated byte sequences.
+    // mpv forwards those invalid bytes in JSON instead of escaping them.
+    let mut raw = "蒋丽".as_bytes().to_vec();
+    raw.extend_from_slice(b"\xe8\x90?- \xe6\x83 (AsiaFM");
+    raw.extend_from_slice("亚洲粤语".as_bytes());
+    raw.extend_from_slice(b"\xe5\x8f?)");
+    exercise_icy_player(false, &raw, "蒋丽è?- æ (AsiaFM亚洲粤语å?)");
+}
+
 fn exercise_icy_player(normalize: bool, title_bytes: &[u8], expected_title: &str) {
     let dir = tempfile::tempdir().unwrap();
     let Some(mut config) = mpv_config(dir.path()) else {

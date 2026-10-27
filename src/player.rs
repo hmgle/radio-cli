@@ -108,6 +108,21 @@ fn metadata_title(metadata: &Value) -> String {
     icy_title(title)
 }
 
+fn parse_ipc_message(line: &[u8]) -> serde_json::Result<Value> {
+    if let Ok(valid) = std::str::from_utf8(line) {
+        return serde_json::from_str(valid);
+    }
+    // mpv can send broken UTF-8 inside JSON strings. Preserve valid Unicode
+    // and map invalid bytes to Latin-1 so ICY repair can still recover them.
+    // Replacing them with U+FFFD here would discard recoverable GBK bytes.
+    let mut decoded = String::with_capacity(line.len());
+    for chunk in line.utf8_chunks() {
+        decoded.push_str(chunk.valid());
+        decoded.extend(chunk.invalid().iter().map(|&byte| char::from(byte)));
+    }
+    serde_json::from_str(&decoded)
+}
+
 pub(crate) fn icy_title(title: &str) -> String {
     // Repair Latin-1 byte runs before sanitizing: C1 characters can be
     // UTF-8 continuation bytes. ASCII and existing Unicode delimit runs,
@@ -375,7 +390,7 @@ impl Player {
         }
         while let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
             let line: Vec<_> = self.buffer.drain(..=end).collect();
-            let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+            let Ok(value) = parse_ipc_message(&line) else {
                 continue;
             };
             match value["event"].as_str().unwrap_or("") {
@@ -468,7 +483,9 @@ mod socket_path_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{icy_title_bytes, metadata_title, parse_audio_devices, playback_command};
+    use super::{
+        icy_title_bytes, metadata_title, parse_audio_devices, parse_ipc_message, playback_command,
+    };
     use serde_json::json;
 
     #[test]
@@ -555,6 +572,20 @@ mod tests {
             metadata_title(&json!({"icy-title": title})),
             "邝美云 - 雪花"
         );
+    }
+
+    #[test]
+    fn ipc_metadata_keeps_unicode_and_recovers_invalid_gbk_bytes() {
+        let mut line =
+            br#"{"event":"property-change","name":"metadata","data":{"icy-title":""#.to_vec();
+        line.extend_from_slice(b"\xcd\xf5\xb7\xc6 - ");
+        line.extend_from_slice("中文电台".as_bytes());
+        line.extend_from_slice(br#"","title":"File tag"}}"#);
+        let message = parse_ipc_message(&line).unwrap();
+        assert_eq!(message["event"], "property-change");
+        assert_eq!(metadata_title(&message["data"]), "王菲 - 中文电台");
+        assert_eq!(message["data"]["title"], "File tag");
+        assert!(parse_ipc_message(b"{\"data\":\"\xff\"").is_err());
     }
 
     #[test]

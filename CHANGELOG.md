@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep receiving track updates when mpv sends invalid UTF-8 in metadata,
+  preserving readable Unicode and recoverable legacy title bytes.
+
 ## 0.8.3 — 2026-10-23
 
 - Keep TUI shortcut key highlighting consistent in filter and confirmation
