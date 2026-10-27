@@ -3,8 +3,10 @@
 The parent owns FFmpeg and both process lifetimes. No network calls or model
 downloads happen here. Input draining and VAD continue during offline decoding.
 """
+import array
 import collections
 import json
+import math
 import os
 import sys
 import threading
@@ -54,6 +56,28 @@ def stale(end_sample, origin, now):
     return now - origin - end_sample / RATE > 30
 
 
+def read_pcm(source, pcm, origin, emit):
+    """Skip corrupt frames while preserving the gap in absolute sample offsets."""
+    offset = 0
+    while True:
+        data = source.read(WINDOW * 4)
+        if not data:
+            break
+        if len(data) % 4:
+            raise ValueError("truncated PCM sample")
+        samples = array.array("f")
+        samples.frombytes(data)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if origin[0] is None:
+            origin[0] = time.monotonic()
+        if all(math.isfinite(sample) for sample in samples):
+            pcm.put(offset, samples)
+        else:
+            emit("gap")
+        offset += len(samples)
+
+
 def run(args):
     import numpy as np
     import sherpa_onnx as sherpa
@@ -96,21 +120,8 @@ def run(args):
     failures = []
 
     def read():
-        offset = 0
         try:
-            while True:
-                data = sys.stdin.buffer.read(WINDOW * 4)
-                if not data:
-                    break
-                if len(data) % 4:
-                    raise ValueError("truncated PCM sample")
-                samples = np.frombuffer(data, dtype="<f4").copy()
-                if not np.isfinite(samples).all():
-                    raise ValueError("non-finite PCM")
-                if origin[0] is None:
-                    origin[0] = time.monotonic()
-                pcm.put(offset, samples)
-                offset += len(samples)
+            read_pcm(sys.stdin.buffer, pcm, origin, emit)
         except Exception as exc:
             failures.append(str(exc))
         finally:
