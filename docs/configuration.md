@@ -275,3 +275,80 @@ Mutable state belongs to the selected data directory:
 One data directory allows one media session at a time. Other one-shot queries and
 favorite operations can still open the database. Use separate `--data-dir`
 values for concurrent manual sessions.
+
+## Live subtitles
+
+Subtitles are optional, disabled by default, and available only in the TUI for
+live HTTP(S) streams. Recognition stays on your machine. Install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) first, then run:
+
+```sh
+radio subtitles setup
+radio subtitles models list
+radio subtitles models install sensevoice-small-yue-int8
+radio subtitles doctor
+radio tui
+```
+
+In the TUI, use `:subtitles on` to start, `:subtitles off` to stop, and
+`:subtitles history` to open scrollable history. `j/k`, arrows and Page Up/Down
+scroll; `Home` shows the oldest retained text, `End` resumes following new
+subtitles, and `Esc` closes the popup. `:subtitles clear` clears the history;
+`:subtitles retry` retries a failed recognizer. The history holds at most 500
+segments and is discarded on station changes or program exit.
+
+`setup` explicitly installs managed Python 3.12 and hash-locked sherpa-onnx
+2.0.1 / NumPy 2.2.6 wheels in `<data>/speech/`. Linux glibc x86_64 and macOS
+x86_64/arm64 are supported; the optional runtime is unavailable on pure musl
+systems. Python is isolated from the system environment. Normal recognition
+never downloads packages or models. Installation needs network access to the
+Python distributions, PyPI, Hugging Face and GitHub.
+
+The Cantonese SenseVoice preset downloads approximately 242 MB including its
+vocabulary and Silero VAD. `qwen3-asr-0.6b-int8` downloads approximately 988 MB
+plus VAD and supports broader multilingual recognition. These sizes describe
+files, not peak RAM. Both model presets use Apache-2.0; Silero VAD uses MIT.
+`models list` includes license source links. Downloads resume `.part` files and
+verify SHA-256 before publishing. Use `models verify ID` to check installed
+files, `models install ID` to repair them, or `models remove ID` to remove a
+model. Stop subtitle sessions before installation or removal.
+
+```toml
+[subtitles]
+enabled = false
+model = "sensevoice-small-yue-int8"
+language = "auto"
+threads = 0
+max_segment_secs = 8
+uv = "uv"
+```
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `enabled` | `false` | Start subtitles when TUI live playback begins. |
+| `model` | `"sensevoice-small-yue-int8"` | This model or `"qwen3-asr-0.6b-int8"`; must already be installed. |
+| `language` | `"auto"` | SenseVoice: `auto`, `zh`, `yue`, `en`, `ja`, `ko`. Qwen3 requires `auto`. |
+| `threads` | `0` | Automatic: half the logical cores, limited to 1–4; explicit values: 1–32. |
+| `max_segment_secs` | `8` | VAD speech target, 2–20 seconds; a short trailing pause may be included. |
+| `uv` | `"uv"` | Executable name/path used only by `setup`. |
+
+`:set subtitles.model ID` changes the session model and restarts recognition;
+`:subtitles toggle` changes the session switch. Neither rewrites your config.
+
+Subtitles use a separate FFmpeg connection to the current playback URL. Audio
+is not delayed to wait for recognition, and the subtitle time ranges refer to
+capture, not mpv's playback position. HLS offsets, network buffering and pauses
+can make captions describe a different live position. Pause stops capture;
+resume reconnects at the live edge even if mpv resumes buffered audio. Muting
+keeps recognition running. Reconnection boundaries appear in history.
+
+Speech queues are bounded; overload skips old audio and text rather than
+accumulating unlimited delay. Results more than 30 seconds behind capture are
+discarded. Network failures retry three times; model/runtime failures require
+repair or `:subtitles retry`. Subtitle failure does not stop playback or
+recording. Recording adds its usual connection; some stations restrict listener
+connections. Track artwork probing yields while subtitles are active.
+
+This first version provides session-only transcription, without translation,
+recording transcription, export, or cloud recognition. ASR text can be wrong,
+especially over music or noise; model benchmarks are not guarantees for radio.

@@ -82,3 +82,13 @@ radio --lang en --json-v2 info missing    # station_not_found；退出码 1
 本地播放器启动错误保留原始错误码，例如 `missing_dependency`（退出码 3）、
 `player_startup`（退出码 1）或 `normalization_unavailable`（退出码 1）。
 这些失败会结束本次播放请求，不尝试音频流回退或刷新目录；正常收尾后错误码仍会保留。
+
+
+字幕管理命令始终输出 JSON。`subtitles setup` 返回 `{runtime,ready}`；
+`subtitles doctor` 仅在检查全部通过后返回 `{runtime,model,ready}`；
+`subtitles models list` 返回 `{id,bytes,license,license_url,present}` 数组。
+`present` 仅检查文件大小，`models verify ID` 才执行 SHA-256 校验。
+安装、校验、删除均返回 `{id,removed}`。V2 使用正常响应信封，进度输出至 stderr。
+字幕错误码为 `subtitle_settings`、`subtitle_model`（参数 `id`）、
+`subtitle_integrity`（`id`、`path`）、`subtitle_runtime`、`subtitle_busy`、
+`subtitle_failed`（`detail`），退出码均为 1。此版本不提供 CLI 转写数据流。

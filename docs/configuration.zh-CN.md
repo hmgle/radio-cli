@@ -232,3 +232,70 @@ radio-cli 不会改写手写配置文件或 `config.example.toml`。可变状态
 
 同一数据目录同时只允许一个媒体会话。其他一次性查询和收藏操作仍可打开数据库。
 并发运行多个手动会话时，请为每个会话使用不同的 `--data-dir`。
+
+## 直播字幕
+
+字幕默认关闭，首版仅支持 TUI 中的 HTTP(S) 直播流。识别在本机完成。
+先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，再运行：
+
+```sh
+radio subtitles setup
+radio subtitles models list
+radio subtitles models install sensevoice-small-yue-int8
+radio subtitles doctor
+radio tui
+```
+
+在 TUI 中用 `:subtitles on` 开启、`:subtitles off` 关闭，
+`:subtitles history` 打开历史弹窗。`j/k`、方向键、Page Up/Down 滚动，
+`Home` 查看最早保留的内容，`End` 恢复跟随最新字幕，`Esc` 关闭。
+`:subtitles clear` 清空历史；`:subtitles retry` 重试失败的识别任务。
+历史最多保留 500 段，换台或退出程序后丢弃。
+
+`setup` 会显式安装受管理的 Python 3.12，以及通过哈希锁定的 sherpa-onnx
+2.0.1 / NumPy 2.2.6，环境位于 `<data>/speech/`。支持 Linux glibc x86_64
+和 macOS x86_64/arm64；纯 musl 系统暂不支持此可选运行时。
+该环境与系统 Python 隔离，正常识别不会下载软件包或模型。
+安装需要访问 Python 分发源、PyPI、Hugging Face 和 GitHub。
+
+SenseVoice 粤语预设连同词表和 Silero VAD 约下载 242 MB；
+`qwen3-asr-0.6b-int8` 模型文件约 988 MB，另需 VAD，适合更广泛的多语言识别。
+文件大小不代表峰值内存。两个模型预设采用 Apache-2.0，Silero VAD 采用 MIT；
+`models list` 提供许可证来源链接。下载支持 `.part` 断点续传，通过 SHA-256
+校验后才发布。`models verify ID` 校验，`models install ID` 安装或修复，
+`models remove ID` 删除模型。安装或删除前请停止字幕会话。
+
+```toml
+[subtitles]
+enabled = false
+model = "sensevoice-small-yue-int8"
+language = "auto"
+threads = 0
+max_segment_secs = 8
+uv = "uv"
+```
+
+| 配置项 | 默认值 | 行为 |
+| --- | --- | --- |
+| `enabled` | `false` | TUI 开始直播播放后启动字幕。 |
+| `model` | `"sensevoice-small-yue-int8"` | 此模型或 `"qwen3-asr-0.6b-int8"`，必须先安装。 |
+| `language` | `"auto"` | SenseVoice：`auto`、`zh`、`yue`、`en`、`ja`、`ko`；Qwen3 仅接受 `auto`。 |
+| `threads` | `0` | 自动使用半数逻辑核心，限制在 1–4；显式值为 1–32。 |
+| `max_segment_secs` | `8` | VAD 语音目标段长，范围 2–20 秒，可能包含短暂的尾部停顿。 |
+| `uv` | `"uv"` | 仅 `setup` 使用的可执行文件名或路径。 |
+
+`:set subtitles.model ID` 切换会话模型并重启识别；`:subtitles toggle` 切换开关。
+这些命令不会改写配置文件。
+
+字幕通过独立 FFmpeg 连接读取当前播放 URL。音频不会等待识别，字幕时间范围
+表示采集位置，不是 mpv 播放位置。HLS、网络缓冲和暂停可能使两路处于不同直播位置。
+暂停会停止采集，恢复时重新接入直播，即使 mpv 正在回放缓冲的声音。
+静音不停止识别；历史中会标记重新连接的边界。
+
+队列有固定上限，过载时跳过旧音频和字幕，不会无限积压；落后采集超过 30 秒的
+识别结果会丢弃。网络故障最多重试三次；模型或运行时故障需要修复或手动重试。
+字幕故障不停止播放或录音。录音仍使用其原有连接；部分电台会限制连接数量。
+字幕活动期间，曲目封面探测会让出辅助连接。
+
+首版只提供会话内转写，不含翻译、录音转写、导出或云端识别。音乐和噪声可能导致
+识别错误，模型公开评测分数不代表实际广播准确率。

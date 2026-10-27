@@ -114,6 +114,13 @@ the job. Trusted publishing uses OIDC without a `NODE_AUTH_TOKEN` secret.
 - On macOS, the Vorbis fixture needs the encoder in Homebrew's `ffmpeg-full`:
   run `brew install ffmpeg-full mpv` and
   `export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"` before testing.
+- Run `uv run --no-project --python 3.12 python tests/speech_worker.py` for
+  deterministic speech-buffer tests; no models or speech packages are needed.
+- The ignored `real_models_transcribe_a_local_http_fixture` test requires
+  `RADIO_TEST_SPEECH_DATA` pointing at an isolated data directory with both
+  models installed, and `RADIO_TEST_SPEECH_WAV` pointing at local speech audio.
+  It makes no public station requests or model downloads. Run it with
+  `cargo test --lib real_models_transcribe_a_local_http_fixture -- --ignored --nocapture`.
 - Use `--data-dir <dir>` (and `--config <file>` when needed) so tests and manual
   runs never touch the default data directory.
 

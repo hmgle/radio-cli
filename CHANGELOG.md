@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add optional local live subtitles in the TUI, with SenseVoice Cantonese and
+  Qwen3 model presets, explicit verified downloads, and scrollable session
+  history. Speech uses an isolated runtime and a separate stream connection;
+  subtitles may lag behind or differ in timing from playback.
+
 - Keep receiving track updates when mpv sends invalid UTF-8 in metadata,
   preserving readable Unicode and recoverable legacy title bytes.
 - Show a replacement character for truncated UTF-8 in Chinese ICY titles

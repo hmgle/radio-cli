@@ -91,3 +91,15 @@ parameter (exit 1). Local player startup errors retain their original codes,
 such as `missing_dependency` (exit 3), `player_startup` (exit 1), or
 `normalization_unavailable` (exit 1). These failures end the play request without
 stream fallback or directory refresh; the error code survives normal shutdown.
+
+
+Subtitle management always emits JSON. `subtitles setup` returns
+`{runtime,ready}`; `subtitles doctor` returns `{runtime,model,ready}` only after
+all checks pass; `subtitles models list` returns an array of
+`{id,bytes,license,license_url,present}`. `present` checks file sizes only;
+`models verify ID` performs SHA-256 verification. Install/verify/remove return
+`{id,removed}`. V2 wraps these values in its normal envelope; progress uses
+stderr. Subtitle codes are `subtitle_settings`, `subtitle_model` (parameter
+`id`), `subtitle_integrity` (`id`, `path`), `subtitle_runtime`, `subtitle_busy`,
+and `subtitle_failed` (`detail`), all exit 1. There is no CLI transcription
+stream in this version.

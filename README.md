@@ -20,6 +20,8 @@ records streams without re-encoding. No account or API key is required.
   `--json-v2` output.
 - Keep favorites, history, custom stations, settings, and recordings on your
   machine.
+- Enable optional local live subtitles with SenseVoice Cantonese or Qwen3;
+  see [subtitle setup](docs/configuration.md#live-subtitles).
 - Play any HTTP(S) stream URL, or save custom stations with backup URLs.
 - Record MP3, AAC, Vorbis, and Opus streams as stream copies with metadata.
 
@@ -133,6 +135,8 @@ truncated and reported.
 | `:help [COMMAND]` | Open keyboard help or a command's usage |
 | `:set language en\|zh-CN` / `:set mouse true\|false` | Change session settings |
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | Run diagnostics / move focus |
+| `:subtitles on\|off\|toggle\|history\|clear\|retry` | Control live subtitles / inspect session history |
+| `:set subtitles.model ID` | Change the subtitle model for this session |
 | `:quit` / `:q` | Finalize recordings and quit |
 
 `:help` shows the full context-sensitive keyboard reference, and `:` followed by

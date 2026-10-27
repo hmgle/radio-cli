@@ -18,6 +18,7 @@ mpv 负责播放，FFmpeg 以流拷贝方式录音。无需账号或 API Key。
 - 使用键盘优先的 TUI，或用 CLI 编写脚本；支持兼容旧格式的 `--json` 和稳定的
   `--json-v2` 输出。
 - 收藏、历史、自定义电台、设置和录音都保存在本机。
+- 可选本地直播字幕，支持 SenseVoice 粤语或 Qwen3；见[字幕安装](docs/configuration.zh-CN.md#直播字幕)。
 - 可播放任意 HTTP(S) 流地址，或保存带备用地址的自定义电台。
 - 以流拷贝方式录制 MP3、AAC、Vorbis 和 Opus，并生成元数据。
 
@@ -121,6 +122,8 @@ tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
 | `:help [COMMAND]` | 打开键盘帮助或命令用法 |
 | `:set language en\|zh-CN` / `:set mouse true\|false` | 修改当前会话设置 |
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | 运行诊断 / 移动焦点 |
+| `:subtitles on\|off\|toggle\|history\|clear\|retry` | 控制直播字幕 / 查看会话历史 |
+| `:set subtitles.model ID` | 切换当前会话字幕模型 |
 | `:quit` / `:q` | 收尾录音并退出 |
 
 `:help` 显示完整的上下文键盘帮助；输入 `:` 后按 `Tab` 可补全命令。
