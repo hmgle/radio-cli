@@ -179,6 +179,12 @@ impl PlaybackController {
         session.artwork.cancel();
         let artwork_done = session.artwork.completion();
         session.config.settings.volume = session.status.volume;
+        let stationuuid = session
+            .status
+            .station
+            .as_ref()
+            .map(|station| station.stationuuid.clone())
+            .unwrap_or_default();
         if session.background_media {
             let local = self.source_kind == SourceKind::Local;
             let config = session.config.clone();
@@ -195,7 +201,7 @@ impl PlaybackController {
                     if local {
                         Player::start_local(&config, std::path::Path::new(&url), &cancel)
                     } else {
-                        Player::start(&config, &url, &cancel)
+                        Player::start_station(&config, &url, &stationuuid, &cancel)
                     }
                 })?,
             ));
@@ -207,7 +213,7 @@ impl PlaybackController {
                     &session.stop,
                 )?
             } else {
-                Player::start(&session.config, &self.url, &session.stop)?
+                Player::start_station(&session.config, &self.url, &stationuuid, &session.stop)?
             });
         }
         session.status.muted = false;

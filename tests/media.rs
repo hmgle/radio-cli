@@ -664,18 +664,13 @@ fn mpv_ipc_delivers_titles_with_truncated_utf8() {
     exercise_icy_player(false, &raw, "李克�?- 飞�? (AsiaFM亚洲粤语�?)");
 }
 
-fn exercise_icy_player(normalize: bool, title_bytes: &[u8], expected_title: &str) {
-    let dir = tempfile::tempdir().unwrap();
-    let Some(mut config) = mpv_config(dir.path()) else {
-        return;
-    };
-    config.settings.normalize_loudness = normalize;
+fn icy_stream_server(title_bytes: &[u8]) -> Server {
     let bytes = support::fixture("libmp3lame", "mp3");
     let mut metadata = b"StreamTitle='".to_vec();
     metadata.extend_from_slice(title_bytes);
     metadata.extend_from_slice(b"';");
     metadata.resize(metadata.len().div_ceil(16) * 16, 0);
-    let server = Server::new(move |request, stream| {
+    Server::new(move |request, stream| {
         let icy = request.to_lowercase().contains("icy-metadata: 1");
         let header = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nConnection: close\r\n{}\r\n",
@@ -702,7 +697,16 @@ fn exercise_icy_player(normalize: bool, title_bytes: &[u8], expected_title: &str
                 }
             }
         }
-    });
+    })
+}
+
+fn exercise_icy_player(normalize: bool, title_bytes: &[u8], expected_title: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(mut config) = mpv_config(dir.path()) else {
+        return;
+    };
+    config.settings.normalize_loudness = normalize;
+    let server = icy_stream_server(title_bytes);
     let stop = Arc::new(AtomicBool::new(false));
     let mut player = Player::start(&config, &server.url, &stop).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -756,6 +760,69 @@ fn exercise_icy_player(normalize: bool, title_bytes: &[u8], expected_title: &str
     }
     drop(player);
     assert_eq!(fs::read_dir(&config.runtime_dir).unwrap().count(), 0);
+}
+
+#[test]
+fn asiafm_metadata_patch_scopes_real_playback_and_recording_titles() {
+    let mut raw = b"\xd5\xc5\xb9\xfa\xc8\xd9 - \xe7 (AsiaFM".to_vec();
+    raw.extend_from_slice("亚洲粤语".as_bytes());
+    raw.extend_from_slice(b"\xe5\x8f?)");
+    let server = icy_stream_server(&raw);
+    let uuid = "fb1a81c7-cdf2-4ed8-912c-796918d0fa08";
+    for (enabled, stationuuid, expected) in [
+        (false, uuid, "张国荣 - ç (AsiaFM亚洲粤语�?)"),
+        (
+            true,
+            "11111111-1111-4111-8111-111111111111",
+            "张国荣 - ç (AsiaFM亚洲粤语�?)",
+        ),
+        (true, uuid, "张国荣 - �"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(mut config) = mpv_config(dir.path()) else {
+            return;
+        };
+        config.settings.asiafm_metadata_patch = enabled;
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let station = Station {
+            stationuuid: stationuuid.into(),
+            ..sample(&server.url)
+        };
+        engine.store.upsert(&station).unwrap();
+        engine.play(stationuuid).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while engine.status.title != expected || !engine.status.playing() {
+            engine.tick().unwrap();
+            assert!(
+                Instant::now() < deadline,
+                "expected {expected:?}, got {:?}: {}",
+                engine.status.title,
+                engine.status.message
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        if enabled && stationuuid == uuid {
+            engine
+                .record_current(Some(Duration::from_secs(1)), None)
+                .unwrap();
+            while engine.status.recording_path.is_empty()
+                || engine.status.recording()
+                || engine.status.recording_state == radio_cli::engine::RecordingState::Finalizing
+            {
+                engine.tick().unwrap();
+                assert!(Instant::now() < deadline, "{}", engine.status.message);
+                thread::sleep(Duration::from_millis(10));
+            }
+            let saved = engine.store.recordings(1).unwrap().remove(0);
+            assert_eq!(saved.status, "complete", "{:?}", saved.error);
+            assert_eq!(saved.track.as_deref(), Some(expected));
+            assert!(saved.path.contains("张国荣"));
+            let sidecar: radio_cli::model::Recording =
+                serde_json::from_slice(&fs::read(format!("{}.json", saved.path)).unwrap()).unwrap();
+            assert_eq!(sidecar.track, saved.track);
+        }
+        engine.stop_playback().unwrap();
+    }
 }
 
 #[test]

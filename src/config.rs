@@ -21,6 +21,7 @@ pub struct Settings {
     pub api_url: Option<String>,
     pub mpv: String,
     pub normalize_loudness: bool,
+    pub asiafm_metadata_patch: bool,
     pub audio_device: Option<String>,
     pub ffmpeg: String,
     pub ffprobe: String,
@@ -46,6 +47,7 @@ impl Default for Settings {
             api_url: None,
             mpv: "mpv".into(),
             normalize_loudness: false,
+            asiafm_metadata_patch: false,
             audio_device: None,
             ffmpeg: "ffmpeg".into(),
             ffprobe: "ffprobe".into(),
@@ -305,6 +307,21 @@ pub fn validate_url(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asiafm_metadata_patch_is_an_explicit_boolean_and_defaults_off() {
+        let example: Settings = toml::from_str(include_str!("../config.example.toml")).unwrap();
+        assert!(!example.asiafm_metadata_patch);
+        assert!(!Settings::default().asiafm_metadata_patch);
+        let settings: Settings = toml::from_str("asiafm_metadata_patch = true").unwrap();
+        assert!(settings.asiafm_metadata_patch);
+        assert!(
+            toml::from_str::<Settings>(&toml::to_string(&settings).unwrap())
+                .unwrap()
+                .asiafm_metadata_patch
+        );
+        assert!(toml::from_str::<Settings>("asiafm_metadata_patch = 'true'").is_err());
+    }
 
     #[test]
     fn artwork_modes_are_explicit_and_disabled_by_default() {

@@ -21,6 +21,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) mod asiafm;
+
 #[derive(Debug)]
 pub enum Event {
     Playing,
@@ -38,6 +40,7 @@ pub struct Player {
     socket: PathBuf,
     buffer: Vec<u8>,
     audio_device: Option<String>,
+    asiafm_metadata_patch: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -364,8 +367,22 @@ fn playback_command(config: &Config, socket: &Path) -> Command {
 
 impl Player {
     pub fn start(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
+        Self::start_station(config, url, "", stop)
+    }
+
+    pub(crate) fn start_station(
+        config: &Config,
+        url: &str,
+        stationuuid: &str,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<Self> {
         validate_url(url)?;
-        Self::start_input(config, url, stop)
+        Self::start_input(
+            config,
+            url,
+            stop,
+            asiafm::enabled(&config.settings, stationuuid, url),
+        )
     }
 
     pub fn start_local(
@@ -376,10 +393,15 @@ impl Player {
         let path = fs::canonicalize(path)?;
         let url = reqwest::Url::from_file_path(path)
             .map_err(|_| DomainError::new(ErrorCode::InvalidUrl))?;
-        Self::start_input(config, url.as_str(), stop)
+        Self::start_input(config, url.as_str(), stop, false)
     }
 
-    fn start_input(config: &Config, url: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
+    fn start_input(
+        config: &Config,
+        url: &str,
+        stop: &Arc<AtomicBool>,
+        asiafm_metadata_patch: bool,
+    ) -> Result<Self> {
         let socket = ipc_socket_path(&config.runtime_dir);
         if socket.as_os_str().len() > SOCKET_PATH_LIMIT {
             // The runtime directory and the system temp directory are both
@@ -416,6 +438,7 @@ impl Player {
             socket,
             buffer: vec![],
             audio_device: config.settings.audio_device.clone(),
+            asiafm_metadata_patch,
         };
         for (id, property) in [(1, "metadata"), (2, "pause"), (3, "volume"), (4, "mute")] {
             player.command(json!(["observe_property", id, property]))?;
@@ -496,7 +519,15 @@ impl Player {
                 }
                 "property-change" => match value["name"].as_str().unwrap_or("") {
                     "metadata" => {
-                        out.push(Event::Title(metadata_title(&value["data"])));
+                        let title = metadata_title(&value["data"]);
+                        let title = if self.asiafm_metadata_patch
+                            && value["data"]["icy-title"].is_string()
+                        {
+                            asiafm::title(&title)
+                        } else {
+                            title
+                        };
+                        out.push(Event::Title(title));
                     }
                     "pause" => out.push(Event::Paused(value["data"].as_bool().unwrap_or(false))),
                     "mute" => out.push(Event::Muted(value["data"].as_bool().unwrap_or(false))),

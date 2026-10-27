@@ -38,6 +38,7 @@ Resolution rules:
 | `mpv` | `"mpv"` | Executable name or path used for playback, device enumeration, and filter checks. |
 | `volume` | `80` | Integer from 0 to 100. The runtime volume is stored in SQLite and reused on later sessions. |
 | `normalize_loudness` | `false` | Enable playback-only loudness normalization. Recording remains a stream copy. |
+| `asiafm_metadata_patch` | `false` | Optional cleanup of AsiaFM Cantonese track titles. See [AsiaFM titles](#asiafm-titles). |
 | `audio_device` | automatic | Optional mpv output device name. Omit or use `""` for automatic selection. |
 | `resume` | `false` | `false`, `true`, or `"selection"`. See [Resume modes](#resume-modes). |
 | `playback_timeout_secs` | `12` | Integer from 1 to 300. Deadline for playback to begin. |
@@ -64,6 +65,31 @@ is remembered independently and is always restored.
 never modifies a recording. Support is checked once per configured mpv executable
 for the lifetime of the process. If the filter is unavailable, disable the
 setting or install an mpv build that provides it.
+
+### AsiaFM titles
+
+Set the top-level `asiafm_metadata_patch = true` to clean up damaged titles from
+AsiaFM Cantonese, UUID `fb1a81c7-cdf2-4ed8-912c-796918d0fa08`. The same option
+works for direct/custom playback of `http://yyt.asiafm.net:8000/asiafm` (or HTTPS
+on the same host, port and path). Restart radio-cli after editing the config.
+
+The patch removes the known trailing `(AsiaFM亚洲粤语台)` watermark, including
+its damaged forms, collapses whitespace, and shows missing text as `�` rather
+than `�?`. For example, `张国荣  (AsiaFM亚洲粤语�?)` becomes `张国荣`, and
+`陈小�?- ? (AsiaFM亚洲粤语�?)` becomes `陈小� - ?`. The normal decoder attempts
+GBK repair with or without this option; the patch never guesses an artist or
+song name.
+
+On this station, an entire field containing only a Latin-1 UTF-8 lead such as
+`ç` is treated as truncated text and displayed as `�`. This is a station-specific
+assumption: a genuine single accented letter in that position also becomes
+`�`; words such as `Café` and `Jóga` are preserved. Other stations, unknown
+watermark formats, and local file tags are left alone.
+
+Cover matching uses the same cleaned title. Recordings started during playback
+capture that title in their filename and `track` metadata; existing recordings
+are not rewritten. The option adds no network requests and cannot recover
+bytes already discarded upstream.
 
 ## Recording settings
 

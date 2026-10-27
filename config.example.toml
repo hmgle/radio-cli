@@ -8,6 +8,10 @@ volume = 80
 # Uses dynaudnorm with a short window (f=150:g=5); adds some buffering.
 # Filter support is cached per mpv executable for this process.
 normalize_loudness = false
+# Optional title cleanup for AsiaFM Cantonese only (UUID fb1a81c7-...).
+# Removes the fixed station watermark and marks damaged fields; no song guesses.
+# Applies to playback titles and titles captured by subsequent recordings.
+asiafm_metadata_patch = false
 # Optional mpv output device; absent/empty uses automatic selection.
 # Names depend on mpv's audio backend; list them with: radio devices
 # Local player/device failures end playback without stream URL fallback.

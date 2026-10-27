@@ -102,7 +102,14 @@ impl Controller {
         {
             if self.key.as_ref() == Some(key) {
                 match result {
-                    Ok(Some(metadata)) => {
+                    Ok(Some(mut metadata)) => {
+                        if crate::player::asiafm::enabled(
+                            &config.settings,
+                            &key.request.stationuuid,
+                            &key.request.source_url,
+                        ) {
+                            metadata.title = crate::player::asiafm::title(&metadata.title);
+                        }
                         self.cover = metadata
                             .url
                             .filter(|_| {
@@ -451,6 +458,30 @@ mod tests {
         let started = Instant::now();
         assert!(run(probe(&config, &stalled.url)).is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn asiafm_cover_matching_uses_the_same_opt_in_cleanup_as_playback() {
+        let server = Server::new(move |_, stream| {
+            icy(
+                stream,
+                &body("张国荣  (AsiaFM亚洲粤语�?)", "http://localhost/cover.png"),
+            );
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_support::config(dir.path());
+        let mut selected = request(&server.url, "张国荣");
+        selected.stationuuid = "fb1a81c7-cdf2-4ed8-912c-796918d0fa08".into();
+        for enabled in [false, true] {
+            config.settings.asiafm_metadata_patch = enabled;
+            let mut controller = Controller::default();
+            finish(&mut controller, &config, Some(selected.clone()));
+            assert_eq!(controller.cover.is_some(), enabled);
+        }
+        selected.stationuuid = "another-station".into();
+        let mut controller = Controller::default();
+        finish(&mut controller, &config, Some(selected));
+        assert!(controller.cover.is_none());
     }
 
     #[test]

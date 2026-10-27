@@ -8,6 +8,8 @@
   instead of displaying the incomplete bytes as Latin-1 characters.
 - Recover GBK ICY titles containing valid UTF-8 subsequences through mpv IPC,
   including names such as 张国荣 and 河图.
+- Add an opt-in `asiafm_metadata_patch` setting to remove the fixed Cantonese
+  station watermark and clarify damaged track fields without guessing songs.
 
 ## 0.8.3 — 2026-10-23
 
