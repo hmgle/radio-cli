@@ -634,6 +634,15 @@ fn mpv_ipc_preserves_accents_and_repairs_wrapped_and_mixed_titles() {
     let mut raw = b"\xcd\xf5\xb7\xc6 - ".to_vec();
     raw.extend_from_slice("中文电台".as_bytes());
     exercise_icy_player(false, &raw, "王菲 - 中文电台");
+
+    for (raw, expected) in [
+        (b"\xd5\xc5\xb9\xfa\xc8\xd9".as_slice(), "张国荣"),
+        (b"\xba\xd3\xcd\xbc".as_slice(), "河图"),
+    ] {
+        let mut title = raw.to_vec();
+        title.extend_from_slice(" - 中文电台".as_bytes());
+        exercise_icy_player(false, &title, &format!("{expected} - 中文电台"));
+    }
 }
 
 #[test]

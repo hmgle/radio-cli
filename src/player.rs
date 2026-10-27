@@ -105,18 +105,59 @@ fn metadata_title(metadata: &Value) -> String {
     let Some(title) = metadata["icy-title"].as_str() else {
         return crate::clean_text(metadata["title"].as_str().unwrap_or(""));
     };
-    icy_title(title)
+    icy_title(&repair_mpv_gbk_runs(title))
+}
+
+fn repair_mpv_gbk_runs(title: &str) -> String {
+    let mut repaired = String::with_capacity(title.len());
+    let mut start = 0;
+    for (end, character) in title
+        .char_indices()
+        .chain(std::iter::once((title.len(), ' ')))
+    {
+        if character.is_ascii() || is_cjk(character) || !character.is_alphabetic() {
+            let run = &title[start..end];
+            // Some mpv builds turn invalid bytes into Latin-1 while retaining
+            // valid UTF-8 subsequences (C5 B9 -> Ź inside GBK 张国荣).
+            // Reconstruct that mixed run only when the normal conservative
+            // GBK heuristic accepts it. Complete Unicode elsewhere is intact.
+            if run.chars().any(|c| c > '\u{ff}') && run.chars().any(|c| c <= '\u{ff}') {
+                let mut bytes = Vec::new();
+                for c in run.chars() {
+                    if c <= '\u{ff}' {
+                        bytes.push(c as u8);
+                    } else {
+                        bytes.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+                    }
+                }
+                let latin1: String = bytes.iter().map(|&byte| char::from(byte)).collect();
+                if let Cow::Owned(decoded) = repair_latin1_run(&latin1, false)
+                    && decoded.chars().all(is_cjk)
+                {
+                    repaired.push_str(&decoded);
+                } else {
+                    repaired.push_str(run);
+                }
+            } else {
+                repaired.push_str(run);
+            }
+            if end < title.len() {
+                repaired.push(character);
+                start = end + character.len_utf8();
+            }
+        }
+    }
+    repaired
 }
 
 fn parse_ipc_message(line: &[u8]) -> serde_json::Result<Value> {
     if let Ok(valid) = std::str::from_utf8(line) {
         return serde_json::from_str(valid);
     }
-    // mpv can send broken UTF-8 inside JSON strings. Preserve valid Unicode
-    // and retain invalid bytes for ICY repair unless truncation is evident.
-    // Replacing every invalid byte would discard recoverable GBK bytes.
-    let mut decoded = String::with_capacity(line.len());
-    push_metadata_bytes(line, &mut decoded);
+    // Repair whole non-ASCII runs before UTF-8 chunking: GBK bytes can contain
+    // valid UTF-8 subsequences, which would otherwise hide recoverable bytes.
+    // Do not sanitize JSON here; other fields must retain their Unicode.
+    let decoded = decode_metadata_bytes(line);
     serde_json::from_str(&decoded)
 }
 
@@ -161,6 +202,10 @@ pub(crate) fn icy_title(title: &str) -> String {
 }
 
 pub(crate) fn icy_title_bytes(bytes: &[u8]) -> String {
+    icy_title(&decode_metadata_bytes(bytes))
+}
+
+fn decode_metadata_bytes(bytes: &[u8]) -> String {
     // Decode each non-ASCII run independently. Some GBK bytes happen to form
     // short UTF-8 sequences, so try a complete run before the byte fallback.
     let mut title = String::with_capacity(bytes.len());
@@ -173,7 +218,7 @@ pub(crate) fn icy_title_bytes(bytes: &[u8]) -> String {
         }
     }
     decode_icy_run(&bytes[start..], &mut title);
-    icy_title(&title)
+    title
 }
 
 fn decode_icy_run(bytes: &[u8], title: &mut String) {
@@ -625,6 +670,32 @@ mod tests {
     }
 
     #[test]
+    fn ipc_metadata_repairs_gbk_runs_with_valid_utf8_subsequences() {
+        for (raw, expected) in [
+            (b"\xd5\xc5\xb9\xfa\xc8\xd9".as_slice(), "张国荣"),
+            (b"\xba\xd3\xcd\xbc".as_slice(), "河图"),
+        ] {
+            let mut line = br#"{"icy-title":""#.to_vec();
+            line.extend_from_slice(raw);
+            line.extend_from_slice(r#" - Björk（中文）","title":"Café"}"#.as_bytes());
+            let message = parse_ipc_message(&line).unwrap();
+            assert_eq!(
+                metadata_title(&message),
+                format!("{expected} - Björk（中文）")
+            );
+            assert_eq!(message["title"], "Café");
+        }
+        // A valid accent alongside unrelated invalid bytes stays Unicode.
+        let message = parse_ipc_message(b"{\"icy-title\":\"Caf\xc3\xa9\xff\"}").unwrap();
+        assert_eq!(metadata_title(&message), "Caféÿ");
+
+        // mpv versions which wrap only invalid bytes already send valid JSON.
+        for (title, expected) in [("ÕŹúÈÙ", "张国荣"), ("ºÓͼ", "河图")] {
+            assert_eq!(metadata_title(&json!({"icy-title": title})), expected);
+        }
+    }
+
+    #[test]
     fn icy_titles_repair_gbk_segments_in_mixed_mojibake() {
         // AsiaFM sends GBK song text before UTF-8 station text. The final
         // metadata byte is already a literal question mark and cannot be
@@ -691,6 +762,7 @@ mod tests {
             "Björk - Jóga",
             "Motörhead - Ace of Spades",
             "Sigur Rós - Hoppípolla",
+            "ΩΩ - ŹŹ - Ελλάδα - Łódź",
             "Chloéë",
             "Chloéë - 中文电台",
             "Café - 中文电台",

@@ -6,6 +6,8 @@
   preserving readable Unicode and recoverable legacy title bytes.
 - Show a replacement character for truncated UTF-8 in Chinese ICY titles
   instead of displaying the incomplete bytes as Latin-1 characters.
+- Recover GBK ICY titles containing valid UTF-8 subsequences through mpv IPC,
+  including names such as 张国荣 and 河图.
 
 ## 0.8.3 — 2026-10-23
 
