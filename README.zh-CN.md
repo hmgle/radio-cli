@@ -244,7 +244,7 @@ radio completions zsh > _radio
 | 类别 | 配置项 |
 | --- | --- |
 | 目录与网络 | `api_url`、`connect_timeout_secs`、`request_timeout_secs`、`auto_sync_days` |
-| 播放 | `mpv`、`volume`、`normalize_loudness`、`audio_device`、`resume`、`playback_timeout_secs` |
+| 播放 | `mpv`、`volume`、`normalize_loudness`、`asiafm_metadata_patch`、`audio_device`、`resume`、`playback_timeout_secs` |
 | 录音 | `ffmpeg`、`ffprobe`、`recording_dir`、`probe_timeout_secs`、`recording_min_free_mb` |
 | 界面 | `language`、`theme`、`artwork`、`mouse`、`keybindings.jump_to_playing` |
 

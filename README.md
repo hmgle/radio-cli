@@ -259,7 +259,7 @@ directory at startup.
 | Area | Settings |
 | --- | --- |
 | Catalog and network | `api_url`, `connect_timeout_secs`, `request_timeout_secs`, `auto_sync_days` |
-| Playback | `mpv`, `volume`, `normalize_loudness`, `audio_device`, `resume`, `playback_timeout_secs` |
+| Playback | `mpv`, `volume`, `normalize_loudness`, `asiafm_metadata_patch`, `audio_device`, `resume`, `playback_timeout_secs` |
 | Recording | `ffmpeg`, `ffprobe`, `recording_dir`, `probe_timeout_secs`, `recording_min_free_mb` |
 | Interface | `language`, `theme`, `artwork`, `mouse`, `keybindings.jump_to_playing` |
 
