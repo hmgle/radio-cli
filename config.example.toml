@@ -67,3 +67,5 @@ language = "auto" # SenseVoice: auto/zh/yue/en/ja/ko; Qwen3: auto only
 threads = 0 # automatic: half the logical cores, capped at four; explicit: 1–32
 max_segment_secs = 8 # 2–20; VAD may include a short trailing pause
 uv = "uv"
+# Optional mirror: <base>/<model-id>/<file-path>; official source is fallback.
+# model_mirror = "https://mirror.example.com/radio-models/"

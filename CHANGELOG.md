@@ -5,7 +5,9 @@
 - Add optional local live subtitles in the TUI, with SenseVoice Cantonese and
   Qwen3 model presets, explicit verified downloads, and scrollable session
   history. Speech uses an isolated runtime and a separate stream connection;
-  subtitles may lag behind or differ in timing from playback.
+  subtitles may lag behind or differ in timing from playback. Model downloads
+  support a configurable mirror, disk space checks, and official fallback
+  while retaining fixed SHA-256 verification.
 
 - Keep receiving track updates when mpv sends invalid UTF-8 in metadata,
   preserving readable Unicode and recoverable legacy title bytes.

@@ -314,7 +314,14 @@ files, `models install ID` to repair them, or `models remove ID` to remove a
 model. Stop subtitle sessions before installation or removal.
 
 Before downloading, installation reports the remaining bytes and checks free
-disk space, allowing for resumable files and a 64 MiB reserve.
+disk space, allowing for resumable files and a 64 MiB reserve. An optional
+`model_mirror` HTTP(S) base URL serves files as
+`<base>/<model-id>/<file-path>`, for example
+`https://mirror.example.com/radio-models/silero-vad/silero_vad.onnx`.
+The official source is tried if the mirror fails. The mirror must provide the
+exact files pinned by the built-in manifest: size and SHA-256 verification
+remain mandatory. This setting covers model and VAD downloads, not Python or
+package installation. Query strings and fragments are not supported.
 
 ```toml
 [subtitles]
@@ -324,6 +331,7 @@ language = "auto"
 threads = 0
 max_segment_secs = 8
 uv = "uv"
+# model_mirror = "https://mirror.example.com/radio-models/"
 ```
 
 | Setting | Default | Behavior |
@@ -334,6 +342,7 @@ uv = "uv"
 | `threads` | `0` | Automatic: half the logical cores, limited to 1–4; explicit values: 1–32. |
 | `max_segment_secs` | `8` | VAD speech target, 2–20 seconds; a short trailing pause may be included. |
 | `uv` | `"uv"` | Executable name/path used only by `setup`. |
+| `model_mirror` | unset | Optional model download base URL, with official fallback and fixed SHA-256 checks. |
 
 `:set subtitles.model ID` changes the session model and restarts recognition;
 `:subtitles toggle` changes the session switch. Neither rewrites your config.
@@ -348,9 +357,10 @@ keeps recognition running. Reconnection boundaries appear in history.
 Speech queues are bounded; overload skips old audio and text rather than
 accumulating unlimited delay. Results more than 30 seconds behind capture are
 discarded. Network failures retry three times; model/runtime failures require
-repair or `:subtitles retry`. Subtitle failure does not stop playback or
-recording. Recording adds its usual connection; some stations restrict listener
-connections. Track artwork probing yields while subtitles are active.
+repair or `:subtitles retry`. Invalid PCM frames are skipped and marked as gaps.
+Subtitle failure does not stop playback or recording. Recording adds its usual
+connection; some stations restrict listener connections. Track artwork probing
+yields while subtitles are active.
 
 This first version provides session-only transcription, without translation,
 recording transcription, export, or cloud recognition. ASR text can be wrong,

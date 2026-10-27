@@ -266,7 +266,12 @@ SenseVoice 粤语预设连同词表和 Silero VAD 约下载 242 MB；
 `models remove ID` 删除模型。安装或删除前请停止字幕会话。
 
 安装会在下载前提示剩余下载字节数，检查可用磁盘空间，计入可续传文件并预留
-64 MiB。
+64 MiB。可选的 `model_mirror` 为 HTTP(S) 基础 URL，文件布局为
+`<base>/<model-id>/<file-path>`，例如
+`https://mirror.example.com/radio-models/silero-vad/silero_vad.onnx`。
+镜像失败后回退到官方源。镜像必须提供内置 manifest 锁定的原始文件，
+文件大小和 SHA-256 校验仍为必需。此配置覆盖模型和 VAD 下载，不影响 Python
+或软件包安装；不支持查询参数和 URL 片段。
 
 ```toml
 [subtitles]
@@ -276,6 +281,7 @@ language = "auto"
 threads = 0
 max_segment_secs = 8
 uv = "uv"
+# model_mirror = "https://mirror.example.com/radio-models/"
 ```
 
 | 配置项 | 默认值 | 行为 |
@@ -286,6 +292,7 @@ uv = "uv"
 | `threads` | `0` | 自动使用半数逻辑核心，限制在 1–4；显式值为 1–32。 |
 | `max_segment_secs` | `8` | VAD 语音目标段长，范围 2–20 秒，可能包含短暂的尾部停顿。 |
 | `uv` | `"uv"` | 仅 `setup` 使用的可执行文件名或路径。 |
+| `model_mirror` | 未设置 | 可选模型下载基础 URL，失败回退官方源，仍执行固定 SHA-256 校验。 |
 
 `:set subtitles.model ID` 切换会话模型并重启识别；`:subtitles toggle` 切换开关。
 这些命令不会改写配置文件。
@@ -297,6 +304,7 @@ uv = "uv"
 
 队列有固定上限，过载时跳过旧音频和字幕，不会无限积压；落后采集超过 30 秒的
 识别结果会丢弃。网络故障最多重试三次；模型或运行时故障需要修复或手动重试。
+无效的 PCM 帧会被跳过，并标记音频中断。
 字幕故障不停止播放或录音。录音仍使用其原有连接；部分电台会限制连接数量。
 字幕活动期间，曲目封面探测会让出辅助连接。
 

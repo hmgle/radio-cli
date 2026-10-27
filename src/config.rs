@@ -72,6 +72,7 @@ pub struct SubtitleSettings {
     pub threads: u8,
     pub max_segment_secs: u8,
     pub uv: String,
+    pub model_mirror: Option<String>,
 }
 
 impl Default for SubtitleSettings {
@@ -83,12 +84,21 @@ impl Default for SubtitleSettings {
             threads: 0,
             max_segment_secs: 8,
             uv: "uv".into(),
+            model_mirror: None,
         }
     }
 }
 
 impl SubtitleSettings {
     pub fn validate(&self) -> Result<()> {
+        let mirror_valid = self.model_mirror.as_ref().is_none_or(|value| {
+            reqwest::Url::parse(value).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+            })
+        });
         if !matches!(
             self.model.as_str(),
             "sensevoice-small-yue-int8" | "qwen3-asr-0.6b-int8"
@@ -99,6 +109,7 @@ impl SubtitleSettings {
             || self.threads > 32
             || !(2..=20).contains(&self.max_segment_secs)
             || self.uv.trim().is_empty()
+            || !mirror_valid
         {
             bail!(DomainError::new(ErrorCode::SubtitleSettings));
         }
@@ -371,6 +382,10 @@ mod tests {
             "max_segment_secs=1",
             "max_segment_secs=21",
             "model='qwen3-asr-0.6b-int8'\nlanguage='yue'",
+            "model_mirror=''",
+            "model_mirror='file:///tmp/models'",
+            "model_mirror='https://example.com/models?token=secret'",
+            "model_mirror='https://example.com/models#part'",
         ] {
             let settings: Settings = toml::from_str(&format!("[subtitles]\n{text}")).unwrap();
             assert!(settings.subtitles.validate().is_err(), "{text}");
@@ -378,6 +393,10 @@ mod tests {
         let settings: Settings = toml::from_str("[subtitles]\nlanguage='yue'\nthreads=2").unwrap();
         settings.subtitles.validate().unwrap();
         assert_eq!(settings.subtitles.effective_threads(), 2);
+        let settings: Settings =
+            toml::from_str("[subtitles]\nmodel_mirror='https://example.com/radio/models/'")
+                .unwrap();
+        settings.subtitles.validate().unwrap();
         assert!(toml::from_str::<Settings>("[subtitles]\nthread=2").is_err());
     }
 

@@ -44,7 +44,7 @@ pub(super) struct Model {
     pub files: Vec<ModelFile>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct ModelFile {
     pub path: String,
     pub url: String,
@@ -306,6 +306,82 @@ fn partial_len(path: &Path) -> Result<u64> {
     }
 }
 
+fn sources(config: &Config, id: &str, file: &ModelFile) -> Result<Vec<String>> {
+    let mut urls = Vec::new();
+    if let Some(base) = &config.settings.subtitles.model_mirror {
+        let mut url = reqwest::Url::parse(base)?;
+        url.path_segments_mut()
+            .map_err(|_| DomainError::new(ErrorCode::SubtitleSettings))?
+            .pop_if_empty()
+            .push(id)
+            .extend(file.path.split('/'));
+        urls.push(url.into());
+    }
+    urls.push(file.url.clone());
+    Ok(urls)
+}
+
+fn install_file(
+    config: &Config,
+    client: &reqwest::Client,
+    id: &str,
+    file: &ModelFile,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let path = model_dir(config, id).join(&file.path);
+    let mut last_error = None;
+    let mut failures = Vec::new();
+    for url in sources(config, id, file)? {
+        let source = ModelFile {
+            url,
+            ..file.clone()
+        };
+        let resumed = partial_len(&partial_path(&path))? > 0;
+        let mut result = download(client, &path, &source, stop);
+        if resumed
+            && result.as_ref().is_err_and(|e| {
+                e.downcast_ref::<DomainError>()
+                    .is_some_and(|e| e.code == ErrorCode::SubtitleIntegrity)
+            })
+        {
+            // The prefix may come from a failed mirror. A digest mismatch has
+            // deleted that partial file; retry this source once from scratch.
+            result = download(client, &path, &source, stop);
+        }
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                cancelled(stop)?;
+                // A second server cannot fix a local filesystem failure.
+                if error.downcast_ref::<std::io::Error>().is_some()
+                    || error
+                        .downcast_ref::<DomainError>()
+                        .is_some_and(|e| e.code == ErrorCode::SubtitleSpace)
+                {
+                    return Err(error);
+                }
+                let error = if error
+                    .downcast_ref::<DomainError>()
+                    .is_some_and(|e| e.code == ErrorCode::SubtitleIntegrity)
+                {
+                    anyhow::Error::new(
+                        DomainError::new(ErrorCode::SubtitleIntegrity)
+                            .with("id", id)
+                            .with("path", path.display()),
+                    )
+                } else {
+                    error
+                };
+                failures.push(crate::redact::urls(&format!("{}: {error:#}", source.url)));
+                last_error = Some(error);
+            }
+        }
+    }
+    Err(last_error
+        .expect("canonical source")
+        .context(failures.join("; ")))
+}
+
 fn pending_bytes(config: &Config, models: &[Model], stop: &AtomicBool) -> Result<u64> {
     let mut pending = 0_u64;
     for model in models {
@@ -472,7 +548,7 @@ pub fn manage(
                         .build()?;
                     for m in required {
                         for f in &m.files {
-                            download(&client, &model_dir(config, &m.id).join(&f.path), f, stop)?;
+                            install_file(config, &client, &m.id, f, stop)?;
                         }
                     }
                     verify(config, id, stop)?;
@@ -521,6 +597,64 @@ mod tests {
             );
         }
         assert!(!root(&config).exists());
+    }
+
+    #[test]
+    fn mirrors_preserve_base_paths_and_fall_back_without_changing_hashes() {
+        use std::sync::{Arc, atomic::AtomicUsize};
+        // Successful mirror, bad digest, missing file, and corrupt partial.
+        for mode in 0..4 {
+            let origin_calls = Arc::new(AtomicUsize::new(0));
+            let calls = origin_calls.clone();
+            let origin = Server::new(move |request, stream| {
+                let attempt = calls.fetch_add(1, Ordering::Relaxed);
+                if mode == 3 && attempt == 0 {
+                    assert!(request.to_ascii_lowercase().contains("range: bytes=3-"));
+                    stream.write_all(b"HTTP/1.1 206 OK\r\nContent-Range: bytes 3-5/6\r\nContent-Length: 3\r\nConnection: close\r\n\r\ndef").unwrap();
+                } else {
+                    assert!(!request.to_ascii_lowercase().contains("range:"));
+                    response(stream, 200, "application/octet-stream", b"abcdef");
+                }
+            });
+            let mirror = Server::new(move |request, stream| {
+                assert!(request.starts_with("GET /base/test-model/tokenizer/vocab.json "));
+                match mode {
+                    0 => response(stream, 200, "application/octet-stream", b"abcdef"),
+                    1 => response(stream, 200, "application/octet-stream", b"xxxxxx"),
+                    2 => response(stream, 404, "text/plain", b"missing"),
+                    _ => response(stream, 200, "application/octet-stream", b"xxx"),
+                }
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            config.settings.subtitles.model_mirror = Some(format!("{}/base/", mirror.url));
+            let file = ModelFile {
+                path: "tokenizer/vocab.json".into(),
+                url: origin.url.clone(),
+                size: 6,
+                sha256: format!("{:x}", Sha256::digest(b"abcdef")),
+            };
+            install_file(
+                &config,
+                &reqwest::Client::new(),
+                "test-model",
+                &file,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(
+                fs::read(model_dir(&config, "test-model").join(&file.path)).unwrap(),
+                b"abcdef"
+            );
+            assert_eq!(
+                origin_calls.load(Ordering::Relaxed),
+                match mode {
+                    0 => 0,
+                    3 => 2,
+                    _ => 1,
+                }
+            );
+        }
     }
 
     #[test]
