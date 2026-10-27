@@ -46,6 +46,10 @@ Legacy `--json` remains available. Its success shapes are:
 Page `limit` is `null` with `--all`; otherwise it is the requested page size.
 `offset` is zero-based. JSON preserves user strings, including Unicode;
 terminal control characters are sanitized only for human-facing output.
+Stream metadata is decoded rather than preserved as raw input. With
+[`asiafm_metadata_patch`](configuration.md#asiafm-titles) enabled, titles for the
+matching station are cleaned before use; JSON recording `track` and `path`
+fields for recordings started during playback reflect the cleaned title.
 Legacy failures print a diagnostic on stderr and use the same exit codes.
 Legacy doctor/recovery/recording may print their diagnostic data before a
 nonzero exit. Prefer v2 when an atomic success/error response is required.

@@ -123,7 +123,9 @@ fn repair_mpv_gbk_runs(title: &str) -> String {
             // Some mpv builds turn invalid bytes into Latin-1 while retaining
             // valid UTF-8 subsequences (C5 B9 -> Ź inside GBK 张国荣).
             // Reconstruct that mixed run only when the normal conservative
-            // GBK heuristic accepts it. Complete Unicode elsewhere is intact.
+            // GBK heuristic accepts it. Like pure Latin-1 runs, mixed Unicode
+            // runs can be false positives (e.g. Ωéé -> 惟殚); this is not
+            // encoding detection.
             if run.chars().any(|c| c > '\u{ff}') && run.chars().any(|c| c <= '\u{ff}') {
                 let mut bytes = Vec::new();
                 for c in run.chars() {
@@ -159,6 +161,8 @@ fn parse_ipc_message(line: &[u8]) -> serde_json::Result<Value> {
     }
     // Repair whole non-ASCII runs before UTF-8 chunking: GBK bytes can contain
     // valid UTF-8 subsequences, which would otherwise hide recoverable bytes.
+    // This fallback applies to every IPC field, including file tags such as
+    // title, not only icy-title. Complete UTF-8 runs remain unchanged.
     // Do not sanitize JSON here; other fields must retain their Unicode.
     let decoded = decode_metadata_bytes(line);
     serde_json::from_str(&decoded)
@@ -877,7 +881,8 @@ mod tests {
 
     #[test]
     fn metadata_titles_preserve_file_tags_and_explicit_empty_icy_titles() {
-        // A literal Latin-1-looking sequence in a file tag is not ICY data.
+        // Valid UTF-8 file tags skip ICY repair. Invalid IPC bytes may already
+        // have been repaired by parse_ipc_message before reaching this point.
         assert_eq!(metadata_title(&json!({"title": "Â©\x1b\n"})), "Â©");
         assert_eq!(
             metadata_title(&json!({"icy-title": "", "title": "File title"})),

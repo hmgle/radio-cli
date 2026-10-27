@@ -27,10 +27,13 @@ pub(crate) fn title(title: &str) -> String {
     .find_map(|suffix| title.trim_end().strip_suffix(suffix)) else {
         return title.to_owned();
     };
+    // Normalize every �- as a damaged separator; an intentional occurrence
+    // is ambiguous and receives the same treatment within this opt-in patch.
     let body = body.replace("�?", "�").replace("�-", "� -");
     // A whole field containing only a Latin-1 UTF-8 lead is a known AsiaFM
     // truncation form (e.g. E7 -> ç). Limit this opt-in heuristic to whole
-    // fields so actual words such as Café and Jóga remain intact.
+    // fields and E0-F4 (three/four-byte leads) so actual words such as Café
+    // and Jóga remain intact; ambiguous two-byte leads C2-DF are excluded.
     let fields: Vec<_> = body
         .split(" - ")
         .map(|field| {

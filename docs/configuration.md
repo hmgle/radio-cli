@@ -80,11 +80,18 @@ than `�?`. For example, `张国荣  (AsiaFM亚洲粤语�?)` becomes `张国�
 GBK repair with or without this option; the patch never guesses an artist or
 song name.
 
+Bare station names outside the trailing parentheses are preserved because they
+may be part of a program title, so some watermark text can remain. After a known
+watermark is matched, every `�-` is normalized to `� -`, including any intentional
+occurrence within a title.
+
 On this station, an entire field containing only a Latin-1 UTF-8 lead such as
-`ç` is treated as truncated text and displayed as `�`. This is a station-specific
-assumption: a genuine single accented letter in that position also becomes
-`�`; words such as `Café` and `Jóga` are preserved. Other stations, unknown
-watermark formats, and local file tags are left alone.
+`ç` is treated as truncated text and displayed as `�`. This rule covers only
+three/four-byte leads (`E0`–`F4`); two-byte leads (`C2`–`DF`, such as `Ã`) are
+preserved because they overlap with genuine Latin-1 letters. This is a
+station-specific assumption: a genuine single accented letter in that position
+also becomes `�`; words such as `Café` and `Jóga` are preserved. Other stations,
+unknown watermark formats, and local file tags are left alone.
 
 Cover matching uses the same cleaned title. Recordings started during playback
 capture that title in their filename and `track` metadata; existing recordings
