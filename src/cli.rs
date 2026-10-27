@@ -167,6 +167,11 @@ fn list_stations(store: &Store, mut filter: Filter, page: &Page, json: bool) -> 
 
 #[derive(Subcommand)]
 pub enum Action {
+    /// Manage optional local speech recognition (no automatic downloads).
+    Subtitles {
+        #[command(subcommand)]
+        action: crate::speech::Action,
+    },
     /// Generate shell completion code without opening the database.
     Completions {
         shell: clap_complete::Shell,
@@ -388,6 +393,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             crate::tui::run(config, stop)?;
         }
         Action::Doctor => doctor(&config, cli.json, &stop)?,
+        Action::Subtitles { action } => emit(&crate::speech::manage(&config, action, &stop)?)?,
         Action::Devices => {
             let devices = crate::player::audio_devices(&config, &stop)?;
             if cli.json {

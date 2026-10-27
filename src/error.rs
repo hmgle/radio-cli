@@ -14,6 +14,12 @@ macro_rules! codes {
 }
 
 codes! {
+    SubtitleSettings => ("subtitle_settings", 1),
+    SubtitleModel => ("subtitle_model", 1),
+    SubtitleIntegrity => ("subtitle_integrity", 1),
+    SubtitleRuntime => ("subtitle_runtime", 1),
+    SubtitleBusy => ("subtitle_busy", 1),
+    SubtitleFailed => ("subtitle_failed", 1),
     UsageError => ("usage_error", 2),
     InvalidUrl => ("invalid_url", 1),
     MediaBusy => ("media_busy", 4),

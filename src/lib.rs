@@ -11,6 +11,7 @@ pub mod process;
 pub mod recorder;
 mod redact;
 pub mod service;
+pub mod speech;
 pub mod store;
 mod territories;
 pub mod tui;

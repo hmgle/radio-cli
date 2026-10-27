@@ -10,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub subtitles: SubtitleSettings,
     pub artwork: ArtworkMode,
     pub keybindings: Keybindings,
     pub mouse: bool,
@@ -36,6 +37,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            subtitles: SubtitleSettings::default(),
             artwork: ArtworkMode::Off,
             keybindings: Keybindings::default(),
             mouse: true,
@@ -57,6 +59,57 @@ impl Default for Settings {
             probe_timeout_secs: 5,
             volume: 80,
             recording_dir: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubtitleSettings {
+    pub enabled: bool,
+    pub model: String,
+    pub language: String,
+    pub threads: u8,
+    pub max_segment_secs: u8,
+    pub uv: String,
+}
+
+impl Default for SubtitleSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: "sensevoice-small-yue-int8".into(),
+            language: "auto".into(),
+            threads: 0,
+            max_segment_secs: 8,
+            uv: "uv".into(),
+        }
+    }
+}
+
+impl SubtitleSettings {
+    pub fn validate(&self) -> Result<()> {
+        if !matches!(
+            self.model.as_str(),
+            "sensevoice-small-yue-int8" | "qwen3-asr-0.6b-int8"
+        ) || !matches!(
+            self.language.as_str(),
+            "auto" | "zh" | "yue" | "en" | "ja" | "ko"
+        ) || (self.model == "qwen3-asr-0.6b-int8" && self.language != "auto")
+            || self.threads > 32
+            || !(2..=20).contains(&self.max_segment_secs)
+            || self.uv.trim().is_empty()
+        {
+            bail!(DomainError::new(ErrorCode::SubtitleSettings));
+        }
+        Ok(())
+    }
+
+    pub fn effective_threads(&self) -> usize {
+        if self.threads == 0 {
+            (std::thread::available_parallelism().map_or(2, usize::from) / 2).clamp(1, 4)
+        } else {
+            usize::from(self.threads)
         }
     }
 }
@@ -242,6 +295,7 @@ impl Config {
         if let Some(api) = api {
             settings.api_url = Some(api.to_owned());
         }
+        settings.subtitles.validate()?;
         if (!settings.keybindings.jump_to_playing.is_empty()
             && parse_keybinding(&settings.keybindings.jump_to_playing).is_none())
             || settings.recording_min_free_mb == 0
@@ -307,6 +361,25 @@ pub fn validate_url(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtitles_reject_invalid_models_languages_and_resource_limits() {
+        for text in [
+            "model='unknown'",
+            "language='fr'",
+            "threads=33",
+            "max_segment_secs=1",
+            "max_segment_secs=21",
+            "model='qwen3-asr-0.6b-int8'\nlanguage='yue'",
+        ] {
+            let settings: Settings = toml::from_str(&format!("[subtitles]\n{text}")).unwrap();
+            assert!(settings.subtitles.validate().is_err(), "{text}");
+        }
+        let settings: Settings = toml::from_str("[subtitles]\nlanguage='yue'\nthreads=2").unwrap();
+        settings.subtitles.validate().unwrap();
+        assert_eq!(settings.subtitles.effective_threads(), 2);
+        assert!(toml::from_str::<Settings>("[subtitles]\nthread=2").is_err());
+    }
 
     #[test]
     fn asiafm_metadata_patch_is_an_explicit_boolean_and_defaults_off() {
