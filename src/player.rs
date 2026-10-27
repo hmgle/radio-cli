@@ -143,6 +143,9 @@ pub(crate) fn icy_title(title: &str) -> String {
     // Repair Latin-1 byte runs before sanitizing: C1 characters can be
     // UTF-8 continuation bytes. ASCII and existing Unicode delimit runs,
     // so GBK guesses cannot consume ASCII letters or span separate words.
+    // Latin-1 and wrapped UTF-8 remain ambiguous: a genuine accent followed
+    // by malformed continuation bytes can be reinterpreted as Han text.
+    // A complete UTF-8 Han prefix is repaired even without Han elsewhere.
     let mut repaired = String::with_capacity(title.len());
     let utf8_han = title.chars().any(is_cjk);
     let mut start = 0;
@@ -206,6 +209,9 @@ fn repair_latin1_run(run: &str, utf8_han: bool) -> Cow<'_, str> {
         .error_len()
         .is_none()
         .then(|| std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap());
+    // Prefer a complete UTF-8 Han prefix over a GBK guess, as decode_icy_run
+    // does for valid Han islands. Mark only the incomplete trailing character;
+    // this evidence comes from the run itself, independently of utf8_han.
     if let Some(prefix) = incomplete_prefix
         && prefix.chars().any(is_cjk)
     {
@@ -667,6 +673,16 @@ mod tests {
     }
 
     #[test]
+    fn icy_titles_prefer_utf8_han_prefixes_over_gbk_without_external_han_context() {
+        // UTF-8 for 王 followed by an incomplete E4 lead, wrapped in Latin-1.
+        // The same bytes form two valid GBK Han characters (鐜嬩), so this
+        // fixes the priority of the UTF-8 prefix rather than the GBK guess.
+        let title = "ç\u{8e}\u{8b}ä";
+        assert_eq!(metadata_title(&json!({"icy-title": title})), "王�");
+        assert_eq!(icy_title_bytes(title.as_bytes()), "王�");
+    }
+
+    #[test]
     fn icy_titles_keep_text_without_a_lossless_latin1_repair() {
         for title in [
             "Radio Swiss Jazz",
@@ -746,6 +762,10 @@ mod tests {
         adjacent.extend_from_slice("中文".as_bytes());
         adjacent.extend_from_slice(b"\xe8?");
         assert_eq!(icy_title_bytes(&adjacent), "王菲中文�?");
+        // A two-byte lead is ambiguous with Latin-1 and remains untouched.
+        let mut two_byte_lead = "中".as_bytes().to_vec();
+        two_byte_lead.extend_from_slice(b"\xc3?");
+        assert_eq!(icy_title_bytes(&two_byte_lead), "中Ã?");
         assert_eq!(
             metadata_title(&json!({"icy-title": "Björk - Jóga（中文）å\u{8f}?"})),
             "Björk - Jóga（中文）�?"
