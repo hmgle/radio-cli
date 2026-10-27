@@ -92,5 +92,6 @@ radio --lang en --json-v2 info missing    # station_not_found；退出码 1
 安装、校验、删除均返回 `{id,removed}`。V2 使用正常响应信封，进度输出至 stderr。
 字幕错误码为 `subtitle_settings`、`subtitle_model`（参数 `id`）、
 `subtitle_integrity`（`id`、`path`）、`subtitle_runtime`、
-`subtitle_platform`（`platform`）、`subtitle_busy`、
+`subtitle_platform`（`platform`）、`subtitle_space`（`available`、`required`，
+以字节为单位且包含预留空间）、`subtitle_busy`、
 `subtitle_failed`（`detail`），退出码均为 1。此版本不提供 CLI 转写数据流。

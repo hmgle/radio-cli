@@ -265,6 +265,9 @@ SenseVoice 粤语预设连同词表和 Silero VAD 约下载 242 MB；
 校验后才发布。`models verify ID` 校验，`models install ID` 安装或修复，
 `models remove ID` 删除模型。安装或删除前请停止字幕会话。
 
+安装会在下载前提示剩余下载字节数，检查可用磁盘空间，计入可续传文件并预留
+64 MiB。
+
 ```toml
 [subtitles]
 enabled = false

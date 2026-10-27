@@ -19,6 +19,7 @@ codes! {
     SubtitleIntegrity => ("subtitle_integrity", 1),
     SubtitleRuntime => ("subtitle_runtime", 1),
     SubtitlePlatform => ("subtitle_platform", 1),
+    SubtitleSpace => ("subtitle_space", 1),
     SubtitleBusy => ("subtitle_busy", 1),
     SubtitleFailed => ("subtitle_failed", 1),
     UsageError => ("usage_error", 2),

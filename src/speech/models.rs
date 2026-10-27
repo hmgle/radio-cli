@@ -206,7 +206,7 @@ fn download(
     }
     fs::create_dir_all(path.parent().unwrap())?;
     let partial = partial_path(path);
-    let mut have = fs::metadata(&partial).map_or(0, |m| m.len());
+    let mut have = partial_len(&partial)?;
     if have == file.size && valid(&partial, file, stop)? {
         fs::rename(partial, path)?;
         return Ok(());
@@ -247,6 +247,12 @@ fn download(
         .truncate(have == 0)
         .append(have > 0)
         .open(&partial)?;
+    // A server may ignore Range, so recheck after any truncation as well as
+    // checking the complete installation plan before the first request.
+    check_space(
+        file.size - have,
+        fs2::available_space(path.parent().unwrap())?,
+    )?;
     let mut last = Instant::now() - Duration::from_secs(2);
     loop {
         cancelled(stop)?;
@@ -290,6 +296,51 @@ fn partial_path(path: &Path) -> PathBuf {
         "{}.part",
         path.extension().unwrap_or_default().to_string_lossy()
     ))
+}
+
+fn partial_len(path: &Path) -> Result<u64> {
+    match fs::metadata(path) {
+        Ok(meta) => Ok(meta.len()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn pending_bytes(config: &Config, models: &[Model], stop: &AtomicBool) -> Result<u64> {
+    let mut pending = 0_u64;
+    for model in models {
+        for file in &model.files {
+            let path = model_dir(config, &model.id).join(&file.path);
+            if valid(&path, file, stop)? {
+                continue;
+            }
+            let partial = partial_path(&path);
+            let mut have = partial_len(&partial)?;
+            if have >= file.size {
+                if valid(&partial, file, stop)? {
+                    continue;
+                }
+                have = 0;
+            }
+            pending = pending
+                .checked_add(file.size - have)
+                .context("model installation size overflow")?;
+        }
+    }
+    Ok(pending)
+}
+
+fn check_space(pending: u64, available: u64) -> Result<()> {
+    if pending > 0 {
+        let required = pending.saturating_add(64 * 1024 * 1024);
+        ensure!(
+            available >= required,
+            DomainError::new(ErrorCode::SubtitleSpace)
+                .with("available", available)
+                .with("required", required)
+        );
+    }
+    Ok(())
 }
 
 fn model_list(config: &Config) -> Result<serde_json::Value> {
@@ -407,6 +458,12 @@ pub fn manage(
             let _lock = lock(config, !matches!(action, ModelAction::Verify { .. }))?;
             match &action {
                 ModelAction::Install { .. } => {
+                    let pending = pending_bytes(config, &required, stop)?;
+                    check_space(pending, fs2::available_space(root(config))?)?;
+                    eprintln!(
+                        "{}",
+                        crate::t!("subtitle_install_plan", "id" => id, "bytes" => pending)
+                    );
                     let client = reqwest::Client::builder()
                         .user_agent(crate::USER_AGENT)
                         .no_gzip()
@@ -464,6 +521,45 @@ mod tests {
             );
         }
         assert!(!root(&config).exists());
+    }
+
+    #[test]
+    fn installation_space_accounts_for_verified_files_and_partial_downloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let model = Model {
+            id: "test-model".into(),
+            license: "MIT".into(),
+            license_url: String::new(),
+            files: vec![ModelFile {
+                path: "model.onnx".into(),
+                url: "http://127.0.0.1:1".into(),
+                size: 6,
+                sha256: format!("{:x}", Sha256::digest(b"abcdef")),
+            }],
+        };
+        let models = [model];
+        let path = model_dir(&config, "test-model").join("model.onnx");
+        let stop = AtomicBool::new(false);
+        assert_eq!(pending_bytes(&config, &models, &stop).unwrap(), 6);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(partial_path(&path), b"abc").unwrap();
+        assert_eq!(pending_bytes(&config, &models, &stop).unwrap(), 3);
+        fs::write(&path, b"xxxxxx").unwrap();
+        assert_eq!(pending_bytes(&config, &models, &stop).unwrap(), 3);
+        fs::write(partial_path(&path), b"xxxxxx").unwrap();
+        assert_eq!(pending_bytes(&config, &models, &stop).unwrap(), 6);
+        fs::write(partial_path(&path), b"abcdef").unwrap();
+        assert_eq!(pending_bytes(&config, &models, &stop).unwrap(), 0);
+        fs::write(&path, b"abcdef").unwrap();
+        assert_eq!(pending_bytes(&config, &models, &stop).unwrap(), 0);
+        assert!(check_space(0, 0).is_ok());
+        assert!(check_space(6, 6 + 64 * 1024 * 1024).is_ok());
+        let error = check_space(6, 6 + 64 * 1024 * 1024 - 1).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<DomainError>().unwrap().code,
+            ErrorCode::SubtitleSpace
+        );
     }
 
     #[test]
