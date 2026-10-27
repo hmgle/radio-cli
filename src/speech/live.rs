@@ -723,6 +723,52 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_kills_and_reaps_a_busy_decoder_without_waiting_for_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let (sender, events) = mpsc::sync_channel(64);
+        let (done_tx, done) = mpsc::sync_channel(1);
+        let pid_path = dir.path().join("decoder.pid");
+        // This worker stays CPU busy and does not read stdin. SIGTERM is ignored;
+        // the parent must explicitly kill and reap it, on Linux and macOS alike.
+        let mut command = fake_command(
+            "printf '%s' $$ > \"$1\"; trap '' TERM; printf '%s\n' '{\"v\":1,\"epoch\":7,\"type\":\"decoding\"}'; while :; do :; done",
+        );
+        command.arg("decoder").arg(&pid_path);
+        let handle = thread::spawn(move || {
+            let lock = models::lock(&config, false).unwrap();
+            done_tx
+                .send(run_processes(
+                    &config,
+                    "http://127.0.0.1:1",
+                    7,
+                    &flag,
+                    sender,
+                    command,
+                    lock,
+                ))
+                .unwrap();
+        });
+        // Wait for inference to begin, rather than cancelling during startup.
+        assert!(
+            matches!(events.recv_timeout(Duration::from_secs(5)).unwrap(), Notice::Message(message) if message == crate::t!("subtitle_decoding"))
+        );
+        let pid: libc::pid_t = std::fs::read_to_string(pid_path).unwrap().parse().unwrap();
+        let started = Instant::now();
+        cancel.store(true, Ordering::Relaxed);
+        assert!(!done.recv_timeout(Duration::from_secs(2)).unwrap().unwrap());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        handle.join().unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[test]
     fn pause_and_same_url_restart_discard_old_epoch_results() {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
