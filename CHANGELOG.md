@@ -8,7 +8,13 @@
   subtitles may lag behind or differ in timing from playback. Model downloads
   support a configurable mirror, disk space checks, and official fallback
   while retaining fixed SHA-256 verification.
-
+- Bound subtitle reconnects until speech production stays stable for a minute,
+  preserve Chinese captions in short terminals, and make persistent speech
+  failures available through `?` and the activity log. Keep subtitle popups
+  and panel layouts consistent across terminal resizes; suppress track artwork
+  probes throughout enabled subtitle sessions. Support Unicode transcripts
+  under legacy locales, improve model diagnostics, and avoid repeated work
+  while subtitles are disabled or waiting for playback.
 - Keep receiving track updates when mpv sends invalid UTF-8 in metadata,
   preserving readable Unicode and recoverable legacy title bytes.
 - Show a replacement character for truncated UTF-8 in Chinese ICY titles
