@@ -78,6 +78,12 @@ def read_pcm(source, pcm, origin, emit):
         offset += len(samples)
 
 
+def emit_event(epoch, kind, **fields):
+    # ASCII NDJSON remains writable under isolated Python's locale encoding.
+    print(json.dumps(dict(v=1, epoch=epoch, type=kind, **fields),
+                     ensure_ascii=True), flush=True)
+
+
 def run(args):
     import numpy as np
     import sherpa_onnx as sherpa
@@ -86,8 +92,7 @@ def run(args):
 
     def emit(kind, **fields):
         with output_lock:
-            print(json.dumps(dict(v=1, epoch=args["epoch"], type=kind, **fields),
-                             ensure_ascii=False), flush=True)
+            emit_event(args["epoch"], kind, **fields)
 
     model = args["model_dir"]
     common = dict(num_threads=args["threads"], provider="cpu")

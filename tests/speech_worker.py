@@ -1,9 +1,11 @@
 """Deterministic worker queue tests; no speech packages or downloads needed."""
 import importlib.util
 import io
+import json
 import struct
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -15,6 +17,16 @@ spec.loader.exec_module(worker)
 
 
 class Queues(unittest.TestCase):
+    def test_unicode_segments_round_trip_through_ascii_stdout(self):
+        output = io.BytesIO()
+        stream = io.TextIOWrapper(output, encoding="ascii")
+        with patch.object(sys, "stdout", stream):
+            worker.emit_event(7, "segment", text="廣東話字幕 🎵")
+        event = json.loads(output.getvalue().decode("ascii"))
+        self.assertEqual(event["text"], "廣東話字幕 🎵")
+        self.assertEqual((event["v"], event["epoch"], event["type"]),
+                         (1, 7, "segment"))
+
     def test_dropped_audio_keeps_absolute_sample_positions(self):
         queue = worker.AudioQueue(6)
         self.assertFalse(queue.put(0, [1, 2, 3]))
