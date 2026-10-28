@@ -310,7 +310,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 .history
                 .iter()
                 .rev()
-                .take(2)
+                // Keep a status row even if the strip later gains a two-row mode.
+                .take(2.min(usize::from(subtitle_height.saturating_sub(1))))
                 .collect::<Vec<_>>();
             let status_height = subtitle_height - lines.len() as u16;
             frame.render_widget(
