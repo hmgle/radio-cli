@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 — 2026-10-28
 
 - Add the upstream SenseVoice Small preset `sensevoice-small-int8` and make it
   the default subtitle model, with punctuation, inverse text normalization,
