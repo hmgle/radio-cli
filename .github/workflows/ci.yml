@@ -27,7 +27,7 @@ jobs:
           fi
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg mpv
       - run: cargo fmt --check
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.2
       - run: uv run --no-project --python 3.12 python tests/speech_worker.py
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --all-targets --all-features --locked
