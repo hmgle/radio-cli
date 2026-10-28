@@ -7,6 +7,7 @@ use crate::{
 use anyhow::{Result, bail, ensure};
 use serde::Deserialize;
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     io::{BufRead, BufReader, Read},
     process::{Child, Command, Stdio},
@@ -61,6 +62,27 @@ struct Task {
     first_segment_at: Option<Instant>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusMessage {
+    Off,
+    Local,
+    Paused,
+    Waiting,
+    Loading,
+}
+
+impl StatusMessage {
+    fn text(self, locale: crate::messages::Locale) -> &'static str {
+        match self {
+            Self::Off => crate::messages::text_in(locale, "subtitle_off"),
+            Self::Local => crate::messages::text_in(locale, "subtitle_local"),
+            Self::Paused => crate::messages::text_in(locale, "subtitle_paused"),
+            Self::Waiting => crate::messages::text_in(locale, "subtitle_waiting"),
+            Self::Loading => crate::messages::text_in(locale, "subtitle_loading"),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Controller {
     pub snapshot: Snapshot,
@@ -70,13 +92,23 @@ pub struct Controller {
     epoch: u64,
     attempts: usize,
     due: Option<Instant>,
+    status_key: Option<(StatusMessage, crate::messages::Locale)>,
 }
 
 impl Controller {
-    fn message(&mut self, message: String) {
+    fn message(&mut self, message: impl Into<Cow<'static, str>>) {
+        self.status_key = None;
+        let message = message.into();
         if self.snapshot.message != message {
-            self.snapshot.message = message;
+            self.snapshot.message = message.into_owned();
             self.snapshot.revision += 1;
+        }
+    }
+    fn status(&mut self, key: StatusMessage) {
+        let locale = crate::messages::locale();
+        if self.status_key != Some((key, locale)) {
+            self.message(key.text(locale));
+            self.status_key = Some((key, locale));
         }
     }
     pub fn clear(&mut self) {
@@ -137,9 +169,7 @@ impl Controller {
                 self.clear();
                 self.key = None;
             }
-            if self.snapshot.message != crate::t!("subtitle_off") {
-                self.message(crate::t!("subtitle_off").into());
-            }
+            self.status(StatusMessage::Off);
             return;
         }
         if playing
@@ -159,16 +189,13 @@ impl Controller {
         }
         if !playing || paused || local || stop.load(Ordering::Relaxed) {
             self.cancel();
-            self.message(
-                if local {
-                    crate::t!("subtitle_local")
-                } else if paused {
-                    crate::t!("subtitle_paused")
-                } else {
-                    crate::t!("subtitle_waiting")
-                }
-                .into(),
-            );
+            self.status(if local {
+                StatusMessage::Local
+            } else if paused {
+                StatusMessage::Paused
+            } else {
+                StatusMessage::Waiting
+            });
             return;
         }
         // Poll completion before draining events: once a finished job is removed,
@@ -231,7 +258,7 @@ impl Controller {
         {
             self.due = None;
             self.epoch = self.epoch.wrapping_add(1);
-            self.message(crate::t!("subtitle_loading").into());
+            self.status(StatusMessage::Loading);
             let (sender, events) = mpsc::sync_channel(64);
             let config = config.clone();
             let url = self.key.as_ref().unwrap().1.clone();
