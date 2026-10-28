@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0 — 2026-10-28
+
 - Add optional local live subtitles in the TUI, with SenseVoice Cantonese and
   Qwen3 model presets, explicit verified downloads, and scrollable session
   history. Speech uses an isolated runtime and a separate stream connection;
