@@ -282,6 +282,31 @@ mod tests {
         },
     };
 
+    #[test]
+    fn enabled_subtitles_without_a_worker_never_restart_artwork_probes() {
+        use crate::{
+            engine::{Engine, PlaybackState},
+            model::Station,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::test_support::config(dir.path());
+        config.settings.artwork = crate::config::ArtworkMode::Track;
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine.enable_background_media();
+        engine.status.station = Some(Station {
+            stationuuid: "playing".into(),
+            ..Default::default()
+        });
+        engine.status.source_url = "http://127.0.0.1:1/live".into();
+        engine.status.title = "Track".into();
+        engine.status.playback_state = PlaybackState::Playing;
+        engine.artwork.demand = Some("playing".into());
+        engine.set_subtitles(true);
+        for _ in 0..12 {
+            engine.artwork_tick();
+            assert!(engine.artwork.task.is_none());
+        }
+    }
     fn run<T>(future: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -30,6 +30,7 @@ pub struct Segment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub enabled: bool,
+    pub failed: bool,
     pub revision: u64,
     pub message: String,
     pub history: Arc<VecDeque<Segment>>,
@@ -39,6 +40,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             enabled: false,
+            failed: false,
             revision: 0,
             message: crate::t!("subtitle_off").into(),
             history: Arc::default(),
@@ -65,7 +67,6 @@ pub struct Controller {
     epoch: u64,
     attempts: usize,
     due: Option<Instant>,
-    failed: bool,
 }
 
 impl Controller {
@@ -76,12 +77,17 @@ impl Controller {
         }
     }
     pub fn clear(&mut self) {
-        self.snapshot.history = Arc::default();
-        self.snapshot.revision += 1;
+        if !self.snapshot.history.is_empty() {
+            self.snapshot.history = Arc::default();
+            self.snapshot.revision += 1;
+        }
     }
     pub fn retry(&mut self) {
         self.cancel();
-        self.failed = false;
+        if self.snapshot.failed {
+            self.snapshot.failed = false;
+            self.snapshot.revision += 1;
+        }
         self.attempts = 0;
         self.due = None;
     }
@@ -116,28 +122,42 @@ impl Controller {
     pub fn update(
         &mut self,
         config: &Config,
-        key: (u64, String),
+        key: (u64, &str),
         playing: bool,
         paused: bool,
         local: bool,
         stop: &Arc<AtomicBool>,
     ) {
         self.poll_retiring();
-        if playing && self.key.as_ref() != Some(&key) {
+        if !self.snapshot.enabled {
+            if playing && self.key.as_ref().is_some_and(|old| old.0 != key.0) {
+                self.clear();
+                self.key = None;
+            }
+            if self.snapshot.message != crate::t!("subtitle_off") {
+                self.message(crate::t!("subtitle_off").into());
+            }
+            return;
+        }
+        if playing
+            && self
+                .key
+                .as_ref()
+                .map(|(generation, url)| (*generation, url.as_str()))
+                != Some(key)
+        {
             // Station generation changes clear history; reconnects have their
             // own epoch even when generation and URL remain the same.
             if self.key.as_ref().is_some_and(|old| old.0 != key.0) {
                 self.clear();
             }
             self.retry();
-            self.key = Some(key);
+            self.key = Some((key.0, key.1.to_owned()));
         }
-        if !self.snapshot.enabled || !playing || paused || local || stop.load(Ordering::Relaxed) {
+        if !playing || paused || local || stop.load(Ordering::Relaxed) {
             self.cancel();
             self.message(
-                if !self.snapshot.enabled {
-                    crate::t!("subtitle_off")
-                } else if local {
+                if local {
                     crate::t!("subtitle_local")
                 } else if paused {
                     crate::t!("subtitle_paused")
@@ -157,6 +177,7 @@ impl Controller {
                 match notice {
                     Notice::Message(message) => self.message(message),
                     Notice::Segment(seg) if seg.epoch == self.epoch => {
+                        self.attempts = 0;
                         let history = Arc::make_mut(&mut self.snapshot.history);
                         history.push_back(seg);
                         while history.len() > 500 {
@@ -183,7 +204,8 @@ impl Controller {
                 self.due = Some(Instant::now() + Duration::from_secs(seconds));
                 self.message(crate::t!("subtitle_retrying", "attempt" => self.attempts));
             } else {
-                self.failed = true;
+                self.snapshot.failed = true;
+                self.snapshot.revision += 1;
                 if retry {
                     self.message(
                         crate::t!("subtitle_failed", "detail" => crate::t!("subtitle_connection")),
@@ -193,7 +215,7 @@ impl Controller {
         }
         if self.task.is_none()
             && self.retiring.is_empty()
-            && !self.failed
+            && !self.snapshot.failed
             && self.due.is_none_or(|d| Instant::now() >= d)
         {
             self.due = None;
@@ -208,7 +230,8 @@ impl Controller {
             }) {
                 Ok(job) => self.task = Some(Task { job, events }),
                 Err(error) => {
-                    self.failed = true;
+                    self.snapshot.failed = true;
+                    self.snapshot.revision += 1;
                     self.message(format!("{error:#}"));
                 }
             }
@@ -802,14 +825,114 @@ mod tests {
             }))
             .ok();
         let key = controller.key.clone().unwrap();
-        controller.update(&config, key.clone(), true, false, false, &stop);
+        controller.update(&config, (key.0, &key.1), true, false, false, &stop);
         assert_eq!(controller.snapshot.history.len(), 1);
         let epoch = controller.epoch;
-        controller.update(&config, key.clone(), false, true, false, &stop);
+        controller.update(&config, (key.0, &key.1), false, true, false, &stop);
         assert!(controller.epoch != epoch && controller.task.is_none());
         assert_eq!(controller.snapshot.history.len(), 1);
-        controller.update(&config, (2, key.1), true, false, false, &stop);
+        controller.update(&config, (2, &key.1), true, false, false, &stop);
         assert!(controller.snapshot.history.is_empty());
         controller.enabled(false);
+    }
+
+    #[test]
+    fn only_consecutive_connections_without_segments_exhaust_retries() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let stop = Arc::new(AtomicBool::new(false));
+        for productive in [false, true] {
+            let mut controller = Controller::default();
+            controller.enabled(true);
+            controller.key = Some((1, "http://localhost/live".into()));
+            for attempt in 0..6 {
+                let (sender, events) = mpsc::sync_channel(64);
+                if productive {
+                    sender
+                        .send(Notice::Segment(Segment {
+                            epoch: controller.epoch,
+                            start_ms: 0,
+                            end_ms: 500,
+                            text: "speech".into(),
+                        }))
+                        .unwrap();
+                }
+                let job = Background::start("fake-speech", |_| Ok(true)).unwrap();
+                controller.task = Some(Task { job, events });
+                controller.due = None;
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while controller.task.is_some() {
+                    controller.update(
+                        &config,
+                        (1, "http://localhost/live"),
+                        true,
+                        false,
+                        false,
+                        &stop,
+                    );
+                    assert!(Instant::now() < deadline);
+                    thread::yield_now();
+                }
+                if productive {
+                    assert!(!controller.snapshot.failed);
+                    assert_eq!(controller.attempts, 1);
+                } else if attempt == 3 {
+                    assert!(controller.snapshot.failed);
+                    assert!(controller.due.is_none());
+                    break;
+                } else {
+                    assert_eq!(controller.attempts, attempt + 1);
+                    assert!(!controller.snapshot.failed);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn history_is_bounded_and_empty_clear_preserves_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut controller = Controller::default();
+        controller.clear();
+        assert_eq!(controller.snapshot.revision, 0);
+        controller.enabled(true);
+        controller.key = Some((1, "http://localhost/live".into()));
+        let (sender, events) = mpsc::sync_channel(501);
+        for i in 0..501 {
+            sender
+                .send(Notice::Segment(Segment {
+                    epoch: controller.epoch,
+                    start_ms: i,
+                    end_ms: i + 1,
+                    text: i.to_string(),
+                }))
+                .unwrap();
+        }
+        let job = Background::start("fake-speech", |_| Ok(true)).unwrap();
+        controller.task = Some(Task { job, events });
+        controller.update(
+            &config,
+            (1, "http://localhost/live"),
+            true,
+            false,
+            false,
+            &stop,
+        );
+        assert_eq!(controller.snapshot.history.len(), 500);
+        assert_eq!(controller.snapshot.history.front().unwrap().start_ms, 1);
+        controller.enabled(false);
+        controller.update(
+            &config,
+            (2, "http://localhost/other"),
+            true,
+            false,
+            false,
+            &stop,
+        );
+        assert!(controller.snapshot.history.is_empty());
+        let revision = controller.snapshot.revision;
+        controller.clear();
+        assert_eq!(controller.snapshot.revision, revision);
     }
 }

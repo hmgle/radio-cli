@@ -250,8 +250,9 @@ impl Engine {
         let playing = self.status.playback_state == PlaybackState::Playing;
         let paused = self.status.paused();
         let local = self.playback.source_kind == playback::SourceKind::Local;
-        let key = (self.playback.generation, self.status.source_url.clone());
+        let generation = self.playback.generation;
         let session = &mut self.session;
+        let key = (generation, session.status.source_url.as_str());
         session
             .subtitles
             .update(&session.config, key, playing, paused, local, &session.stop);
@@ -279,7 +280,8 @@ impl Engine {
 
     fn artwork_tick(&mut self) {
         let request = (self.background_media
-            && !self.subtitles.active()
+            && !self.subtitles.snapshot.enabled
+            && self.subtitles.quiescent()
             && self.config.settings.artwork == crate::config::ArtworkMode::Track
             && self.status.playback_state == PlaybackState::Playing
             && !matches!(
