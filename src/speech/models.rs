@@ -210,6 +210,7 @@ pub(super) fn verify(config: &Config, id: &str, stop: &AtomicBool) -> Result<()>
 /// A Range response is appended only when its complete range matches our file.
 fn download(
     client: &reqwest::Client,
+    id: &str,
     path: &Path,
     file: &ModelFile,
     stop: &AtomicBool,
@@ -297,16 +298,30 @@ fn download(
         bail!("model download truncated: {have}/{}", file.size);
     }
     if !valid(&partial, file, stop)? {
-        fs::remove_file(&partial)
-            .with_context(|| format!("cannot remove corrupt download {}", partial.display()))?;
-        bail!(
-            DomainError::new(ErrorCode::SubtitleIntegrity)
-                .with("id", "MODEL")
-                .with("path", path.display())
-        );
+        return reject_corrupt_download(id, path);
     }
     fs::rename(partial, path)?;
     Ok(())
+}
+
+fn reject_corrupt_download(id: &str, path: &Path) -> Result<()> {
+    let partial = partial_path(path);
+    let integrity = DomainError::new(ErrorCode::SubtitleIntegrity)
+        .with("id", id)
+        .with("path", path.display());
+    match fs::remove_file(&partial) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(anyhow::Error::new(error)
+                .context(format!(
+                    "cannot remove corrupt download {}",
+                    partial.display()
+                ))
+                .context(integrity));
+        }
+    }
+    Err(integrity.into())
 }
 
 fn partial_path(path: &Path) -> PathBuf {
@@ -355,9 +370,12 @@ fn install_file(
             ..file.clone()
         };
         let resumed = partial_len(&partial_path(&path))? > 0;
-        let mut result = download(client, &path, &source, stop);
+        let mut result = download(client, id, &path, &source, stop);
         if resumed
             && source.url == file.url
+            && result
+                .as_ref()
+                .is_err_and(|e| e.downcast_ref::<std::io::Error>().is_none())
             && result.as_ref().is_err_and(|e| {
                 e.downcast_ref::<DomainError>()
                     .is_some_and(|e| e.code == ErrorCode::SubtitleIntegrity)
@@ -366,33 +384,21 @@ fn install_file(
             // A failed mirror may have left a corrupt prefix. Only retry the
             // canonical source from scratch after a resumed digest mismatch;
             // a mirror mismatch should fall back to the canonical source.
-            result = download(client, &path, &source, stop);
+            result = download(client, id, &path, &source, stop);
         }
         match result {
             Ok(()) => return Ok(()),
             Err(error) => {
                 cancelled(stop)?;
+                failures.push(crate::redact::urls(&format!("{}: {error:#}", source.url)));
                 // A second server cannot fix a local filesystem failure.
                 if error.downcast_ref::<std::io::Error>().is_some()
                     || error
                         .downcast_ref::<DomainError>()
                         .is_some_and(|e| e.code == ErrorCode::SubtitleSpace)
                 {
-                    return Err(error);
+                    return Err(error.context(failures.join("; ")));
                 }
-                let error = if error
-                    .downcast_ref::<DomainError>()
-                    .is_some_and(|e| e.code == ErrorCode::SubtitleIntegrity)
-                {
-                    anyhow::Error::new(
-                        DomainError::new(ErrorCode::SubtitleIntegrity)
-                            .with("id", id)
-                            .with("path", path.display()),
-                    )
-                } else {
-                    error
-                };
-                failures.push(crate::redact::urls(&format!("{}: {error:#}", source.url)));
                 last_error = Some(error);
             }
         }
@@ -601,7 +607,7 @@ mod tests {
 
     #[test]
     fn shared_locks_open_existing_resources_without_write_access() {
-        use std::os::fd::AsRawFd;
+        use std::os::{fd::AsRawFd, unix::fs::PermissionsExt};
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         drop(lock(&config, true).unwrap());
@@ -612,6 +618,131 @@ mod tests {
         assert!(lock(&config, true).is_err());
         drop(reader);
         assert!(lock(&config, true).is_ok());
+
+        let directory = root(&config);
+        let path = directory.join("resources.lock");
+        let dir_permissions = fs::metadata(&directory).unwrap().permissions();
+        let file_permissions = fs::metadata(&path).unwrap().permissions();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let result = model_list(&config);
+        fs::set_permissions(&directory, dir_permissions).unwrap();
+        fs::set_permissions(&path, file_permissions).unwrap();
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn read_only_directory_without_a_lock_reports_why_it_cannot_coordinate() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return; // Root bypasses the permission boundary this test exercises.
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let directory = root(&config);
+        fs::create_dir_all(&directory).unwrap();
+        let permissions = fs::metadata(&directory).unwrap().permissions();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = model_list(&config);
+        fs::set_permissions(&directory, permissions).unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(error.to_string().contains("resources.lock"));
+        assert!(!directory.join("resources.lock").exists());
+    }
+
+    #[test]
+    fn corrupt_download_cleanup_keeps_integrity_context_and_tolerates_missing_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.onnx");
+        let error = reject_corrupt_download("test-model", &path).unwrap_err();
+        let integrity = error.downcast_ref::<DomainError>().unwrap();
+        assert_eq!(integrity.code, ErrorCode::SubtitleIntegrity);
+        assert_eq!(integrity.params["id"], "test-model");
+        assert_eq!(integrity.params["path"], path.to_string_lossy());
+        assert!(error.downcast_ref::<std::io::Error>().is_none());
+
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let partial = partial_path(&path);
+        fs::write(&partial, b"corrupt").unwrap();
+        let permissions = fs::metadata(dir.path()).unwrap().permissions();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let result = reject_corrupt_download("test-model", &path);
+        fs::set_permissions(dir.path(), permissions).unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<DomainError>().unwrap().code,
+            ErrorCode::SubtitleIntegrity
+        );
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(format!("{error:#}").contains("cannot remove corrupt download"));
+        assert!(partial.exists());
+    }
+
+    #[test]
+    fn cleanup_permission_errors_keep_source_diagnostics_without_retrying() {
+        use std::{
+            os::unix::fs::PermissionsExt,
+            sync::{Arc, atomic::AtomicUsize},
+        };
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::test_support::config(dir.path());
+        let path = model_dir(&config, "test-model").join("model.onnx");
+        let directory = path.parent().unwrap().to_path_buf();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(partial_path(&path), b"xxx").unwrap();
+        let permissions = fs::metadata(&directory).unwrap().permissions();
+        let protected = directory.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let origin = Server::new(move |_, stream| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            fs::set_permissions(&protected, fs::Permissions::from_mode(0o555)).unwrap();
+            response(stream, 200, "application/octet-stream", b"xxxxxx");
+        });
+        let mirror = Server::new(|_, stream| response(stream, 404, "text/plain", b"missing"));
+        config.settings.subtitles.model_mirror = Some(mirror.url.clone());
+        let file = ModelFile {
+            path: "model.onnx".into(),
+            url: origin.url.clone(),
+            size: 6,
+            sha256: format!("{:x}", Sha256::digest(b"abcdef")),
+        };
+        let result = install_file(
+            &config,
+            &reqwest::Client::new(),
+            "test-model",
+            &file,
+            &AtomicBool::new(false),
+        );
+        fs::set_permissions(&directory, permissions).unwrap();
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<DomainError>().unwrap().params["id"],
+            "test-model"
+        );
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains(&mirror.url));
+        assert!(diagnostic.contains(&origin.url));
+        assert!(diagnostic.contains(&path.to_string_lossy().to_string()));
+        assert!(diagnostic.contains("cannot remove corrupt download"));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -895,7 +1026,7 @@ mod tests {
             ErrorCode::Cancelled
         );
         assert_eq!(
-            download(&reqwest::Client::new(), &path, &file, &stop)
+            download(&reqwest::Client::new(), "test-model", &path, &file, &stop)
                 .unwrap_err()
                 .downcast_ref::<DomainError>()
                 .unwrap()
@@ -931,6 +1062,7 @@ mod tests {
                     .timeout(Duration::from_secs(5))
                     .build()
                     .unwrap(),
+                "test-model",
                 &path,
                 &file,
                 &AtomicBool::new(false),
@@ -966,6 +1098,7 @@ mod tests {
                         .timeout(Duration::from_secs(5))
                         .build()
                         .unwrap(),
+                    "test-model",
                     &path,
                     &file,
                     &AtomicBool::new(mode == 3)
