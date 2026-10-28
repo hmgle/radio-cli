@@ -365,8 +365,10 @@ keeps recognition running. Reconnection boundaries appear in history.
 
 Speech queues are bounded; overload skips old audio and text rather than
 accumulating unlimited delay. Results more than 30 seconds behind capture are
-discarded. Network failures retry three times without recognized speech;
-each new segment resets this budget. Model/runtime failures require
+discarded. Network failures retry three times with 1, 3 and 7 second waits.
+The budget resets when a connection produces another segment at least 60
+seconds after its first segment, so brief productive connections still exhaust
+retries. Model/runtime failures require
 repair or `:subtitles retry`. Invalid PCM frames are skipped and marked as gaps.
 Subtitle failure does not stop playback or recording. Recording adds its usual
 connection; some stations restrict listener connections. Track artwork probing

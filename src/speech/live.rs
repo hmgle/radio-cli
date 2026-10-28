@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const STABLE_SUBTITLE_PERIOD: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Segment {
     pub epoch: u64,
@@ -56,6 +58,7 @@ enum Notice {
 struct Task {
     job: Background<bool>,
     events: Receiver<Notice>,
+    first_segment_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -177,7 +180,15 @@ impl Controller {
                 match notice {
                     Notice::Message(message) => self.message(message),
                     Notice::Segment(seg) if seg.epoch == self.epoch => {
-                        self.attempts = 0;
+                        let first = self
+                            .task
+                            .as_mut()
+                            .unwrap()
+                            .first_segment_at
+                            .get_or_insert_with(Instant::now);
+                        if first.elapsed() >= STABLE_SUBTITLE_PERIOD {
+                            self.attempts = 0;
+                        }
                         let history = Arc::make_mut(&mut self.snapshot.history);
                         history.push_back(seg);
                         while history.len() > 500 {
@@ -228,7 +239,13 @@ impl Controller {
             match Background::start("radio-speech", move |cancel| {
                 run(&config, &url, epoch, &cancel, sender)
             }) {
-                Ok(job) => self.task = Some(Task { job, events }),
+                Ok(job) => {
+                    self.task = Some(Task {
+                        job,
+                        events,
+                        first_segment_at: None,
+                    })
+                }
                 Err(error) => {
                     self.snapshot.failed = true;
                     self.snapshot.revision += 1;
@@ -807,7 +824,11 @@ mod tests {
             Ok(false)
         })
         .unwrap();
-        controller.task = Some(Task { job, events });
+        controller.task = Some(Task {
+            job,
+            events,
+            first_segment_at: None,
+        });
         sender
             .send(Notice::Segment(Segment {
                 epoch: controller.epoch,
@@ -837,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn only_consecutive_connections_without_segments_exhaust_retries() {
+    fn short_connections_exhaust_retries_even_when_they_produce_segments() {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         let stop = Arc::new(AtomicBool::new(false));
@@ -858,7 +879,11 @@ mod tests {
                         .unwrap();
                 }
                 let job = Background::start("fake-speech", |_| Ok(true)).unwrap();
-                controller.task = Some(Task { job, events });
+                controller.task = Some(Task {
+                    job,
+                    events,
+                    first_segment_at: None,
+                });
                 controller.due = None;
                 let deadline = Instant::now() + Duration::from_secs(2);
                 while controller.task.is_some() {
@@ -873,10 +898,7 @@ mod tests {
                     assert!(Instant::now() < deadline);
                     thread::yield_now();
                 }
-                if productive {
-                    assert!(!controller.snapshot.failed);
-                    assert_eq!(controller.attempts, 1);
-                } else if attempt == 3 {
+                if attempt == 3 {
                     assert!(controller.snapshot.failed);
                     assert!(controller.due.is_none());
                     break;
@@ -884,6 +906,62 @@ mod tests {
                     assert_eq!(controller.attempts, attempt + 1);
                     assert!(!controller.snapshot.failed);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn only_sustained_speech_on_the_same_connection_resets_retries() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let stop = Arc::new(AtomicBool::new(false));
+        // Startup, model verification and silence before the first segment do
+        // not count as productive time. Only later segments on this task do.
+        for elapsed in [
+            None,
+            Some(Duration::from_secs(30)),
+            Some(STABLE_SUBTITLE_PERIOD),
+        ] {
+            let mut controller = Controller::default();
+            controller.enabled(true);
+            controller.key = Some((1, "http://localhost/live".into()));
+            controller.attempts = 3;
+            let (sender, events) = mpsc::sync_channel(64);
+            sender
+                .send(Notice::Segment(Segment {
+                    epoch: controller.epoch,
+                    start_ms: 0,
+                    end_ms: 500,
+                    text: "speech".into(),
+                }))
+                .unwrap();
+            let job = Background::start("fake-speech", |_| Ok(true)).unwrap();
+            controller.task = Some(Task {
+                job,
+                events,
+                first_segment_at: elapsed.map(|elapsed| Instant::now() - elapsed),
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while controller.task.is_some() {
+                controller.update(
+                    &config,
+                    (1, "http://localhost/live"),
+                    true,
+                    false,
+                    false,
+                    &stop,
+                );
+                assert!(Instant::now() < deadline);
+                thread::yield_now();
+            }
+            if elapsed == Some(STABLE_SUBTITLE_PERIOD) {
+                assert_eq!(controller.attempts, 1);
+                assert!(!controller.snapshot.failed);
+                assert!(controller.due.is_some());
+            } else {
+                assert_eq!(controller.attempts, 3);
+                assert!(controller.snapshot.failed);
+                assert!(controller.due.is_none());
             }
         }
     }
@@ -910,7 +988,11 @@ mod tests {
                 .unwrap();
         }
         let job = Background::start("fake-speech", |_| Ok(true)).unwrap();
-        controller.task = Some(Task { job, events });
+        controller.task = Some(Task {
+            job,
+            events,
+            first_segment_at: None,
+        });
         controller.update(
             &config,
             (1, "http://localhost/live"),
