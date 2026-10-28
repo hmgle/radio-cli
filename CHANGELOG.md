@@ -10,6 +10,8 @@
   When upgrading from 0.9.0 without an explicit `subtitles.model`, install
   `sensevoice-small-int8` before enabling subtitles, or explicitly select the
   previous preset; see [subtitle setup](docs/configuration.md#live-subtitles).
+- Allow slow systems up to ten seconds to start mpv IPC, reducing playback
+  startup failures on loaded machines.
 
 ## 0.9.0 — 2026-10-28
 

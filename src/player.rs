@@ -418,7 +418,7 @@ impl Player {
         let command = playback_command(config, &socket);
         let mut child = crate::process::spawn_owned(command)
             .context(DomainError::new(ErrorCode::MissingDependency).with("program", "mpv"))?;
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let stream = loop {
             if let Ok(stream) = UnixStream::connect(&socket) {
                 break stream;
