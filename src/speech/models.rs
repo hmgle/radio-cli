@@ -60,6 +60,10 @@ fn required_models(id: &str) -> Result<[Model; 2]> {
     required_from(manifest(), id)
 }
 
+pub(crate) fn validate_model(id: &str) -> Result<()> {
+    required_models(id).map(|_| ())
+}
+
 fn required_from(models: Vec<Model>, id: &str) -> Result<[Model; 2]> {
     let mut selected = None;
     let mut vad = None;

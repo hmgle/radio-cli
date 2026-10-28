@@ -267,6 +267,7 @@ impl Engine {
         self.subtitles.clear();
     }
     pub fn set_subtitle_model(&mut self, id: String) -> Result<()> {
+        crate::speech::validate_model(&id)?;
         let mut settings = self.config.settings.subtitles.clone();
         settings.model = id;
         settings.validate()?;
@@ -492,6 +493,20 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_subtitle_model_reports_id_without_changing_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let original = engine.config.settings.subtitles.model.clone();
+        for id in ["unknown", "silero-vad", "../../model"] {
+            let error = engine.set_subtitle_model(id.into()).unwrap_err();
+            let error = error.downcast_ref::<DomainError>().unwrap();
+            assert_eq!(error.code, ErrorCode::SubtitleModel);
+            assert_eq!(engine.config.settings.subtitles.model, original);
+        }
+    }
 
     #[test]
     fn device_failure_skips_backups_reconnects_refresh_and_random_fallback() {
