@@ -122,13 +122,26 @@ impl Drop for ResourceLock {
 }
 
 pub(super) fn lock(config: &Config, exclusive: bool) -> Result<ResourceLock> {
-    fs::create_dir_all(root(config))?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(root(config).join("resources.lock"))?;
+    let path = root(config).join("resources.lock");
+    let create = || -> Result<File> {
+        fs::create_dir_all(root(config))?;
+        Ok(OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)?)
+    };
+    let file = if exclusive {
+        create()
+    } else {
+        match File::open(&path) {
+            Ok(file) => Ok(file),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => create(),
+            Err(error) => Err(error.into()),
+        }
+    }
+    .with_context(|| format!("cannot open speech resource lock {}", path.display()))?;
     if exclusive {
         FileExt::try_lock_exclusive(&file)
     } else {
@@ -280,7 +293,8 @@ fn download(
         bail!("model download truncated: {have}/{}", file.size);
     }
     if !valid(&partial, file, stop)? {
-        let _ = fs::remove_file(&partial);
+        fs::remove_file(&partial)
+            .with_context(|| format!("cannot remove corrupt download {}", partial.display()))?;
         bail!(
             DomainError::new(ErrorCode::SubtitleIntegrity)
                 .with("id", "MODEL")
@@ -425,11 +439,13 @@ fn model_list(config: &Config) -> Result<serde_json::Value> {
     let _lock = lock(config, false)?;
     let mut rows = Vec::new();
     for model in manifest().into_iter().filter(|m| m.id != "silero-vad") {
-        let mut bytes = 0;
+        let mut bytes = 0_u64;
         let mut all_present = true;
         for required in required_models(&model.id)? {
             for file in &required.files {
-                bytes += file.size;
+                bytes = bytes
+                    .checked_add(file.size)
+                    .context("model size overflow")?;
                 all_present &= present(&model_dir(config, &required.id).join(&file.path), file)?;
             }
         }
@@ -578,6 +594,21 @@ pub fn manage(
 mod tests {
     use super::*;
     use crate::test_support::{Server, response};
+
+    #[test]
+    fn shared_locks_open_existing_resources_without_write_access() {
+        use std::os::fd::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        drop(lock(&config, true).unwrap());
+        let reader = lock(&config, false).unwrap();
+        let flags = unsafe { libc::fcntl(reader.0.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(flags, -1);
+        assert_eq!(flags & libc::O_ACCMODE, libc::O_RDONLY);
+        assert!(lock(&config, true).is_err());
+        drop(reader);
+        assert!(lock(&config, true).is_ok());
+    }
 
     #[test]
     fn runtime_platform_support_checks_host_libc() {
