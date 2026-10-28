@@ -117,9 +117,10 @@ the job. Trusted publishing uses OIDC without a `NODE_AUTH_TOKEN` secret.
 - Run `uv run --no-project --python 3.12 python tests/speech_worker.py` for
   deterministic speech-buffer tests; no models or speech packages are needed.
 - The ignored `real_models_transcribe_a_local_http_fixture` test requires
-  `RADIO_TEST_SPEECH_DATA` pointing at an isolated data directory with both
-  models installed, and `RADIO_TEST_SPEECH_WAV` pointing at local speech audio.
-  It makes no public station requests or model downloads. Run it with
+  `RADIO_TEST_SPEECH_DATA` pointing at an isolated data directory with all
+  three model presets installed, and `RADIO_TEST_SPEECH_WAV` pointing at local
+  speech audio. It makes no public station requests or model downloads. Run it
+  with
   `cargo test --lib real_models_transcribe_a_local_http_fixture -- --ignored --nocapture`.
 - Use `--data-dir <dir>` (and `--config <file>` when needed) so tests and manual
   runs never touch the default data directory.

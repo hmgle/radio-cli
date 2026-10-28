@@ -79,7 +79,7 @@ impl Default for SubtitleSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            model: "sensevoice-small-yue-int8".into(),
+            model: "sensevoice-small-int8".into(),
             language: "auto".into(),
             threads: 0,
             max_segment_secs: 8,
@@ -101,7 +101,7 @@ impl SubtitleSettings {
         });
         if !matches!(
             self.model.as_str(),
-            "sensevoice-small-yue-int8" | "qwen3-asr-0.6b-int8"
+            "sensevoice-small-int8" | "sensevoice-small-yue-int8" | "qwen3-asr-0.6b-int8"
         ) || !matches!(
             self.language.as_str(),
             "auto" | "zh" | "yue" | "en" | "ja" | "ko"
@@ -372,6 +372,33 @@ pub fn validate_url(value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtitle_model_defaults_change_without_overriding_explicit_selections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (text, model) in [
+            ("", "sensevoice-small-int8"),
+            (
+                "[subtitles]\nenabled=true\nlanguage='yue'\n",
+                "sensevoice-small-int8",
+            ),
+            (
+                "[subtitles]\nmodel='sensevoice-small-yue-int8'\nlanguage='yue'\n",
+                "sensevoice-small-yue-int8",
+            ),
+            (
+                "[subtitles]\nmodel='qwen3-asr-0.6b-int8'\n",
+                "qwen3-asr-0.6b-int8",
+            ),
+        ] {
+            fs::write(&path, text).unwrap();
+            let config = Config::load(Some(&path), Some(dir.path()), None).unwrap();
+            assert_eq!(config.settings.subtitles.model, model);
+            assert_eq!(fs::read_to_string(&path).unwrap(), text);
+            assert!(!dir.path().join("speech").exists());
+        }
+    }
 
     #[test]
     fn subtitles_reject_invalid_models_languages_and_resource_limits() {

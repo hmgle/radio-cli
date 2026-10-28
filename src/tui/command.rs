@@ -169,6 +169,7 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "subtitles history",
     "subtitles clear",
     "subtitles retry",
+    "set subtitles.model sensevoice-small-int8",
     "set subtitles.model sensevoice-small-yue-int8",
     "set subtitles.model qwen3-asr-0.6b-int8",
     "sync",

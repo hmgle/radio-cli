@@ -1241,7 +1241,7 @@ mod tests {
     fn list_requires_vad_and_a_shared_resource_lock() {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
-        let required = required_models("sensevoice-small-yue-int8").unwrap();
+        let required = required_models("sensevoice-small-int8").unwrap();
         let create = |model: &Model| {
             for file in &model.files {
                 let path = model_dir(&config, &model.id).join(&file.path);

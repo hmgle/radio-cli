@@ -20,7 +20,7 @@ records streams without re-encoding. No account or API key is required.
   `--json-v2` output.
 - Keep favorites, history, custom stations, settings, and recordings on your
   machine.
-- Enable optional local live subtitles with SenseVoice Cantonese or Qwen3;
+- Enable optional local live subtitles with SenseVoice or Qwen3;
   see [subtitle setup](docs/configuration.md#live-subtitles).
 - Play any HTTP(S) stream URL, or save custom stations with backup URLs.
 - Record MP3, AAC, Vorbis, and Opus streams as stream copies with metadata.
