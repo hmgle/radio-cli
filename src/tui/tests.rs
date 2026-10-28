@@ -109,6 +109,47 @@ fn subtitle_strip_preserves_layout_and_command_bar_at_height_boundaries() {
 }
 
 #[test]
+fn single_row_subtitles_keep_unspaced_chinese_visible() {
+    for width in [40, 50] {
+        let mut data = view();
+        data.subtitles.enabled = true;
+        data.subtitles.message = "Listening · delayed subtitles".into();
+        Arc::make_mut(&mut data.subtitles.history).push_back(crate::speech::Segment {
+            epoch: 1,
+            start_ms: 0,
+            end_ms: 1000,
+            text: "今日廣東天氣晴朗適合出門聽廣播".into(),
+        });
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains("今日廣"));
+    }
+}
+
+#[test]
+fn three_row_subtitles_keep_history_visible_beside_long_failures() {
+    let mut data = view();
+    data.subtitles.enabled = true;
+    data.subtitles.message = "damaged model: ".to_owned() + &"very long diagnostic ".repeat(8);
+    for i in 0..4 {
+        Arc::make_mut(&mut data.subtitles.history).push_back(crate::speech::Segment {
+            epoch: 1,
+            start_ms: i * 1000,
+            end_ms: i * 1000 + 500,
+            text: format!("recent caption {i}"),
+        });
+    }
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let rendered = text(&terminal);
+    assert!(rendered.contains("damaged model:"));
+    assert!(rendered.contains("recent caption 2"));
+    assert!(rendered.contains("recent caption 3"));
+}
+
+#[test]
 fn subtitle_strip_wraps_long_status_messages() {
     let mut data = view();
     data.subtitles.enabled = true;

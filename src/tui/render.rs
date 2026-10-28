@@ -289,17 +289,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             width: area.width,
             height: subtitle_height,
         };
-        let text = if subtitle_height == 1 {
+        if subtitle_height == 1 {
             let latest = view
                 .subtitles
                 .history
                 .back()
                 .map_or("", |s| s.text.as_str());
-            if latest.is_empty() {
+            let text = if latest.is_empty() {
                 view.subtitles.message.clone()
             } else {
                 format!("{} · {}", view.subtitles.message, latest)
-            }
+            };
+            frame.render_widget(
+                Paragraph::new(text).style(style(app.theme, Role::Muted)),
+                rect,
+            );
         } else {
             let lines = view
                 .subtitles
@@ -308,17 +312,27 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 .rev()
                 .take(2)
                 .collect::<Vec<_>>();
-            std::iter::once(view.subtitles.message.clone())
-                .chain(lines.iter().rev().map(|s| s.text.clone()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        frame.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: false })
-                .style(style(app.theme, Role::Muted)),
-            rect,
-        );
+            let status_height = subtitle_height - lines.len() as u16;
+            frame.render_widget(
+                Paragraph::new(view.subtitles.message.as_str())
+                    .wrap(Wrap { trim: true })
+                    .style(style(app.theme, Role::Muted)),
+                Rect {
+                    height: status_height,
+                    ..rect
+                },
+            );
+            for (row, segment) in lines.iter().rev().enumerate() {
+                frame.render_widget(
+                    Paragraph::new(segment.text.as_str()).style(style(app.theme, Role::Muted)),
+                    Rect {
+                        y: rect.y + status_height + row as u16,
+                        height: 1,
+                        ..rect
+                    },
+                );
+            }
+        }
     }
     let layout = ScreenLayout {
         bottom: Rect {

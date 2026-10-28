@@ -300,6 +300,9 @@ segments and is discarded on station changes or program exit.
 The subtitle strip uses three rows in terminals at least 24 rows tall, or one
 row showing the status and latest segment in shorter terminals. It sits above
 the command bar and reduces panel height without changing the layout mode.
+The three-row strip reserves one row for each of the two latest segments;
+status messages wrap within the remaining rows. Segment text and the one-row
+strip are clipped to the terminal width; open history to read full segments.
 Press `?` to read persistent recognition failures in full.
 
 `setup` explicitly installs managed Python 3.12 and hash-locked sherpa-onnx
