@@ -297,6 +297,11 @@ subtitles, and `Esc` closes the popup. `:subtitles clear` clears the history;
 `:subtitles retry` retries a failed recognizer. The history holds at most 500
 segments and is discarded on station changes or program exit.
 
+The subtitle strip uses three rows in terminals at least 24 rows tall, or one
+row showing the status and latest segment in shorter terminals. It sits above
+the command bar and reduces panel height without changing the layout mode.
+Press `?` to read persistent recognition failures in full.
+
 `setup` explicitly installs managed Python 3.12 and hash-locked sherpa-onnx
 2.0.1 / NumPy 2.2.6 wheels in `<data>/speech/`. Linux glibc x86_64 and macOS
 x86_64/arm64 are supported; the optional runtime is unavailable on pure musl
@@ -360,11 +365,12 @@ keeps recognition running. Reconnection boundaries appear in history.
 
 Speech queues are bounded; overload skips old audio and text rather than
 accumulating unlimited delay. Results more than 30 seconds behind capture are
-discarded. Network failures retry three times; model/runtime failures require
+discarded. Network failures retry three times without recognized speech;
+each new segment resets this budget. Model/runtime failures require
 repair or `:subtitles retry`. Invalid PCM frames are skipped and marked as gaps.
 Subtitle failure does not stop playback or recording. Recording adds its usual
 connection; some stations restrict listener connections. Track artwork probing
-yields while subtitles are active.
+yields while subtitles are enabled, including loading, retry waits and failures.
 
 This first version provides session-only transcription, without translation,
 recording transcription, export, or cloud recognition. ASR text can be wrong,
