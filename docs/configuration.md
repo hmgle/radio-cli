@@ -321,6 +321,11 @@ verify SHA-256 before publishing. Use `models verify ID` to check installed
 files, `models install ID` to repair them, or `models remove ID` to remove a
 model. Stop subtitle sessions before installation or removal.
 
+Within one TUI session, recognition reuses successful model verification for
+unchanged files when reconnecting. Changed or replaced files are checked again;
+a new TUI session starts with full verification. `models verify`, `doctor`, and
+installation always perform full SHA-256 checks.
+
 Model downloads have no total time limit while data keeps arriving. Each
 network wait aborts after 20 seconds without progress, and downloads can be
 cancelled.

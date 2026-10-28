@@ -8,12 +8,14 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Subcommand)]
@@ -191,13 +193,111 @@ fn valid(path: &Path, file: &ModelFile, stop: &AtomicBool) -> Result<bool> {
     Ok(present(path, file)? && digest(path, stop)? == file.sha256)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct FileStamp {
+    device: u64,
+    inode: u64,
+    size: u64,
+    mode: u32,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl FileStamp {
+    fn read(path: &Path) -> Result<Option<Self>> {
+        match fs::symlink_metadata(path) {
+            Ok(meta) if meta.is_file() => Ok(Some(Self {
+                device: meta.dev(),
+                inode: meta.ino(),
+                size: meta.len(),
+                mode: meta.mode(),
+                modified: (meta.mtime(), meta.mtime_nsec()),
+                changed: (meta.ctime(), meta.ctime_nsec()),
+            })),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("cannot inspect {}", path.display())),
+        }
+    }
+
+    fn cacheable_at(&self, started: SystemTime) -> bool {
+        // Filesystems can reuse a timestamp for successive writes. Do not
+        // cache a hash until ctime is beyond that potentially racy second.
+        started
+            .duration_since(UNIX_EPOCH)
+            .is_ok_and(|now| i128::from(self.changed.0) + 1 < i128::from(now.as_secs()))
+    }
+}
+
+/// Successful hashes are reusable only within this controller's lifetime.
+/// Never trust persisted cache data or populate entries from metadata alone.
+#[derive(Default)]
+pub(super) struct VerificationCache {
+    files: HashMap<PathBuf, (FileStamp, String)>,
+    #[cfg(test)]
+    hashes: usize,
+}
+
+impl VerificationCache {
+    fn valid(&mut self, path: &Path, file: &ModelFile, stop: &AtomicBool) -> Result<bool> {
+        self.valid_at(path, file, stop, SystemTime::now())
+    }
+
+    fn valid_at(
+        &mut self,
+        path: &Path,
+        file: &ModelFile,
+        stop: &AtomicBool,
+        started: SystemTime,
+    ) -> Result<bool> {
+        cancelled(stop)?;
+        let stamp = FileStamp::read(path)?;
+        if let Some(stamp) = &stamp
+            && stamp.size == file.size
+            && self
+                .files
+                .get(path)
+                .is_some_and(|(old, hash)| old == stamp && hash == &file.sha256)
+        {
+            return Ok(true);
+        }
+        self.files.remove(path);
+        let Some(stamp) = stamp.filter(|stamp| stamp.size == file.size) else {
+            return Ok(false);
+        };
+        #[cfg(test)]
+        {
+            self.hashes += 1;
+        }
+        if digest(path, stop)? != file.sha256 || FileStamp::read(path)?.as_ref() != Some(&stamp) {
+            return Ok(false);
+        }
+        if stamp.cacheable_at(started) {
+            self.files
+                .insert(path.to_owned(), (stamp, file.sha256.clone()));
+        }
+        Ok(true)
+    }
+
+    pub(super) fn verify(&mut self, config: &Config, id: &str, stop: &AtomicBool) -> Result<()> {
+        verify_with(config, id, |path, file| self.valid(path, file, stop))
+    }
+}
+
 pub(super) fn verify(config: &Config, id: &str, stop: &AtomicBool) -> Result<()> {
+    verify_with(config, id, |path, file| valid(path, file, stop))
+}
+
+fn verify_with(
+    config: &Config,
+    id: &str,
+    mut valid_file: impl FnMut(&Path, &ModelFile) -> Result<bool>,
+) -> Result<()> {
     for m in required_models(id)? {
         for file in &m.files {
-            cancelled(stop)?;
             let path = model_dir(config, &m.id).join(&file.path);
             ensure!(
-                valid(&path, file, stop)?,
+                valid_file(&path, file)?,
                 DomainError::new(ErrorCode::SubtitleIntegrity)
                     .with("id", id)
                     .with("path", path.display())
@@ -604,6 +704,175 @@ pub fn manage(
 mod tests {
     use super::*;
     use crate::test_support::{Server, response};
+
+    fn verification_fixture(directory: &Path) -> (PathBuf, ModelFile) {
+        let file = ModelFile {
+            path: "model.onnx".into(),
+            url: "http://127.0.0.1:1".into(),
+            size: 6,
+            sha256: format!("{:x}", Sha256::digest(b"abcdef")),
+        };
+        let path = directory.join(&file.path);
+        fs::write(&path, b"abcdef").unwrap();
+        let stamp = FileStamp::read(&path).unwrap().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !stamp.cacheable_at(SystemTime::now()) {
+            assert!(Instant::now() < deadline, "file timestamp did not age");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        (path, file)
+    }
+
+    #[test]
+    fn verification_cache_does_not_trust_recent_timestamps() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, file) = verification_fixture(dir.path());
+        // A fresh write must not be cached even when its digest is correct.
+        fs::write(&path, b"abcdef").unwrap();
+        let stamp = FileStamp::read(&path).unwrap().unwrap();
+        let second = u64::try_from(stamp.changed.0).unwrap();
+        for offset in [0, 1, 2] {
+            assert_eq!(
+                stamp.cacheable_at(UNIX_EPOCH + Duration::from_secs(second + offset)),
+                offset == 2
+            );
+        }
+        let mut cache = VerificationCache::default();
+        assert!(
+            cache
+                .valid_at(
+                    &path,
+                    &file,
+                    &AtomicBool::new(false),
+                    UNIX_EPOCH + Duration::from_secs(second)
+                )
+                .unwrap()
+        );
+        assert!(cache.files.is_empty());
+    }
+
+    #[test]
+    fn verification_cache_reuses_hashes_but_checks_manifest_and_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, file) = verification_fixture(dir.path());
+        let stop = AtomicBool::new(false);
+        let mut cache = VerificationCache::default();
+        assert!(cache.valid(&path, &file, &stop).unwrap());
+        assert!(cache.valid(&path, &file, &stop).unwrap());
+        assert_eq!(cache.hashes, 1);
+
+        stop.store(true, Ordering::Relaxed);
+        let error = cache.valid(&path, &file, &stop).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<DomainError>().unwrap().code,
+            ErrorCode::Cancelled
+        );
+        stop.store(false, Ordering::Relaxed);
+        let other = ModelFile {
+            sha256: format!("{:x}", Sha256::digest(b"xxxxxx")),
+            ..file.clone()
+        };
+        assert!(!cache.valid(&path, &other, &stop).unwrap());
+        assert!(cache.files.is_empty());
+        assert_eq!(cache.hashes, 2);
+        assert!(cache.valid(&path, &file, &stop).unwrap());
+        assert_eq!(cache.hashes, 3);
+
+        let mut fresh = VerificationCache::default();
+        assert!(fresh.valid(&path, &file, &stop).unwrap());
+        assert_eq!(fresh.hashes, 1);
+    }
+
+    #[test]
+    fn verification_cache_rehashes_changed_files_even_with_restored_mtime() {
+        use std::fs::FileTimes;
+        for replacement in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (path, file) = verification_fixture(dir.path());
+            let stop = AtomicBool::new(false);
+            let mut cache = VerificationCache::default();
+            assert!(cache.valid(&path, &file, &stop).unwrap());
+            let original = fs::metadata(&path).unwrap();
+            if replacement {
+                let other = dir.path().join("replacement");
+                fs::write(&other, b"xxxxxx").unwrap();
+                fs::rename(other, &path).unwrap();
+            } else {
+                fs::write(&path, b"xxxxxx").unwrap();
+            }
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(original.modified().unwrap()))
+                .unwrap();
+            let changed = fs::metadata(&path).unwrap();
+            assert_eq!(changed.modified().unwrap(), original.modified().unwrap());
+            assert_eq!(changed.len(), original.len());
+            assert!(!cache.valid(&path, &file, &stop).unwrap());
+            assert_eq!(cache.hashes, 2);
+            assert!(cache.files.is_empty());
+            // A failed verification must not become a reusable result.
+            assert!(!cache.valid(&path, &file, &stop).unwrap());
+            assert_eq!(cache.hashes, 3);
+        }
+    }
+
+    #[test]
+    fn verification_cache_rejects_missing_resized_and_nonregular_files() {
+        use std::os::unix::fs::symlink;
+        for mode in 0..4 {
+            let dir = tempfile::tempdir().unwrap();
+            let (path, file) = verification_fixture(dir.path());
+            let stop = AtomicBool::new(false);
+            let mut cache = VerificationCache::default();
+            assert!(cache.valid(&path, &file, &stop).unwrap());
+            fs::remove_file(&path).unwrap();
+            match mode {
+                0 => {}
+                1 => fs::write(&path, b"short").unwrap(),
+                2 => fs::create_dir(&path).unwrap(),
+                _ => {
+                    let target = dir.path().join("target");
+                    fs::write(&target, b"abcdef").unwrap();
+                    symlink(target, &path).unwrap();
+                }
+            }
+            assert!(!cache.valid(&path, &file, &stop).unwrap());
+            assert!(cache.files.is_empty());
+            assert_eq!(cache.hashes, 1);
+        }
+    }
+
+    #[test]
+    fn verification_cache_preserves_permission_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (path, file) = verification_fixture(dir.path());
+        let stop = AtomicBool::new(false);
+        let mut cache = VerificationCache::default();
+        assert!(cache.valid(&path, &file, &stop).unwrap());
+        let permissions = fs::metadata(&path).unwrap().permissions();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let cached = cache.valid(&path, &file, &stop);
+        let full = valid(&path, &file, &stop);
+        fs::set_permissions(&path, permissions).unwrap();
+        for result in [cached, full] {
+            assert_eq!(
+                result
+                    .unwrap_err()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        }
+        assert!(cache.files.is_empty());
+        assert!(cache.valid(&path, &file, &stop).unwrap());
+    }
 
     #[test]
     fn shared_locks_open_existing_resources_without_write_access() {

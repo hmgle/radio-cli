@@ -271,6 +271,10 @@ SenseVoice 粤语预设连同词表和 Silero VAD 约下载 242 MB；
 校验后才发布。`models verify ID` 校验，`models install ID` 安装或修复，
 `models remove ID` 删除模型。安装或删除前请停止字幕会话。
 
+同一次 TUI 会话中，识别重连会复用未变化文件的成功校验结果；文件修改或替换后
+会重新校验，新的 TUI 会话从全量校验开始。`models verify`、`doctor` 和安装
+始终执行完整 SHA-256 校验。
+
 模型下载持续接收数据时不设总时限；每次网络等待超过 20 秒无进展时中止，
 下载过程中可随时取消。
 

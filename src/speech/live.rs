@@ -12,7 +12,7 @@ use std::{
     io::{BufRead, BufReader, Read},
     process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
@@ -93,6 +93,7 @@ pub struct Controller {
     attempts: usize,
     due: Option<Instant>,
     status_key: Option<(StatusMessage, crate::messages::Locale)>,
+    verification: Option<Arc<Mutex<models::VerificationCache>>>,
 }
 
 impl Controller {
@@ -263,8 +264,12 @@ impl Controller {
             let config = config.clone();
             let url = self.key.as_ref().unwrap().1.clone();
             let epoch = self.epoch;
+            let verification = self
+                .verification
+                .get_or_insert_with(Default::default)
+                .clone();
             match Background::start("radio-speech", move |cancel| {
-                run(&config, &url, epoch, &cancel, sender)
+                run(&config, &url, epoch, &cancel, sender, &verification)
             }) {
                 Ok(job) => {
                     self.task = Some(Task {
@@ -325,10 +330,14 @@ fn run(
     epoch: u64,
     cancel: &Arc<AtomicBool>,
     sender: SyncSender<Notice>,
+    verification: &Mutex<models::VerificationCache>,
 ) -> Result<bool> {
     let lock = models::lock(config, false)?;
     models::runtime_check(config, cancel)?;
-    models::verify(config, &config.settings.subtitles.model, cancel)?;
+    verification
+        .lock()
+        .unwrap()
+        .verify(config, &config.settings.subtitles.model, cancel)?;
     ensure!(
         !cancel.load(Ordering::Relaxed),
         DomainError::new(ErrorCode::Cancelled)
@@ -578,7 +587,8 @@ mod tests {
                     &server.url,
                     1,
                     &Arc::new(AtomicBool::new(false)),
-                    sender
+                    sender,
+                    &Mutex::default()
                 )
                 .unwrap()
             );

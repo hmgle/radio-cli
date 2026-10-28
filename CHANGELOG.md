@@ -15,6 +15,9 @@
   probes throughout enabled subtitle sessions. Support Unicode transcripts
   under legacy locales, improve model diagnostics, and avoid repeated work
   while subtitles are disabled or waiting for playback.
+- Reuse model verification for unchanged files within a TUI session to avoid
+  hashing large models on every subtitle reconnect. Explicit verification,
+  diagnostics, and installation retain full SHA-256 checks.
 - Keep receiving track updates when mpv sends invalid UTF-8 in metadata,
   preserving readable Unicode and recoverable legacy title bytes.
 - Show a replacement character for truncated UTF-8 in Chinese ICY titles
