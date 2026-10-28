@@ -36,7 +36,7 @@ fn subtitles_json_management_is_explicit_and_failures_are_atomic() {
         .unwrap();
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["data"].as_array().unwrap().len(), 2);
+    assert_eq!(value["data"].as_array().unwrap().len(), 3);
     assert_eq!(value["data"][0]["present"], false);
     assert!(!dir.path().join("speech/runtime-2.0.1-v1").exists());
     for (args, code) in [

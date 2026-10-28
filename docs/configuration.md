@@ -285,10 +285,19 @@ live HTTP(S) streams. Recognition stays on your machine. Install
 ```sh
 radio subtitles setup
 radio subtitles models list
-radio subtitles models install sensevoice-small-yue-int8
+radio subtitles models install sensevoice-small-int8
 radio subtitles doctor
 radio tui
 ```
+
+When upgrading from 0.9.0, an omitted `subtitles.model` now selects
+`sensevoice-small-int8`, even if only the previous Cantonese preset is
+installed. Stop subtitle sessions, run
+`radio subtitles models install sensevoice-small-int8`, then
+`radio subtitles doctor` before enabling subtitles again. Explicit model
+selections are preserved. To keep the previous model, set
+`model = "sensevoice-small-yue-int8"` in your `[subtitles]` configuration.
+Upgrading does not download models or rewrite your configuration.
 
 In the TUI, use `:subtitles on` to start, `:subtitles off` to stop, and
 `:subtitles history` to open scrollable history. `j/k`, arrows and Page Up/Down
@@ -312,14 +321,33 @@ systems. Python is isolated from the system environment. Normal recognition
 never downloads packages or models. Installation needs network access to the
 Python distributions, PyPI, Hugging Face and GitHub.
 
-The Cantonese SenseVoice preset downloads approximately 242 MB including its
-vocabulary and Silero VAD. `qwen3-asr-0.6b-int8` downloads approximately 988 MB
-plus VAD and supports broader multilingual recognition. These sizes describe
-files, not peak RAM. Both model presets use Apache-2.0; Silero VAD uses MIT.
-`models list` includes license source links. Downloads resume `.part` files and
-verify SHA-256 before publishing. Use `models verify ID` to check installed
-files, `models install ID` to repair them, or `models remove ID` to remove a
-model. Stop subtitle sessions before installation or removal.
+The upstream SenseVoice preset downloads approximately 240 MB including its
+vocabulary and Silero VAD. The Cantonese-only `sensevoice-small-yue-int8`
+preset downloads approximately 242 MB including the shared VAD.
+`qwen3-asr-0.6b-int8` downloads approximately
+988 MB plus VAD and supports broader multilingual recognition. These sizes
+describe files, not peak RAM. The upstream `sensevoice-small-int8` weights use
+the [FunASR Model Open Source License Agreement](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE),
+separately from the toolkit's MIT code license. The `sensevoice-small-yue-int8`
+and Qwen3 presets list Apache-2.0; Silero VAD uses MIT.
+`models list` includes license source links.
+Downloads resume `.part` files and verify SHA-256 before publishing. Use
+`models verify ID` to check installed files, `models install ID` to repair
+them, or `models remove ID` to remove a model. Stop subtitle sessions before
+installation or removal.
+
+Both SenseVoice presets use the same vocabulary and graph layout. Each preset
+keeps its own copy of its files under `<data>/speech/models/<id>/`; only the
+Silero VAD files are shared between presets.
+`sensevoice-small-int8` is the default and covers Cantonese, Mandarin,
+English, Japanese, and Korean; it emits sentence punctuation and applies
+inverse text normalization, so spoken numbers are written as digits.
+`sensevoice-small-yue-int8` is the WenetSpeech-Yue fine-tune, retained for
+existing configurations; use the upstream preset for new installations. It
+recognizes Cantonese only, without punctuation or inverse text normalization.
+Its `language` setting does not restore multilingual recognition. All presets
+already use Silero VAD to split audio at pauses; this does not add punctuation
+or guarantee grammatical sentence boundaries.
 
 Within one TUI session, recognition reuses successful model verification for
 unchanged files when reconnecting. Changed or replaced files are checked again;
@@ -343,7 +371,7 @@ package installation. Query strings and fragments are not supported.
 ```toml
 [subtitles]
 enabled = false
-model = "sensevoice-small-yue-int8"
+model = "sensevoice-small-int8"
 language = "auto"
 threads = 0
 max_segment_secs = 8
@@ -354,8 +382,8 @@ uv = "uv"
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | `enabled` | `false` | Start subtitles when TUI live playback begins. |
-| `model` | `"sensevoice-small-yue-int8"` | This model or `"qwen3-asr-0.6b-int8"`; must already be installed. |
-| `language` | `"auto"` | SenseVoice: `auto`, `zh`, `yue`, `en`, `ja`, `ko`. Qwen3 requires `auto`. |
+| `model` | `"sensevoice-small-int8"` | This model, `"sensevoice-small-yue-int8"`, or `"qwen3-asr-0.6b-int8"`; must already be installed. |
+| `language` | `"auto"` | SenseVoice: `auto`, `zh`, `yue`, `en`, `ja`, `ko`; only `sensevoice-small-int8` follows this setting. Qwen3 requires `auto`. |
 | `threads` | `0` | Automatic: half the logical cores, limited to 1–4; explicit values: 1–32. |
 | `max_segment_secs` | `8` | VAD speech target, 2–20 seconds; a short trailing pause may be included. |
 | `uv` | `"uv"` | Executable name/path used only by `setup`. |

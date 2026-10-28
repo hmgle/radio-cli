@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add the upstream SenseVoice Small preset `sensevoice-small-int8` and make it
+  the default subtitle model, with punctuation, inverse text normalization,
+  and Cantonese, Mandarin, English, Japanese, and Korean recognition. Its
+  weights use the FunASR Model Open Source License Agreement. The Cantonese-only
+  `sensevoice-small-yue-int8` preset stays available for existing configurations.
+  When upgrading from 0.9.0 without an explicit `subtitles.model`, install
+  `sensevoice-small-int8` before enabling subtitles, or explicitly select the
+  previous preset; see [subtitle setup](docs/configuration.md#live-subtitles).
+
 ## 0.9.0 — 2026-10-28
 
 - Add optional local live subtitles in the TUI, with SenseVoice Cantonese and

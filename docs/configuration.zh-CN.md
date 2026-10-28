@@ -241,10 +241,17 @@ radio-cli 不会改写手写配置文件或 `config.example.toml`。可变状态
 ```sh
 radio subtitles setup
 radio subtitles models list
-radio subtitles models install sensevoice-small-yue-int8
+radio subtitles models install sensevoice-small-int8
 radio subtitles doctor
 radio tui
 ```
+
+从 0.9.0 升级时，未显式设置 `subtitles.model` 的配置现在会选择
+`sensevoice-small-int8`，即使之前只安装了粤语预设。请先停止字幕会话，运行
+`radio subtitles models install sensevoice-small-int8`，再运行
+`radio subtitles doctor`，之后重新开启字幕。显式选择的模型保持不变；
+若要继续使用旧模型，在配置的 `[subtitles]` 段中设置
+`model = "sensevoice-small-yue-int8"`。升级不会自动下载模型或改写配置。
 
 在 TUI 中用 `:subtitles on` 开启、`:subtitles off` 关闭，
 `:subtitles history` 打开历史弹窗。`j/k`、方向键、Page Up/Down 滚动，
@@ -264,12 +271,25 @@ radio tui
 该环境与系统 Python 隔离，正常识别不会下载软件包或模型。
 安装需要访问 Python 分发源、PyPI、Hugging Face 和 GitHub。
 
-SenseVoice 粤语预设连同词表和 Silero VAD 约下载 242 MB；
+SenseVoice 预设连同词表和 Silero VAD 约下载 240 MB；仅粤语的
+`sensevoice-small-yue-int8` 连同 VAD 约 242 MB；
 `qwen3-asr-0.6b-int8` 模型文件约 988 MB，另需 VAD，适合更广泛的多语言识别。
-文件大小不代表峰值内存。两个模型预设采用 Apache-2.0，Silero VAD 采用 MIT；
-`models list` 提供许可证来源链接。下载支持 `.part` 断点续传，通过 SHA-256
-校验后才发布。`models verify ID` 校验，`models install ID` 安装或修复，
+文件大小不代表峰值内存。上游 `sensevoice-small-int8` 权重采用
+[FunASR 模型开源协议](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)，
+与工具包代码的 MIT 许可分开。`sensevoice-small-yue-int8` 与 Qwen3 预设
+标注 Apache-2.0；Silero VAD 采用 MIT；`models list` 提供许可证来源链接。
+下载支持 `.part` 断点续传，通过
+SHA-256 校验后才发布。`models verify ID` 校验，`models install ID` 安装或修复，
 `models remove ID` 删除模型。安装或删除前请停止字幕会话。
+
+两个 SenseVoice 预设使用同一份词表和图结构。各预设的文件各自存放在
+`<data>/speech/models/<id>/` 下，只有 Silero VAD 文件在预设间共用。
+`sensevoice-small-int8` 为默认项，覆盖粤语、普通话、英语、日语、韩语；
+它会输出句末标点并启用逆文本正则化，口述数字会写成阿拉伯数字。
+`sensevoice-small-yue-int8` 是 WenetSpeech-Yue 微调版，为兼容现有配置而保留；
+新安装推荐上游预设。微调版仅识别粤语，无标点、不做逆文本正则化，
+`language` 设置无法恢复多语言识别。所有预设均已接入 Silero VAD，按语音停顿切段；
+这不会补充标点，也不保证按语法句子切分。
 
 同一次 TUI 会话中，识别重连会复用未变化文件的成功校验结果；文件修改或替换后
 会重新校验，新的 TUI 会话从全量校验开始。`models verify`、`doctor` 和安装
@@ -289,7 +309,7 @@ SenseVoice 粤语预设连同词表和 Silero VAD 约下载 242 MB；
 ```toml
 [subtitles]
 enabled = false
-model = "sensevoice-small-yue-int8"
+model = "sensevoice-small-int8"
 language = "auto"
 threads = 0
 max_segment_secs = 8
@@ -300,8 +320,8 @@ uv = "uv"
 | 配置项 | 默认值 | 行为 |
 | --- | --- | --- |
 | `enabled` | `false` | TUI 开始直播播放后启动字幕。 |
-| `model` | `"sensevoice-small-yue-int8"` | 此模型或 `"qwen3-asr-0.6b-int8"`，必须先安装。 |
-| `language` | `"auto"` | SenseVoice：`auto`、`zh`、`yue`、`en`、`ja`、`ko`；Qwen3 仅接受 `auto`。 |
+| `model` | `"sensevoice-small-int8"` | 此模型、`"sensevoice-small-yue-int8"` 或 `"qwen3-asr-0.6b-int8"`，必须先安装。 |
+| `language` | `"auto"` | SenseVoice：`auto`、`zh`、`yue`、`en`、`ja`、`ko`；仅 `sensevoice-small-int8` 遵循此取值。Qwen3 仅接受 `auto`。 |
 | `threads` | `0` | 自动使用半数逻辑核心，限制在 1–4；显式值为 1–32。 |
 | `max_segment_secs` | `8` | VAD 语音目标段长，范围 2–20 秒，可能包含短暂的尾部停顿。 |
 | `uv` | `"uv"` | 仅 `setup` 使用的可执行文件名或路径。 |

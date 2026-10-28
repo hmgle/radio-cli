@@ -577,7 +577,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = crate::test_support::config(dir.path());
         config.data_dir = data.into();
-        for model in ["sensevoice-small-yue-int8", "qwen3-asr-0.6b-int8"] {
+        for model in [
+            "sensevoice-small-int8",
+            "sensevoice-small-yue-int8",
+            "qwen3-asr-0.6b-int8",
+        ] {
             config.settings.subtitles.model = model.into();
             let (sender, events) = mpsc::sync_channel(64);
             let start = Instant::now();

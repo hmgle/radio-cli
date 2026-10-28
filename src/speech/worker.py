@@ -15,6 +15,9 @@ import time
 RATE = 16000
 WINDOW = 512
 
+# Both presets share the SenseVoice graph, inputs, and vocabulary.
+SENSE_VOICE = frozenset({"sensevoice-small-int8", "sensevoice-small-yue-int8"})
+
 
 class AudioQueue:
     """Bounded sample queue; preserve absolute positions across dropped audio."""
@@ -96,7 +99,7 @@ def run(args):
 
     model = args["model_dir"]
     common = dict(num_threads=args["threads"], provider="cpu")
-    if args["model"] == "sensevoice-small-yue-int8":
+    if args["model"] in SENSE_VOICE:
         recognizer = sherpa.OfflineRecognizer.from_sense_voice(
             model=os.path.join(model, "model.int8.onnx"),
             tokens=os.path.join(model, "tokens.txt"),

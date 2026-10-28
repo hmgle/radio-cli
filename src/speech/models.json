@@ -1,5 +1,24 @@
 [
   {
+    "id": "sensevoice-small-int8",
+    "license": "FunASR Model Open Source License Agreement",
+    "license_url": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+    "files": [
+      {
+        "path": "model.int8.onnx",
+        "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+        "size": 239233841,
+        "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+      },
+      {
+        "path": "tokens.txt",
+        "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+        "size": 315894,
+        "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+      }
+    ]
+  },
+  {
     "id": "sensevoice-small-yue-int8",
     "license": "Apache-2.0",
     "license_url": "https://huggingface.co/jackuh02/WenetSpeech-Yue-ASR-ONNX/blob/2071548ac2b7db392984569f046df193061df496/LICENSE",
