@@ -156,10 +156,19 @@ struct ScreenLayout {
     shared: bool,
     task_main: bool,
 }
-fn screen_layout(area: Rect, focus: Focus, task_active: bool) -> ScreenLayout {
+fn screen_layout(
+    area: Rect,
+    focus: Focus,
+    task_active: bool,
+    subtitle_height: u16,
+) -> ScreenLayout {
     // All regions must agree on whether there is room for side-by-side panels.
     let tall = area.height >= 20;
     let side_by_side = area.width >= 100 && tall;
+    let area = Rect {
+        height: area.height.saturating_sub(subtitle_height),
+        ..area
+    };
     let mut rects = [Rect::default(); 5];
     let vertical = Layout::default()
         .direction(Direction::Vertical)
@@ -271,11 +280,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     } else {
         0
     };
-    let content_area = Rect {
-        height: area.height.saturating_sub(subtitle_height),
-        ..area
-    };
-    let layout = screen_layout(content_area, app.focus, view.task_active);
+    let layout = screen_layout(area, app.focus, view.task_active, subtitle_height);
     if subtitle_height > 0 {
         // Leave the command/hint bar at the bottom; place captions just above it.
         let rect = Rect {
@@ -290,7 +295,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 .history
                 .back()
                 .map_or("", |s| s.text.as_str());
-            format!("{} · {}", view.subtitles.message, latest)
+            if latest.is_empty() {
+                view.subtitles.message.clone()
+            } else {
+                format!("{} · {}", view.subtitles.message, latest)
+            }
         } else {
             let lines = view
                 .subtitles
@@ -305,7 +314,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 .join("\n")
         };
         frame.render_widget(
-            Paragraph::new(text).style(style(app.theme, Role::Muted)),
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .style(style(app.theme, Role::Muted)),
             rect,
         );
     }

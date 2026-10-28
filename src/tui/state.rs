@@ -1480,6 +1480,7 @@ impl App {
                 }
                 self.mode = Mode::Normal;
                 self.help = false;
+                self.subtitle_history = false;
                 self.filter_edit = None;
                 self.message.clear();
             }
@@ -1683,6 +1684,7 @@ impl App {
                 self.focus = Focus::List;
             }
             KeyCode::Char('?') => {
+                self.subtitle_history = false;
                 let mut errors: Vec<(&'static str, String)> = vec![];
                 if view.operation_error_id > self.dismissed_error {
                     errors.push((
@@ -1758,6 +1760,7 @@ impl App {
             {
                 self.help_content = view.page_error(&self.filter).map(str::to_owned);
                 self.help_title = Some(crate::t!("list_error_title"));
+                self.subtitle_history = false;
                 self.help = true;
                 self.help_scroll = 0;
             }

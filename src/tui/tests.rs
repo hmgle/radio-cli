@@ -28,6 +28,119 @@ fn key(code: KeyCode) -> KeyEvent {
 }
 
 #[test]
+fn subtitle_history_does_not_replace_help_after_resizing_and_escape() {
+    let data = view();
+    let mut app = App::default();
+    let (tx, _rx) = command::channel(16);
+    app.help = true;
+    app.subtitle_history = true;
+    app.update_size(39, 15);
+    app.key(key(KeyCode::Esc), &data, &tx);
+    app.update_size(80, 24);
+    app.key(key(KeyCode::Char('?')), &data, &tx);
+    assert!(app.help);
+    assert!(!app.subtitle_history);
+    assert!(app.help_content.is_none());
+}
+
+#[test]
+fn subtitle_updates_redraw_and_report_persistent_failures_once() {
+    let mut data = view();
+    let mut snapshot = crate::speech::Snapshot {
+        enabled: true,
+        revision: 1,
+        ..Default::default()
+    };
+    let revision = data.immediate_revision;
+    data.update_subtitles(&snapshot);
+    assert!(data.immediate_revision > revision);
+    snapshot.failed = true;
+    snapshot.revision += 1;
+    snapshot.message = "model failure with complete diagnostic details".into();
+    data.update_subtitles(&snapshot);
+    assert_eq!(data.operation_error, snapshot.message);
+    let error_id = data.operation_error_id;
+    data.update_subtitles(&snapshot);
+    assert_eq!(data.operation_error_id, error_id);
+    let mut app = App::default();
+    let (tx, _rx) = command::channel(16);
+    app.key(key(KeyCode::Char('?')), &data, &tx);
+    assert!(app.help_content.unwrap().contains(&snapshot.message));
+}
+
+#[test]
+fn subtitle_strip_preserves_layout_and_command_bar_at_height_boundaries() {
+    for height in [16, 20, 23, 24] {
+        let mut data = view();
+        data.task_active = true;
+        let mut app = App::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let before = app.rects;
+        data.subtitles.enabled = true;
+        data.subtitles.message = "Loading speech model".into();
+        app.mode = Mode::Command;
+        app.editor.begin("subtitles history");
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert_eq!(
+            app.rects[Focus::Sources.index()].width,
+            before[Focus::Sources.index()].width
+        );
+        assert_eq!(
+            app.rects[Focus::Activity.index()].height,
+            before[Focus::Activity.index()].height
+        );
+        let rendered = text(&terminal);
+        assert!(rendered.contains("Loading speech model"));
+        assert!(!rendered.contains("Loading speech model ·"));
+        assert!(rendered.contains("subtitles history"));
+        let rows: Vec<_> = rendered.lines().collect();
+        let caption = rows
+            .iter()
+            .position(|row| row.contains("Loading speech model"))
+            .unwrap();
+        let command = rows
+            .iter()
+            .position(|row| row.contains("subtitles history"))
+            .unwrap();
+        assert!(caption < command);
+        assert!(command >= usize::from(height - 3));
+    }
+}
+
+#[test]
+fn subtitle_strip_wraps_long_status_messages() {
+    let mut data = view();
+    data.subtitles.enabled = true;
+    data.subtitles.message = format!("{} repair command", "x".repeat(90));
+    let mut app = App::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("repair command"));
+}
+
+#[test]
+fn subtitle_history_marks_reconnect_epochs() {
+    let mut data = view();
+    for epoch in [1, 2] {
+        Arc::make_mut(&mut data.subtitles.history).push_back(crate::speech::Segment {
+            epoch,
+            start_ms: 0,
+            end_ms: 100,
+            text: format!("epoch {epoch}"),
+        });
+    }
+    let mut app = App::default();
+    app.help = true;
+    app.subtitle_history = true;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let rendered = text(&terminal);
+    assert!(rendered.contains("epoch 1") && rendered.contains("epoch 2"));
+    assert!(rendered.contains(crate::t!("subtitle_interrupted")));
+}
+
+#[test]
 fn subtitle_commands_toggle_and_select_models_without_running_management() {
     let data = view();
     for action in ["on", "off", "toggle", "clear", "retry"] {
@@ -2883,7 +2996,9 @@ fn each_popup_names_what_it_shows_and_a_single_failure_gets_its_own_title() {
         requested: app.filter.clone(),
         phase: PagePhase::Error("catalog unreachable".into()),
     });
+    app.subtitle_history = true;
     app.key(key(KeyCode::Enter), &listing, &sender);
+    assert!(!app.subtitle_history);
     assert_eq!(app.help_title, Some(crate::t!("list_error_title")));
     let screen = draw(&mut app, &listing);
     assert!(screen.contains(crate::t!("list_error_title")), "{screen}");

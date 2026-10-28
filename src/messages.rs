@@ -133,6 +133,16 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn set_usage_lists_the_same_options_in_both_languages() {
+        let options = |locale| {
+            text_in(locale, "command_usage_set")
+                .split_once(": ")
+                .unwrap()
+                .1
+        };
+        assert_eq!(options(Locale::En), options(Locale::ZhCn));
+    }
+    #[test]
     fn formatted_values_are_not_reinterpreted_as_placeholders() {
         assert_eq!(
             format_text("Hello {name}: {missing}", &[("name", "{missing}".into())]),

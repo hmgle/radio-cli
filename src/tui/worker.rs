@@ -231,6 +231,16 @@ impl View {
         self.operation_error = super::display::diagnostic(message);
         self.log(message);
     }
+    pub(super) fn update_subtitles(&mut self, snapshot: &crate::speech::Snapshot) {
+        if self.subtitles.revision != snapshot.revision {
+            if snapshot.failed && !self.subtitles.failed {
+                self.fail_operation(&snapshot.message);
+            }
+            self.subtitles = snapshot.clone();
+            self.revision += 1;
+            self.immediate_revision += 1;
+        }
+    }
     fn log(&mut self, message: &str) {
         let message = crate::clean_text(&super::display::diagnostic(message));
         Arc::make_mut(&mut self.logs)
@@ -847,11 +857,7 @@ pub(super) fn run(
             )?;
             was_recording = engine.status.recording();
             let mut data = view.lock().unwrap();
-            if data.subtitles.revision != engine.subtitles.snapshot.revision {
-                data.subtitles = engine.subtitles.snapshot.clone();
-                data.revision += 1;
-                data.immediate_revision += 1;
-            }
+            data.update_subtitles(&engine.subtitles.snapshot);
             if data.track_artwork != engine.artwork.cover {
                 data.track_artwork = engine.artwork.cover.clone();
                 data.revision += 1;
