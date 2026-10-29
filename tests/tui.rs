@@ -238,7 +238,7 @@ fn tmux_artwork_queries_once_retries_failures_and_preserves_halfblock_fallback()
             &tmux,
             r#"#!/bin/sh
 printf '%s\n' "$@" >> "$RADIO_TEST_TMUX_LOG"
-# A 400 ms command must time out on both attempts under the 250 ms limit.
+# Exceed TMUX_QUERY_TIMEOUT (250 ms), but stay below the old 500 ms limit.
 if [ "$RADIO_TEST_TMUX_FAILURE" = slow ]; then exec sleep 0.4; fi
 if [ -n "$RADIO_TEST_TMUX_FAILURE" ] && [ ! -e "$RADIO_TEST_TMUX_LOG.failed" ]; then
     touch "$RADIO_TEST_TMUX_LOG.failed"
