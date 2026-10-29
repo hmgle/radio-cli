@@ -140,10 +140,12 @@ macOS 上的发布要求文件系统支持硬链接。恢复前不要删除 `.pa
 自定义电台可能没有台标。曲目封面还要求当前标题非空，且 ICY `StreamUrl` 提供可用图片地址。
 
 单色主题、小于 100×24 的终端，或详情文字下方空间不足时不会显示图片。
-tmux 原生图片要求 tmux 3.4+ 编译启用 Sixel、已连接客户端支持 Sixel，且能提供单元格像素尺寸。
-探测失败时回退 Unicode 半块；更换客户端或终端能力后请重启 radio。
-`allow-passthrough` 可以保持关闭。支持 `sixel_support` 格式变量的 tmux，
-运行 `tmux display-message -p '#{sixel_support}'` 应返回 `1`；仅客户端支持 Sixel 还不够。
+tmux 原生图片要求 tmux 3.6+ 构建报告 `sixel_support=1`、已连接客户端的
+`client_termfeatures` 包含 `sixel`，且能提供单元格像素尺寸。
+旧版本或探测失败时回退 Unicode 半块；更换客户端或终端能力后请重启 radio。
+`allow-passthrough` 可以保持关闭。运行
+`tmux display-message -p '#{sixel_support} #{client_termfeatures}'` 可同时检查服务器和客户端。
+多个客户端的单元格像素尺寸不同时可能导致裁剪；请统一尺寸或只连接一个客户端。
 部分 Sixel 终端（包括 xterm）的图片被弹窗或文字覆盖后
 可能消失；关闭并重新打开详情可重绘。
 

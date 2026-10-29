@@ -68,26 +68,32 @@ impl ImagePicker {
 
 struct TmuxCache {
     server: OsString,
-    font: Option<FontSize>,
+    font: FontSize,
 }
 
 pub(super) fn picker(pending: &mut VecDeque<Event>) -> ImagePicker {
     if let Some(server) = std::env::var_os("TMUX") {
         static CACHE: Mutex<Option<TmuxCache>> = Mutex::new(None);
         let mut cache = CACHE.lock().unwrap_or_else(|error| error.into_inner());
-        if cache.as_ref().is_none_or(|entry| entry.server != server) {
-            let font = tmux_font(|args| {
-                let bytes = crate::process::output(
-                    Command::new("tmux").args(args),
-                    Duration::from_millis(500),
-                    &Arc::new(AtomicBool::new(false)),
-                )
-                .ok()?;
-                String::from_utf8(bytes).ok()
-            });
-            *cache = Some(TmuxCache { server, font });
-        }
-        return ImagePicker::Tmux(cache.as_ref().unwrap().font);
+        let font = cached_tmux_font(&mut cache, server, || {
+            let mut command = Command::new("tmux");
+            command.args([
+                "display-message",
+                "-p",
+                concat!(
+                    "#{client_name}\t#{client_cell_width}\t#{client_cell_height}\t",
+                    "#{sixel_support}\t#{client_termfeatures}",
+                ),
+            ]);
+            let bytes = crate::process::output(
+                &mut command,
+                Duration::from_millis(500),
+                &Arc::new(AtomicBool::new(false)),
+            )
+            .ok()?;
+            String::from_utf8(bytes).ok()
+        });
+        return ImagePicker::Tmux(font);
     }
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     let iterm = iterm2(&program, &std::env::var("LC_TERMINAL").unwrap_or_default());
@@ -103,48 +109,41 @@ pub(super) fn picker(pending: &mut VecDeque<Event>) -> ImagePicker {
     )
 }
 
-fn tmux_font(mut run: impl FnMut(&[&str]) -> Option<String>) -> Option<FontSize> {
-    // Resolve the client and its geometry together. A pane's DA1 reports tmux's
-    // capabilities, which say nothing about the terminal attached outside it.
-    let report = run(&[
-        "display-message",
-        "-p",
-        "#{client_name}\t#{client_cell_width}\t#{client_cell_height}\t#{sixel_support}\t#{version}",
-    ])?;
+fn cached_tmux_font(
+    cache: &mut Option<TmuxCache>,
+    server: OsString,
+    mut query: impl FnMut() -> Option<String>,
+) -> Option<FontSize> {
+    if let Some(entry) = cache.as_ref().filter(|entry| entry.server == server) {
+        return Some(entry.font);
+    }
+    // picker() runs only at startup, so retry one failed command here. A valid
+    // negative capability report needs no retry. Never cache a failed probe.
+    let report = query().or_else(query)?;
+    let font = tmux_font(&report)?;
+    *cache = Some(TmuxCache { server, font });
+    Some(font)
+}
+
+fn tmux_font(report: &str) -> Option<FontSize> {
+    // A pane's DA1 says nothing about the attached terminal. Require the
+    // server's build flag (tmux 3.6+) and the client's applied Sixel feature;
+    // older servers cannot reliably report whether Sixel was compiled in.
     let fields: Vec<_> = report.trim_end_matches(['\r', '\n']).split('\t').collect();
-    let [client, width, height, support, version] = fields.as_slice() else {
+    let [client, width, height, support, features] = fields.as_slice() else {
         return None;
     };
-    if client.is_empty() || !tmux_server_sixel(support, version) {
+    if client.is_empty()
+        || *support != "1"
+        || !features.split(',').any(|feature| feature == "sixel")
+    {
         return None;
     }
     let font = (width.parse().ok()?, height.parse().ok()?);
     if !(1..=128).contains(&font.0) || !(1..=256).contains(&font.1) {
         return None;
     }
-    let capabilities = run(&["show-messages", "-T", "-t", client])?;
-    capabilities
-        .lines()
-        .any(|line| {
-            line.trim().split_once(": ").is_some_and(|(index, value)| {
-                !index.is_empty()
-                    && index.bytes().all(|byte| byte.is_ascii_digit())
-                    && value == "Sxl: (flag) true"
-            })
-        })
-        .then_some(font)
-}
-
-fn tmux_server_sixel(support: &str, version: &str) -> bool {
-    match support {
-        "1" => true,
-        // tmux 3.4/3.5 predate sixel_support. Their build flag cannot be
-        // checked through this format; require a release with native Sixel.
-        "" => version.split_once('.').is_some_and(|(major, minor)| {
-            major == "3" && matches!(minor.trim_end_matches(char::is_alphabetic), "4" | "5")
-        }),
-        _ => false,
-    }
+    Some(font)
 }
 
 fn query(
@@ -435,65 +434,85 @@ mod tests {
     use std::{io::Read, os::unix::net::UnixStream};
 
     #[test]
-    fn tmux_uses_the_selected_clients_sixel_capability_and_cell_size() {
-        for (support, version) in [("1", "3.7b"), ("", "3.4"), ("", "3.5a")] {
-            let mut calls = 0;
-            let font = tmux_font(|args| {
-                calls += 1;
-                match args {
-                    ["display-message", "-p", format] => {
-                        assert!(format.contains("#{client_name}\t#{client_cell_width}"));
-                        Some(format!("/dev/pts/7\t12\t23\t{support}\t{version}\n"))
-                    }
-                    ["show-messages", "-T", "-t", "/dev/pts/7"] => {
-                        Some("Terminal 0: xterm-256color:\n 228: Sxl: (flag) true\n".into())
-                    }
-                    _ => panic!("unexpected tmux command: {args:?}"),
-                }
-            });
-            assert_eq!(font, Some((12, 23)));
-            assert_eq!(calls, 2);
+    fn tmux_requires_server_support_and_an_exact_client_sixel_feature() {
+        for features in ["sixel", "RGB,sixel", "sixel,RGB", "RGB,sixel,clipboard"] {
+            assert_eq!(
+                tmux_font(&format!("/dev/pts/7\t12\t23\t1\t{features}\n")),
+                Some((12, 23))
+            );
         }
-    }
-
-    #[test]
-    fn tmux_falls_back_for_missing_clients_build_support_or_invalid_geometry() {
         for report in [
             "",
-            "\t12\t23\t1\t3.7b\n",
-            "/dev/pts/7\t12\t23\t0\tnext-3.9\n",
-            "/dev/pts/7\t12\t23\t\t3.3a\n",
-            "/dev/pts/7\t12\t23\t\t3.7b\n",
-            "/dev/pts/7\t0\t23\t1\t3.7b\n",
-            "/dev/pts/7\t12\t0\t1\t3.7b\n",
-            "/dev/pts/7\t-1\t23\t1\t3.7b\n",
-            "/dev/pts/7\t129\t23\t1\t3.7b\n",
-            "/dev/pts/7\t12\t257\t1\t3.7b\n",
-            "/dev/pts/7\tunknown\t23\t1\t3.7b\n",
+            "\t12\t23\t1\tsixel\n",
+            "/dev/pts/7\t12\t23\t0\tsixel\n",
+            "/dev/pts/7\t12\t23\t\tsixel\n",
+            "/dev/pts/7\t12\t23\t1\t\n",
+            "/dev/pts/7\t12\t23\t1\tRGB,clipboard\n",
+            "/dev/pts/7\t12\t23\t1\tnosixel,sixel-extra\n",
+            "/dev/pts/7\t0\t23\t1\tsixel\n",
+            "/dev/pts/7\t12\t0\t1\tsixel\n",
+            "/dev/pts/7\t-1\t23\t1\tsixel\n",
+            "/dev/pts/7\t129\t23\t1\tsixel\n",
+            "/dev/pts/7\t12\t257\t1\tsixel\n",
+            "/dev/pts/7\tunknown\t23\t1\tsixel\n",
         ] {
-            assert_eq!(tmux_font(|_| Some(report.into())), None, "{report:?}");
+            assert_eq!(tmux_font(report), None, "{report:?}");
         }
-        assert_eq!(tmux_font(|_| None), None);
     }
 
     #[test]
-    fn tmux_requires_an_exact_positive_sixel_flag_from_the_selected_client() {
-        for capabilities in [
-            None,
-            Some(""),
-            Some(" 228: Sxl: (flag) false\n"),
-            Some(" 228: Sxl: [missing]\n"),
-            Some(" 228: Sxl: (flag) true extra\n"),
-            Some(" Sxl: (flag) true\n"),
-            Some(" 228: Other: (flag) true\n"),
-        ] {
-            let font = tmux_font(|args| match args[0] {
-                "display-message" => Some("/dev/pts/7\t12\t23\t1\t3.7b\n".into()),
-                "show-messages" => capabilities.map(str::to_owned),
-                _ => unreachable!(),
-            });
-            assert_eq!(font, None, "{capabilities:?}");
-        }
+    fn tmux_retries_a_failed_query_once_and_caches_only_success_for_the_same_server() {
+        let server = OsString::from("/tmp/tmux-1000/default,123,0");
+        let report = "/dev/pts/7\t12\t23\t1\tsixel\n";
+        let mut cache = None;
+        let mut calls = 0;
+        let font = cached_tmux_font(&mut cache, server.clone(), || {
+            calls += 1;
+            (calls == 2).then(|| report.into())
+        });
+        assert_eq!(font, Some((12, 23)));
+        assert_eq!(calls, 2);
+        assert_eq!(
+            cached_tmux_font(&mut cache, server, || panic!("must use cached result")),
+            font
+        );
+        let other = OsString::from("/tmp/tmux-1000/default,123,1");
+        assert_eq!(cached_tmux_font(&mut cache, other.clone(), || None), None);
+        assert_eq!(
+            cached_tmux_font(&mut cache, other, || Some(report.into())),
+            font
+        );
+    }
+
+    #[test]
+    fn tmux_does_not_retry_or_cache_negative_capability_reports() {
+        let mut cache = None;
+        let server = OsString::from("tmux-server");
+        let mut calls = 0;
+        assert_eq!(
+            cached_tmux_font(&mut cache, server.clone(), || {
+                calls += 1;
+                Some("/dev/pts/7\t12\t23\t0\tsixel\n".into())
+            }),
+            None
+        );
+        assert_eq!(calls, 1);
+        assert!(cache.is_none());
+        assert_eq!(
+            cached_tmux_font(&mut cache, server.clone(), || {
+                calls += 1;
+                None
+            }),
+            None
+        );
+        assert_eq!(calls, 3);
+        assert!(cache.is_none());
+        assert_eq!(
+            cached_tmux_font(&mut cache, server, || {
+                Some("/dev/pts/7\t12\t23\t1\tsixel\n".into())
+            }),
+            Some((12, 23))
+        );
     }
 
     #[test]

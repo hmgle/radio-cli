@@ -37,6 +37,15 @@ impl Tui {
         config: Option<&std::path::Path>,
         height: u16,
     ) -> Self {
+        Self::start_with_env(dir, api, config, height, &[])
+    }
+    fn start_with_env(
+        dir: &std::path::Path,
+        api: &str,
+        config: Option<&std::path::Path>,
+        height: u16,
+        env: &[(&str, &str)],
+    ) -> Self {
         let (master, slave, original) = unsafe {
             let (mut master, mut slave) = (0, 0);
             let mut size = libc::winsize {
@@ -79,6 +88,8 @@ impl Tui {
             .env("TERM", "xterm-256color")
             .env_remove("NO_COLOR")
             .env_remove("TMUX")
+            .env_remove("TERM_PROGRAM")
+            .envs(env.iter().copied())
             .stdin(slave.try_clone().unwrap())
             .stdout(slave.try_clone().unwrap())
             .stderr(slave.try_clone().unwrap())
@@ -178,6 +189,106 @@ impl Drop for Tui {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn tmux_artwork_queries_once_retries_failures_and_preserves_halfblock_fallback() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+        32,
+        32,
+        image::Rgb([210, 20, 50]),
+    ))
+    .write_to(&mut png, image::ImageFormat::Png)
+    .unwrap();
+    let server = Server::new(move |_, stream| response(stream, 200, "image/png", png.get_ref()));
+    for (support, features, failure, sixel, queries) in [
+        ("1", "RGB,sixel,clipboard", "", true, 1),
+        ("1", "sixel", "exit", true, 2),
+        ("1", "sixel", "timeout", true, 2),
+        ("0", "sixel", "", false, 1),
+        ("", "sixel", "", false, 1),
+        ("1", "RGB,clipboard", "", false, 1),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = support::config(dir.path());
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        store
+            .upsert(&Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: "Tmux artwork".into(),
+                url: "http://localhost/live".into(),
+                favicon: format!("{}/logo.png", server.url),
+                active: true,
+                ..Station::default()
+            })
+            .unwrap();
+        let path = dir.path().join("artwork.toml");
+        fs::write(&path, "artwork = 'station'\ntheme = 'default'\n").unwrap();
+        let bin = dir.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let tmux = bin.join("tmux");
+        // This fixture exercises picker() and process::output through the real
+        // PTY, without depending on an installed tmux build or attached client.
+        fs::write(
+            &tmux,
+            r#"#!/bin/sh
+printf '%s\n' "$@" >> "$RADIO_TEST_TMUX_LOG"
+if [ -n "$RADIO_TEST_TMUX_FAILURE" ] && [ ! -e "$RADIO_TEST_TMUX_LOG.failed" ]; then
+    touch "$RADIO_TEST_TMUX_LOG.failed"
+    if [ "$RADIO_TEST_TMUX_FAILURE" = timeout ]; then exec sleep 5; fi
+    exit 1
+fi
+printf '%s\n' "$RADIO_TEST_TMUX_REPORT"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = dir.path().join("tmux.log");
+        let path_env = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let report = format!("/dev/pts/7\t12\t23\t{support}\t{features}");
+        let mut tui = Tui::start_with_env(
+            dir.path(),
+            "http://127.0.0.1:1",
+            Some(&path),
+            60,
+            &[
+                ("TMUX", "/tmp/radio-test-tmux,123,0"),
+                ("TERM_PROGRAM", "tmux"),
+                ("PATH", &path_env),
+                ("RADIO_TEST_TMUX_LOG", log.to_str().unwrap()),
+                ("RADIO_TEST_TMUX_REPORT", &report),
+                ("RADIO_TEST_TMUX_FAILURE", failure),
+            ],
+        );
+        tui.wait_output(|output| {
+            let output = String::from_utf8_lossy(output);
+            assert!(!output.contains("\x1b[16t"));
+            assert!(!output.contains("\x1b[c"));
+            assert!(!output.contains("\x1b[5n"));
+            assert!(!output.contains("tmux;"));
+            if sixel {
+                output.contains("\x1bPq")
+            } else {
+                assert!(!output.contains("\x1bP"));
+                // Uniform pixels use colored spaces instead of half glyphs.
+                output.contains("2;210;20;50")
+            }
+        });
+        tui.send(":station add 'Input after tmux probe' http://localhost/new\r");
+        tui.wait(|| store.count().unwrap() == 2);
+        tui.quit();
+        let expected = [
+            "display-message",
+            "-p",
+            "#{client_name}\t#{client_cell_width}\t#{client_cell_height}\t#{sixel_support}\t#{client_termfeatures}",
+        ]
+        .join("\n")
+            + "\n";
+        assert_eq!(fs::read_to_string(&log).unwrap(), expected.repeat(queries));
     }
 }
 

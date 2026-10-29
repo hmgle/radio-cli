@@ -219,14 +219,18 @@ playback are excluded. During recording, artwork probing yields to the codec
 probe and recording connection; details fall back to the station logo or text.
 
 Terminal rendering uses Kitty, Sixel, or iTerm2 image protocols when available,
-with Unicode half blocks as the fallback. In tmux 3.4+ builds with Sixel support,
-images use native Sixel when the selected attached client supports it and reports
-its cell size in pixels; otherwise they use half blocks. `allow-passthrough` is
-not required or changed. Detection and cell size are cached until radio restarts.
+with Unicode half blocks as the fallback. Native Sixel in tmux requires a build
+reporting `sixel_support=1` (tmux 3.6+), an attached client whose
+`client_termfeatures` includes `sixel`, and a pixel cell size. Older versions and
+failed detection use half blocks. `allow-passthrough` is not required or changed.
+A failed query is retried once at startup; successful detection and cell size
+are cached until radio restarts.
 With multiple attached clients, the selected client's cell size determines image
-geometry; other clients may display a different size or a `SIXEL IMAGE` placeholder
-if they lack Sixel support. Images are centered in the space below station details
-without moving the text. Details stay text-only for the monochrome theme,
+geometry. If it differs from the cell size tmux uses for the window, artwork can
+be clipped or leave gaps. Use one attached client or matching cell sizes, and
+restart radio after switching clients or changing font size. Clients without
+Sixel support may show a placeholder instead. Images are centered below station
+details without moving the text. Details stay text-only for the monochrome theme,
 terminals smaller than 100×24, or when there is not enough room below the text.
 
 Downloads are limited to JPEG/PNG files of at most 256 KiB and are decoded with
@@ -236,6 +240,8 @@ files larger than 1 MiB are discarded before decoding.
 
 Some Sixel terminals, including xterm, may lose an image after a popup or text
 overwrites it. Closing and reopening the details usually redraws it.
+Sixel encoding pads images to whole cells and may add a narrow black edge at the
+right or bottom, including on light themes.
 
 ## Keybindings
 

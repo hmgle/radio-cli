@@ -3,9 +3,10 @@
 ## Unreleased
 
 - Render TUI artwork with native Sixel in compatible tmux sessions, using the
-  attached client's capabilities and pixel cell size without enabling
-  passthrough. Keep Unicode half blocks when detection fails or Sixel is
-  unavailable.
+  attached client's features and pixel cell size without enabling passthrough.
+  Require the server's Sixel build flag (tmux 3.6+) and retry failed queries once.
+  Keep Unicode half blocks on older tmux versions, when detection fails, or
+  when Sixel is unavailable.
 
 ## 0.9.1 — 2026-10-28
 
