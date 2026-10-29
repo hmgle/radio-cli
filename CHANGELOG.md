@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Render TUI artwork with native Sixel in compatible tmux sessions, using the
+  attached client's capabilities and pixel cell size without enabling
+  passthrough. Keep Unicode half blocks when detection fails or Sixel is
+  unavailable.
+
 ## 0.9.1 — 2026-10-28
 
 - Add the upstream SenseVoice Small preset `sensevoice-small-int8` and make it

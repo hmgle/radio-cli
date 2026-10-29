@@ -219,10 +219,15 @@ playback are excluded. During recording, artwork probing yields to the codec
 probe and recording connection; details fall back to the station logo or text.
 
 Terminal rendering uses Kitty, Sixel, or iTerm2 image protocols when available,
-with Unicode half blocks as the fallback. tmux always uses half blocks. Images
-are centered in the space below station details without moving the text. Details
-stay text-only for the monochrome theme, terminals smaller than 100×24, or when
-there is not enough room below the text.
+with Unicode half blocks as the fallback. In tmux 3.4+ builds with Sixel support,
+images use native Sixel when the selected attached client supports it and reports
+its cell size in pixels; otherwise they use half blocks. `allow-passthrough` is
+not required or changed. Detection and cell size are cached until radio restarts.
+With multiple attached clients, the selected client's cell size determines image
+geometry; other clients may display a different size or a `SIXEL IMAGE` placeholder
+if they lack Sixel support. Images are centered in the space below station details
+without moving the text. Details stay text-only for the monochrome theme,
+terminals smaller than 100×24, or when there is not enough room below the text.
 
 Downloads are limited to JPEG/PNG files of at most 256 KiB and are decoded with
 size limits. The cache lives under `artwork/` in the data directory and is pruned

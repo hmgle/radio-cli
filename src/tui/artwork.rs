@@ -1,4 +1,5 @@
 use super::{
+    capabilities::ImagePicker,
     state::{App, Focus, Source},
     worker::View,
 };
@@ -13,7 +14,9 @@ use ratatui::{
     buffer::CellDiffOption,
     layout::{Rect, Size},
 };
-use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
+use ratatui_image::protocol::Protocol;
+#[cfg(test)]
+use ratatui_image::{Resize, picker::Picker};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -156,7 +159,7 @@ pub(super) fn image<'a>(
 
 pub(super) struct Controller {
     config: Config,
-    picker: Picker,
+    picker: ImagePicker,
     desired: Option<Target>,
     task: Option<(Target, Task<Protocol>)>,
     retry: Instant,
@@ -245,7 +248,7 @@ impl Controller {
                     }
                 };
                 tokio::task::spawn_blocking(move || {
-                    Ok(picker.new_protocol(image, request.size.into(), Resize::Scale(None))?)
+                    Ok(picker.new_protocol(image, request.size.into())?)
                 })
                 .await?
             }) {
@@ -456,20 +459,21 @@ mod tests {
     fn protocol_sequences_pass_through_terminal_writer() {
         use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend};
         use ratatui_image::picker::ProtocolType;
-        for kind in [
-            ProtocolType::Kitty,
-            ProtocolType::Sixel,
-            ProtocolType::Iterm2,
+        for (kind, native_tmux) in [
+            (ProtocolType::Kitty, false),
+            (ProtocolType::Sixel, false),
+            (ProtocolType::Iterm2, false),
+            (ProtocolType::Sixel, true),
         ] {
-            let mut picker = Picker::halfblocks();
-            picker.set_protocol_type(kind);
-            let protocol = picker
-                .new_protocol(
-                    ::image::DynamicImage::new_rgb8(96, 96),
-                    SIZE.into(),
-                    Resize::Fit(None),
-                )
-                .unwrap();
+            let image = ::image::DynamicImage::new_rgb8(96, 96);
+            let protocol = if native_tmux {
+                ImagePicker::Tmux(Some((12, 23))).new_protocol(image, SIZE.into())
+            } else {
+                let mut picker = Picker::halfblocks();
+                picker.set_protocol_type(kind);
+                picker.new_protocol(image, SIZE.into(), Resize::Fit(None))
+            }
+            .unwrap();
             let expected_rows = protocol.area().height;
             let expected_columns = protocol.area().width;
             let mut bytes = Vec::new();
@@ -509,6 +513,10 @@ mod tests {
                 ProtocolType::Halfblocks => unreachable!(),
             };
             assert!(text.contains(marker), "missing {kind:?} output");
+            if native_tmux {
+                assert!(!text.contains("tmux;"));
+                assert_eq!(text.matches(marker).count(), 2, "Sixel must reappear");
+            }
             if kind == ProtocolType::Kitty {
                 assert_eq!(
                     text.matches('\u{10eeee}').count(),
@@ -553,7 +561,7 @@ mod tests {
         Arc::make_mut(&mut view.rows)[0].favicon = format!("{}/old", server.url);
         let mut controller = Controller {
             config,
-            picker: Picker::halfblocks(),
+            picker: ImagePicker::Tmux(None),
             desired: None,
             task: None,
             retry: Instant::now(),
@@ -610,7 +618,7 @@ mod tests {
         config.settings.artwork = ArtworkMode::Track;
         let mut controller = Controller {
             config,
-            picker: Picker::halfblocks(),
+            picker: ImagePicker::Tmux(None),
             desired: None,
             task: None,
             retry: Instant::now(),

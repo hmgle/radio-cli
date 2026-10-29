@@ -165,8 +165,13 @@ artwork is optional, and custom stations may not have a logo. Track artwork also
 requires a nonempty current title and a usable ICY `StreamUrl` image URL.
 
 Images are hidden for the monochrome theme, terminals smaller than 100×24, or
-when the details panel has insufficient space below its text. tmux always uses
-Unicode half blocks. Some Sixel terminals, including xterm, lose an image after a
+when the details panel has insufficient space below its text. In tmux, native
+images require a tmux 3.4+ build with Sixel support, a Sixel-capable attached
+client, and a reported pixel cell size. Detection failures fall back to Unicode
+half blocks; restart radio after changing clients or terminal capabilities.
+`allow-passthrough` can remain off. On tmux versions exposing it,
+`tmux display-message -p '#{sixel_support}'` must report `1`; client support alone
+is insufficient. Some Sixel terminals, including xterm, lose an image after a
 popup or text overwrites it; close and reopen details to redraw it.
 
 See [Artwork](configuration.md#artwork) for cache and protocol details.

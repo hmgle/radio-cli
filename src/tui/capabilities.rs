@@ -1,14 +1,22 @@
 //! Query once before event polling. Older image pickers leave a detached stdin
 //! reader behind on timeout, so own the deadline and the only read here.
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use ratatui_image::picker::{
-    Picker, ProtocolType,
-    cap_parser::{Parser, QueryStdioOptions, Response},
+use ratatui::layout::Rect;
+use ratatui_image::{
+    FontSize, Resize, ResizeEncodeRender,
+    picker::{
+        Picker, ProtocolType,
+        cap_parser::{Parser, QueryStdioOptions, Response},
+    },
+    protocol::{ImageSource, Protocol, StatefulProtocol, StatefulProtocolType},
 };
 use std::{
     collections::VecDeque,
+    ffi::OsString,
     io::{self, Write},
     os::fd::AsRawFd,
+    process::Command,
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -16,20 +24,127 @@ use std::{
 // terminals. DSR ends the wait early; user keys are queued throughout probing.
 const QUERY_TIMEOUT: Duration = Duration::from_millis(200);
 
-pub(super) fn picker(pending: &mut VecDeque<Event>) -> Picker {
-    if std::env::var_os("TMUX").is_some() {
-        return Picker::halfblocks();
+#[derive(Clone)]
+pub(super) enum ImagePicker {
+    Terminal(Picker),
+    // None retains half blocks without invoking Picker's tmux detection:
+    // even Picker::halfblocks() enables allow-passthrough in version 10.0.1.
+    Tmux(Option<FontSize>),
+}
+
+impl ImagePicker {
+    pub(super) fn new_protocol(
+        &self,
+        image: image::DynamicImage,
+        size: Rect,
+    ) -> Result<Protocol, ratatui_image::errors::Errors> {
+        let resize = Resize::Scale(None);
+        let font = match self {
+            Self::Terminal(picker) => return picker.new_protocol(image, size, resize),
+            Self::Tmux(font) => font,
+        };
+        let font_size = font.unwrap_or((10, 20));
+        let source = ImageSource::new(image, font_size, image::Rgba([0, 0, 0, 0]));
+        let area = resize.render_area(&source, font_size, size);
+        let kind = if font.is_some() {
+            // The default Sixel backend has is_tmux=false: tmux parses raw
+            // Sixel itself, including when allow-passthrough is off.
+            StatefulProtocolType::Sixel(Default::default())
+        } else {
+            StatefulProtocolType::Halfblocks(Default::default())
+        };
+        let mut state = StatefulProtocol::new(source, font_size, kind);
+        state.resize_encode(&resize, area);
+        if let Some(result) = state.last_encoding_result() {
+            result?;
+        }
+        Ok(match state.protocol_type_owned() {
+            StatefulProtocolType::Sixel(sixel) => Protocol::Sixel(sixel),
+            StatefulProtocolType::Halfblocks(blocks) => Protocol::Halfblocks(blocks),
+            _ => unreachable!(),
+        })
+    }
+}
+
+struct TmuxCache {
+    server: OsString,
+    font: Option<FontSize>,
+}
+
+pub(super) fn picker(pending: &mut VecDeque<Event>) -> ImagePicker {
+    if let Some(server) = std::env::var_os("TMUX") {
+        static CACHE: Mutex<Option<TmuxCache>> = Mutex::new(None);
+        let mut cache = CACHE.lock().unwrap_or_else(|error| error.into_inner());
+        if cache.as_ref().is_none_or(|entry| entry.server != server) {
+            let font = tmux_font(|args| {
+                let bytes = crate::process::output(
+                    Command::new("tmux").args(args),
+                    Duration::from_millis(500),
+                    &Arc::new(AtomicBool::new(false)),
+                )
+                .ok()?;
+                String::from_utf8(bytes).ok()
+            });
+            *cache = Some(TmuxCache { server, font });
+        }
+        return ImagePicker::Tmux(cache.as_ref().unwrap().font);
     }
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
     let iterm = iterm2(&program, &std::env::var("LC_TERMINAL").unwrap_or_default());
-    query(
-        &mut io::stdin().lock(),
-        &mut io::stdout().lock(),
-        QUERY_TIMEOUT,
-        iterm,
-        pending,
+    ImagePicker::Terminal(
+        query(
+            &mut io::stdin().lock(),
+            &mut io::stdout().lock(),
+            QUERY_TIMEOUT,
+            iterm,
+            pending,
+        )
+        .unwrap_or_else(|_| Picker::halfblocks()),
     )
-    .unwrap_or_else(|_| Picker::halfblocks())
+}
+
+fn tmux_font(mut run: impl FnMut(&[&str]) -> Option<String>) -> Option<FontSize> {
+    // Resolve the client and its geometry together. A pane's DA1 reports tmux's
+    // capabilities, which say nothing about the terminal attached outside it.
+    let report = run(&[
+        "display-message",
+        "-p",
+        "#{client_name}\t#{client_cell_width}\t#{client_cell_height}\t#{sixel_support}\t#{version}",
+    ])?;
+    let fields: Vec<_> = report.trim_end_matches(['\r', '\n']).split('\t').collect();
+    let [client, width, height, support, version] = fields.as_slice() else {
+        return None;
+    };
+    if client.is_empty() || !tmux_server_sixel(support, version) {
+        return None;
+    }
+    let font = (width.parse().ok()?, height.parse().ok()?);
+    if !(1..=128).contains(&font.0) || !(1..=256).contains(&font.1) {
+        return None;
+    }
+    let capabilities = run(&["show-messages", "-T", "-t", client])?;
+    capabilities
+        .lines()
+        .any(|line| {
+            line.trim().split_once(": ").is_some_and(|(index, value)| {
+                !index.is_empty()
+                    && index.bytes().all(|byte| byte.is_ascii_digit())
+                    && value == "Sxl: (flag) true"
+            })
+        })
+        .then_some(font)
+}
+
+fn tmux_server_sixel(support: &str, version: &str) -> bool {
+    match support {
+        "1" => true,
+        // tmux 3.4/3.5 predate sixel_support. Their build flag cannot be
+        // checked through this format; require a release with native Sixel.
+        "" => version.split_once('.').is_some_and(|(major, minor)| {
+            major == "3" && matches!(minor.trim_end_matches(char::is_alphabetic), "4" | "5")
+        }),
+        _ => false,
+    }
 }
 
 fn query(
@@ -318,6 +433,96 @@ fn replay(bytes: &[u8], pending: &mut VecDeque<Event>) {
 mod tests {
     use super::*;
     use std::{io::Read, os::unix::net::UnixStream};
+
+    #[test]
+    fn tmux_uses_the_selected_clients_sixel_capability_and_cell_size() {
+        for (support, version) in [("1", "3.7b"), ("", "3.4"), ("", "3.5a")] {
+            let mut calls = 0;
+            let font = tmux_font(|args| {
+                calls += 1;
+                match args {
+                    ["display-message", "-p", format] => {
+                        assert!(format.contains("#{client_name}\t#{client_cell_width}"));
+                        Some(format!("/dev/pts/7\t12\t23\t{support}\t{version}\n"))
+                    }
+                    ["show-messages", "-T", "-t", "/dev/pts/7"] => {
+                        Some("Terminal 0: xterm-256color:\n 228: Sxl: (flag) true\n".into())
+                    }
+                    _ => panic!("unexpected tmux command: {args:?}"),
+                }
+            });
+            assert_eq!(font, Some((12, 23)));
+            assert_eq!(calls, 2);
+        }
+    }
+
+    #[test]
+    fn tmux_falls_back_for_missing_clients_build_support_or_invalid_geometry() {
+        for report in [
+            "",
+            "\t12\t23\t1\t3.7b\n",
+            "/dev/pts/7\t12\t23\t0\tnext-3.9\n",
+            "/dev/pts/7\t12\t23\t\t3.3a\n",
+            "/dev/pts/7\t12\t23\t\t3.7b\n",
+            "/dev/pts/7\t0\t23\t1\t3.7b\n",
+            "/dev/pts/7\t12\t0\t1\t3.7b\n",
+            "/dev/pts/7\t-1\t23\t1\t3.7b\n",
+            "/dev/pts/7\t129\t23\t1\t3.7b\n",
+            "/dev/pts/7\t12\t257\t1\t3.7b\n",
+            "/dev/pts/7\tunknown\t23\t1\t3.7b\n",
+        ] {
+            assert_eq!(tmux_font(|_| Some(report.into())), None, "{report:?}");
+        }
+        assert_eq!(tmux_font(|_| None), None);
+    }
+
+    #[test]
+    fn tmux_requires_an_exact_positive_sixel_flag_from_the_selected_client() {
+        for capabilities in [
+            None,
+            Some(""),
+            Some(" 228: Sxl: (flag) false\n"),
+            Some(" 228: Sxl: [missing]\n"),
+            Some(" 228: Sxl: (flag) true extra\n"),
+            Some(" Sxl: (flag) true\n"),
+            Some(" 228: Other: (flag) true\n"),
+        ] {
+            let font = tmux_font(|args| match args[0] {
+                "display-message" => Some("/dev/pts/7\t12\t23\t1\t3.7b\n".into()),
+                "show-messages" => capabilities.map(str::to_owned),
+                _ => unreachable!(),
+            });
+            assert_eq!(font, None, "{capabilities:?}");
+        }
+    }
+
+    #[test]
+    fn tmux_encodes_raw_sixel_with_client_geometry_and_halfblock_fallback() {
+        use ratatui::{buffer::Buffer, widgets::Widget};
+        let size = Rect::new(0, 0, 12, 6);
+        for font in [(12, 23), (20, 40)] {
+            let protocol = ImagePicker::Tmux(Some(font))
+                .new_protocol(image::DynamicImage::new_rgb8(96, 48), size)
+                .unwrap();
+            let Protocol::Sixel(sixel) = &protocol else {
+                panic!("expected Sixel");
+            };
+            assert!(!sixel.is_tmux);
+            assert!(sixel.data.starts_with("\x1bP"));
+            assert!(sixel.data.ends_with("\x1b\\"));
+            assert!(!sixel.data.contains("tmux;"));
+            assert_eq!(sixel.area.width, 12);
+            assert_eq!(sixel.area.height, if font.0 == 12 { 4 } else { 3 });
+            let mut buffer = Buffer::empty(size);
+            ratatui_image::Image::new(&protocol).render(size, &mut buffer);
+            assert_eq!(buffer[(0, 0)].symbol(), sixel.data);
+        }
+        let protocol = ImagePicker::Tmux(None)
+            .new_protocol(image::DynamicImage::new_rgb8(96, 96), size)
+            .unwrap();
+        assert!(matches!(protocol, Protocol::Halfblocks(_)));
+        assert_eq!(protocol.area(), size);
+    }
 
     #[test]
     fn silent_terminal_times_out_without_retaining_an_input_reader() {
