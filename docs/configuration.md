@@ -223,8 +223,8 @@ with Unicode half blocks as the fallback. Native Sixel in tmux requires a build
 reporting `sixel_support=1` (tmux 3.6+), an attached client whose
 `client_termfeatures` includes `sixel`, and a pixel cell size. Older versions and
 failed detection use half blocks. `allow-passthrough` is not required or changed.
-Detection runs once at startup, with one retry for a failed query. The detected
-capabilities and cell size are reused until radio restarts.
+Detection runs once at startup, with one retry for a failed query. The result is
+fixed until radio restarts.
 With multiple attached clients, the selected client's cell size determines image
 geometry. If it differs from the cell size tmux uses for the window, artwork can
 be clipped or leave gaps. Use one attached client or matching cell sizes, and

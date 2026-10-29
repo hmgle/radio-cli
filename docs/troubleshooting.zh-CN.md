@@ -149,8 +149,9 @@ tmux 原生图片要求 tmux 3.6+ 构建报告 `sixel_support=1`、已连接客�
 如果服务器报告 `1`，但客户端能力中没有 `sixel`，请先确认外层终端支持 Sixel，
 再为该终端运行 `tmux set -ga terminal-features '*:sixel'`，随后 detach 并重新 attach
 客户端，再重启 radio。`*` 规则覆盖所有终端类型；如果还会连接不支持 Sixel 的终端，
-请将它替换为外层终端的 `$TERM`（在 tmux 外查看）。如需持久生效，去掉命令开头的
-`tmux`，将配置行加入 `~/.tmux.conf`。
+请将它替换为外层终端的 `$TERM` 或合适的通配模式（如 `xterm*`；在 tmux 外查看 `$TERM`），
+并确保匹配的终端都支持 Sixel。如需持久生效，去掉命令开头的 `tmux`，
+将配置行加入 `~/.tmux.conf`。
 即使 terminfo 已声明 `Sxl`，radio 仍要求客户端具有 `sixel` feature；
 缺少该 feature 时会保守地回退半块。
 

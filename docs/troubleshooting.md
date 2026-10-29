@@ -177,10 +177,11 @@ If the server reports `1` but the client features omit `sixel`, first confirm
 that the outer terminal supports Sixel. For that terminal, run
 `tmux set -ga terminal-features '*:sixel'`, then detach and reattach the client
 and restart radio. The `*` rule covers all terminal types; replace it with the
-outer terminal's `$TERM` (as reported outside tmux) if other terminals lack
-Sixel support. To persist the rule, add it to `~/.tmux.conf` without the leading
-`tmux`. Radio requires the `sixel` feature even if terminfo already declares `Sxl`;
-without the feature it conservatively uses half blocks.
+outer terminal's `$TERM` or a suitable pattern such as `xterm*` (check `$TERM`
+outside tmux). Only match terminals that support Sixel. To persist the rule,
+add it to `~/.tmux.conf` without the leading `tmux`. Radio requires the `sixel`
+feature even if terminfo already declares `Sxl`; without the feature it
+conservatively uses half blocks.
 
 Multiple attached clients with different pixel cell sizes can cause clipping;
 use matching sizes or one client. Some Sixel terminals, including xterm, lose an
