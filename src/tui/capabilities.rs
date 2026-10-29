@@ -12,11 +12,10 @@ use ratatui_image::{
 };
 use std::{
     collections::VecDeque,
-    ffi::OsString,
     io::{self, Write},
     os::fd::AsRawFd,
     process::Command,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -66,16 +65,9 @@ impl ImagePicker {
     }
 }
 
-struct TmuxCache {
-    server: OsString,
-    font: FontSize,
-}
-
 pub(super) fn picker(pending: &mut VecDeque<Event>) -> ImagePicker {
-    if let Some(server) = std::env::var_os("TMUX") {
-        static CACHE: Mutex<Option<TmuxCache>> = Mutex::new(None);
-        let mut cache = CACHE.lock().unwrap_or_else(|error| error.into_inner());
-        let font = cached_tmux_font(&mut cache, server, || {
+    if std::env::var_os("TMUX").is_some() {
+        let query = || {
             let mut command = Command::new("tmux");
             command.args([
                 "display-message",
@@ -92,7 +84,10 @@ pub(super) fn picker(pending: &mut VecDeque<Event>) -> ImagePicker {
             )
             .ok()?;
             String::from_utf8(bytes).ok()
-        });
+        };
+        // picker() runs only at startup. Retry one failed command, but accept
+        // a valid negative capability report without retrying.
+        let font = query().or_else(query).and_then(|report| tmux_font(&report));
         return ImagePicker::Tmux(font);
     }
     let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
@@ -107,22 +102,6 @@ pub(super) fn picker(pending: &mut VecDeque<Event>) -> ImagePicker {
         )
         .unwrap_or_else(|_| Picker::halfblocks()),
     )
-}
-
-fn cached_tmux_font(
-    cache: &mut Option<TmuxCache>,
-    server: OsString,
-    mut query: impl FnMut() -> Option<String>,
-) -> Option<FontSize> {
-    if let Some(entry) = cache.as_ref().filter(|entry| entry.server == server) {
-        return Some(entry.font);
-    }
-    // picker() runs only at startup, so retry one failed command here. A valid
-    // negative capability report needs no retry. Never cache a failed probe.
-    let report = query().or_else(query)?;
-    let font = tmux_font(&report)?;
-    *cache = Some(TmuxCache { server, font });
-    Some(font)
 }
 
 fn tmux_font(report: &str) -> Option<FontSize> {
@@ -458,61 +437,6 @@ mod tests {
         ] {
             assert_eq!(tmux_font(report), None, "{report:?}");
         }
-    }
-
-    #[test]
-    fn tmux_retries_a_failed_query_once_and_caches_only_success_for_the_same_server() {
-        let server = OsString::from("/tmp/tmux-1000/default,123,0");
-        let report = "/dev/pts/7\t12\t23\t1\tsixel\n";
-        let mut cache = None;
-        let mut calls = 0;
-        let font = cached_tmux_font(&mut cache, server.clone(), || {
-            calls += 1;
-            (calls == 2).then(|| report.into())
-        });
-        assert_eq!(font, Some((12, 23)));
-        assert_eq!(calls, 2);
-        assert_eq!(
-            cached_tmux_font(&mut cache, server, || panic!("must use cached result")),
-            font
-        );
-        let other = OsString::from("/tmp/tmux-1000/default,123,1");
-        assert_eq!(cached_tmux_font(&mut cache, other.clone(), || None), None);
-        assert_eq!(
-            cached_tmux_font(&mut cache, other, || Some(report.into())),
-            font
-        );
-    }
-
-    #[test]
-    fn tmux_does_not_retry_or_cache_negative_capability_reports() {
-        let mut cache = None;
-        let server = OsString::from("tmux-server");
-        let mut calls = 0;
-        assert_eq!(
-            cached_tmux_font(&mut cache, server.clone(), || {
-                calls += 1;
-                Some("/dev/pts/7\t12\t23\t0\tsixel\n".into())
-            }),
-            None
-        );
-        assert_eq!(calls, 1);
-        assert!(cache.is_none());
-        assert_eq!(
-            cached_tmux_font(&mut cache, server.clone(), || {
-                calls += 1;
-                None
-            }),
-            None
-        );
-        assert_eq!(calls, 3);
-        assert!(cache.is_none());
-        assert_eq!(
-            cached_tmux_font(&mut cache, server, || {
-                Some("/dev/pts/7\t12\t23\t1\tsixel\n".into())
-            }),
-            Some((12, 23))
-        );
     }
 
     #[test]
