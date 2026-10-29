@@ -79,14 +79,15 @@ pub(super) fn picker(pending: &mut VecDeque<Event>) -> ImagePicker {
             ]);
             let bytes = crate::process::output(
                 &mut command,
-                Duration::from_millis(500),
+                Duration::from_millis(250),
                 &Arc::new(AtomicBool::new(false)),
             )
             .ok()?;
             String::from_utf8(bytes).ok()
         };
         // picker() runs only at startup. Retry one failed command, but accept
-        // a valid negative capability report without retrying.
+        // a valid negative capability report without retrying. The two attempts
+        // have a combined 500 ms timeout budget.
         let font = query().or_else(query).and_then(|report| tmux_font(&report));
         return ImagePicker::Tmux(font);
     }

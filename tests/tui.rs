@@ -209,6 +209,7 @@ fn tmux_artwork_queries_once_retries_failures_and_preserves_halfblock_fallback()
         ("1", "RGB,sixel,clipboard", "", true, 1),
         ("1", "sixel", "exit", true, 2),
         ("1", "sixel", "timeout", true, 2),
+        ("1", "sixel", "slow", false, 2),
         ("0", "sixel", "", false, 1),
         ("", "sixel", "", false, 1),
         ("1", "RGB,clipboard", "", false, 1),
@@ -237,6 +238,8 @@ fn tmux_artwork_queries_once_retries_failures_and_preserves_halfblock_fallback()
             &tmux,
             r#"#!/bin/sh
 printf '%s\n' "$@" >> "$RADIO_TEST_TMUX_LOG"
+# A 400 ms command must time out on both attempts under the 250 ms limit.
+if [ "$RADIO_TEST_TMUX_FAILURE" = slow ]; then exec sleep 0.4; fi
 if [ -n "$RADIO_TEST_TMUX_FAILURE" ] && [ ! -e "$RADIO_TEST_TMUX_LOG.failed" ]; then
     touch "$RADIO_TEST_TMUX_LOG.failed"
     if [ "$RADIO_TEST_TMUX_FAILURE" = timeout ]; then exec sleep 5; fi
@@ -257,6 +260,7 @@ printf '%s\n' "$RADIO_TEST_TMUX_REPORT"
             60,
             &[
                 ("TMUX", "/tmp/radio-test-tmux,123,0"),
+                // Catch Picker::halfblocks() regressions that enable tmux passthrough.
                 ("TERM_PROGRAM", "tmux"),
                 ("PATH", &path_env),
                 ("RADIO_TEST_TMUX_LOG", log.to_str().unwrap()),
