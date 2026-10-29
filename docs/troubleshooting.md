@@ -172,6 +172,16 @@ Older tmux versions and detection failures fall back to Unicode
 half blocks; restart radio after changing clients or terminal capabilities.
 `allow-passthrough` can remain off. Check both server and client with
 `tmux display-message -p '#{sixel_support} #{client_termfeatures}'`.
+
+If the server reports `1` but the client features omit `sixel`, first confirm
+that the outer terminal supports Sixel. For that terminal, run
+`tmux set -ga terminal-features '*:sixel'`, then detach and reattach the client
+and restart radio. The `*` rule covers all terminal types; replace it with the
+outer terminal's `$TERM` (as reported outside tmux) if other terminals lack
+Sixel support. To persist the rule, add it to `~/.tmux.conf` without the leading
+`tmux`. Radio requires the `sixel` feature even if terminfo already declares `Sxl`;
+without the feature it conservatively uses half blocks.
+
 Multiple attached clients with different pixel cell sizes can cause clipping;
 use matching sizes or one client. Some Sixel terminals, including xterm, lose an
 image after a popup or text overwrites it; close and reopen details to redraw it.

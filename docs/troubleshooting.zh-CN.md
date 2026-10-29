@@ -145,6 +145,15 @@ tmux 原生图片要求 tmux 3.6+ 构建报告 `sixel_support=1`、已连接客�
 旧版本或探测失败时回退 Unicode 半块；更换客户端或终端能力后请重启 radio。
 `allow-passthrough` 可以保持关闭。运行
 `tmux display-message -p '#{sixel_support} #{client_termfeatures}'` 可同时检查服务器和客户端。
+
+如果服务器报告 `1`，但客户端能力中没有 `sixel`，请先确认外层终端支持 Sixel，
+再为该终端运行 `tmux set -ga terminal-features '*:sixel'`，随后 detach 并重新 attach
+客户端，再重启 radio。`*` 规则覆盖所有终端类型；如果还会连接不支持 Sixel 的终端，
+请将它替换为外层终端的 `$TERM`（在 tmux 外查看）。如需持久生效，去掉命令开头的
+`tmux`，将配置行加入 `~/.tmux.conf`。
+即使 terminfo 已声明 `Sxl`，radio 仍要求客户端具有 `sixel` feature；
+缺少该 feature 时会保守地回退半块。
+
 多个客户端的单元格像素尺寸不同时可能导致裁剪；请统一尺寸或只连接一个客户端。
 部分 Sixel 终端（包括 xterm）的图片被弹窗或文字覆盖后
 可能消失；关闭并重新打开详情可重绘。

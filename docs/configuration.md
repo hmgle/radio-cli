@@ -229,8 +229,9 @@ With multiple attached clients, the selected client's cell size determines image
 geometry. If it differs from the cell size tmux uses for the window, artwork can
 be clipped or leave gaps. Use one attached client or matching cell sizes, and
 restart radio after switching clients or changing font size. Clients without
-Sixel support may show a placeholder instead. Images are centered below station
-details without moving the text. Details stay text-only for the monochrome theme,
+Sixel support may show a `SIXEL IMAGE` text placeholder or shade characters,
+depending on the tmux version. Images are centered below station details without
+moving the text. Details stay text-only for the monochrome theme,
 terminals smaller than 100×24, or when there is not enough room below the text.
 
 Downloads are limited to JPEG/PNG files of at most 256 KiB and are decoded with
