@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.2 — 2026-10-29
 
 - Render TUI artwork with native Sixel in compatible tmux sessions, using the
   attached client's features and pixel cell size without enabling passthrough.
