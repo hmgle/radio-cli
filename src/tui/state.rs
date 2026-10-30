@@ -2195,6 +2195,9 @@ impl App {
         if self.too_small {
             return false;
         }
+        // Keep Explore warm while details, tasks or a narrow results layout
+        // hides the map. Reuse its last grid size until draw can resize it;
+        // the submitted key below prevents repeated reads of unchanged data.
         let mut changed = false;
         if !self.map.initialized {
             if let Some((x, y)) = view
