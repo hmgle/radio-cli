@@ -153,8 +153,10 @@ Create `/tmp/radio-map` before requesting a persistent fixture. Use an isolated
 data directory: resource sampling writes session preferences. The geography
 fixture uses 200,000 local stations, including dense city coordinates and points
 near the date line. The resource sampler requires Linux `/proc`; SQL and raster
-benchmarks also run on macOS. Compare results on an idle machine. The map source,
-checksum, and binary format are recorded in `src/tui/map/SOURCE.txt`; regenerate
+benchmarks also run on macOS. Compare results on an idle machine. Avoid concurrent
+builds and unnecessary fixture copies on tmpfs: CPU or memory contention can
+distort timings and exceed the sampler's 10-second map-load timeout. The map
+source, checksum, and binary format are recorded in `src/tui/map/SOURCE.txt`; regenerate
 with `uv run scripts/generate-map.py` when deliberately updating the land data.
 
 ## Commits
