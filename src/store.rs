@@ -229,6 +229,7 @@ impl Store {
                 .join(",")
         };
         let languages = normalize(&format!("{},{}", s.language, s.languagecodes));
+        let coordinates = crate::geo::coordinates(s.geo_lat, s.geo_long);
         conn.prepare_cached(&sql)?.execute(params![
             s.stationuuid,
             s.name,
@@ -242,8 +243,8 @@ impl Store {
             s.active,
             serde_json::to_string(s)?,
             crate::service::normalized_url(s.primary_url()).ok(),
-            crate::geo::coordinates(s.geo_lat, s.geo_long).map(|p| p.0),
-            crate::geo::coordinates(s.geo_lat, s.geo_long).map(|p| p.1)
+            coordinates.map(|p| p.0),
+            coordinates.map(|p| p.1)
         ])?;
         if maintain_facets {
             facets::update(
