@@ -157,9 +157,9 @@ The map preserves its fine Braille dot pattern, with up to eight small dots
 in each terminal cell. Station density colors the existing dots while retaining
 the coastline shape. Gray marks land; blue, teal, amber, and red indicate 1–9,
 10–49, 50–199, and 200+ stations per cell, as shown in the legend. Stations in
-empty sea cells use a single Braille dot. The cursor reverses the selected cell
-without replacing its dot pattern. Monochrome mode underlines station cells and
-keeps the selected-cell count without colors.
+empty sea cells use a single Braille dot. The selected cell uses a large circle
+(`●`) while retaining its density color. Monochrome mode underlines station
+cells and keeps the selected-cell count without colors.
 
 Search and filters apply to the map and results. Press `c` to browse stations
 without coordinates by country/region, then `Esc` to return to the map. Run

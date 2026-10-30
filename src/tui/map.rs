@@ -349,23 +349,22 @@ pub(super) fn draw(
                 let i = y * width as usize + x;
                 let selected = cursor == Some((x, y));
                 let count = image.counts[i];
-                // Color the original 2x4 Braille mask without collapsing its
-                // subpixels. Only empty sea cells need a synthetic single dot.
-                let symbol = if image.land[i] == ' ' && (selected || count > 0) {
+                // Highlight only the selected cell with a large circle; other
+                // cells retain their original 2x4 Braille mask and density color.
+                let symbol = if selected {
+                    '●'
+                } else if image.land[i] == ' ' && count > 0 {
                     '⠐'
                 } else {
                     image.land[i]
                 };
-                let mut marker_style = if count > 0 {
+                let marker_style = if count > 0 {
                     densities[density_band(count)]
                 } else if selected {
                     style(theme, Role::Focus)
                 } else {
                     land_style
                 };
-                if selected {
-                    marker_style = marker_style.add_modifier(Modifier::REVERSED);
-                }
                 let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y + y as u16)];
                 cell.set_char(symbol).set_style(marker_style);
             }
@@ -456,16 +455,18 @@ mod tests {
             assert_eq!(buffer[(state.area.x + 11, state.area.y)].symbol(), " ");
             let marker = |column: u16| &buffer[(state.area.x + column, state.area.y)];
             for column in 0..8 {
-                assert_eq!(marker(column).symbol(), shapes[column as usize].to_string());
+                let expected = if column == 4 {
+                    '●'
+                } else {
+                    shapes[column as usize]
+                };
+                assert_eq!(marker(column).symbol(), expected.to_string());
                 assert!(!marker(column).modifier.contains(Modifier::BOLD));
                 assert_eq!(
                     marker(column).modifier.contains(Modifier::UNDERLINED),
                     theme == Theme::Mono
                 );
-                assert_eq!(
-                    marker(column).modifier.contains(Modifier::REVERSED),
-                    column == 4
-                );
+                assert!(!marker(column).modifier.contains(Modifier::REVERSED));
             }
             assert_eq!(marker(8).symbol(), "⡇");
             if theme != Theme::Mono {
@@ -494,16 +495,20 @@ mod tests {
             for label in DENSITY_LABELS {
                 assert!(legend.contains(label));
             }
-            // Selection keeps a land cell's complete mask; an empty sea cell
-            // gets a single Braille subpixel without a fictitious density.
+            // Moving selection restores the old mask and marks even an empty
+            // sea cell with a large circle, without a fictitious density.
             let empty = state.bounds.cell(10, 0, columns, rows);
             state.cursor = (empty.x + empty.width / 2, empty.y + empty.height / 2);
             terminal
                 .draw(|frame| draw(frame, &mut state, Some(&image), None, rect, true, theme))
                 .unwrap();
             let cell = &terminal.backend().buffer()[(state.area.x + 10, state.area.y)];
-            assert_eq!(cell.symbol(), "⠐");
-            assert!(cell.modifier.contains(Modifier::REVERSED));
+            assert_eq!(cell.symbol(), "●");
+            assert!(!cell.modifier.contains(Modifier::REVERSED));
+            assert_eq!(
+                terminal.backend().buffer()[(state.area.x + 4, state.area.y)].symbol(),
+                "⣀"
+            );
         }
     }
 

@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Preserve the fine Braille map dots when coloring Explore station density.
+- Preserve the fine Braille map dots when coloring Explore station density,
+  and mark the selected cell with a large circle.
 
 - Add offline world-map exploration with clickable station cells, up to 8× zoom,
   and country browsing for stations without coordinates.
