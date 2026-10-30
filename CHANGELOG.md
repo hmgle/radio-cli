@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use small dots with a density color legend for Explore station markers.
+
 - Add offline world-map exploration with clickable station cells, up to 8× zoom,
   and country browsing for stations without coordinates.
 

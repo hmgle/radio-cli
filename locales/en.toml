@@ -469,3 +469,5 @@ explore_empty = "No stations in this cell. Move or zoom the map; press c to brow
 context_map = "hjkl/arrows move · z/Z zoom · 0 world · Enter list · c without coordinates"
 
 explore_missing = "Stations without coordinates"
+
+explore_density = "Stations/cell"

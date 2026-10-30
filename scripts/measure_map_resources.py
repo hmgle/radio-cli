@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import struct
 import subprocess
@@ -88,7 +89,12 @@ def main():
             started = time.monotonic()
             os.write(master, b':explore\r')
             deadline = started + 10
-            while not any(0x2801 <= ord(char) <= 0x28ff for char in output.decode(errors='replace')):
+            while True:
+                # Terminal diff rendering can split the status at cursor moves.
+                # Observe the loaded count instead of a particular map glyph.
+                visible = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', bytes(output))
+                if re.search(rb'\d+\s*stations\s*in\s*cell', visible):
+                    break
                 if process.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError('Map did not load: ' + output.decode(errors='replace'))
                 time.sleep(0.01)

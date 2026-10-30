@@ -468,3 +468,5 @@ explore_empty = "此网格内没有电台。移动或缩放地图，或按 c 按
 context_map = "hjkl/方向键移动 · z/Z 缩放 · 0 全球 · Enter 列表 · c 无坐标电台"
 
 explore_missing = "无坐标电台"
+
+explore_density = "每格电台数"

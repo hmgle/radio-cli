@@ -6,10 +6,11 @@ use crate::{
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
 };
 use std::{sync::Arc, time::Instant};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Request {
@@ -190,6 +191,84 @@ pub(super) fn raster(bounds: GeoBounds, columns: usize, rows: usize) -> Vec<char
         .collect()
 }
 
+// Fixed count bands keep a color's meaning stable across pans and filters;
+// a busy city must not wash out every other marker through max normalization.
+const DENSITY_LABELS: [&str; 4] = ["1–9", "10–49", "50–199", "200+"];
+
+fn density_band(count: u32) -> usize {
+    match count {
+        0..=9 => 0,
+        10..=49 => 1,
+        50..=199 => 2,
+        _ => 3,
+    }
+}
+
+fn density_styles(theme: crate::config::Theme) -> [Style; 4] {
+    use crate::config::Theme;
+    // Blue -> teal -> amber -> red. Darker counterparts remain legible on
+    // the light theme's white background; Mono preserves NO_COLOR behavior.
+    let colors = match theme {
+        Theme::Default => [
+            Color::Indexed(75),
+            Color::Indexed(80),
+            Color::Indexed(215),
+            Color::Indexed(203),
+        ],
+        Theme::Light => [
+            Color::Indexed(25),
+            Color::Indexed(30),
+            Color::Indexed(130),
+            Color::Indexed(160),
+        ],
+        Theme::Mono => [Color::Reset; 4],
+    };
+    colors.map(|color| {
+        let style = Style::default().fg(color);
+        if theme == Theme::Mono {
+            style.add_modifier(Modifier::UNDERLINED)
+        } else {
+            style
+        }
+    })
+}
+
+fn draw_density_legend(
+    frame: &mut Frame,
+    area: Rect,
+    styles: [Style; 4],
+    theme: crate::config::Theme,
+) {
+    use super::styles::{Role, style};
+    let label = crate::t!("explore_density");
+    let keys_width: usize = DENSITY_LABELS
+        .iter()
+        .map(|label| label.width() + 4)
+        .sum::<usize>()
+        - 2;
+    let mut x = area.x;
+    let buffer = frame.buffer_mut();
+    if label.width() + 2 + keys_width <= usize::from(area.width) {
+        buffer.set_string(x, area.y, label, style(theme, Role::Muted));
+        x += label.width() as u16 + 2;
+    }
+    for (label, style) in DENSITY_LABELS.into_iter().zip(styles) {
+        // Never paint a partial key that could misidentify its color band.
+        let width = label.width() as u16 + 2;
+        if x + width > area.right() {
+            break;
+        }
+        buffer[(x, area.y)].set_char('·').set_style(style);
+        buffer.set_string(
+            x + 2,
+            area.y,
+            label,
+            super::styles::style(theme, Role::Muted),
+        );
+        x += width + 2;
+    }
+}
+
 pub(super) fn draw(
     frame: &mut Frame,
     state: &mut State,
@@ -247,12 +326,18 @@ pub(super) fn draw(
         frame.render_widget(Paragraph::new(lines.join("\n")), inner);
         return;
     }
-    let height = (inner.height - 1).min(80).min(inner.width / 4).max(1);
+    let height = (inner.height - 2).min(80).min(inner.width / 4).max(1);
     let width = inner.width.min(height * 4).min(320);
     let area = Rect::new(inner.x + (inner.width - width) / 2, inner.y, width, height);
     state.resize(area);
     let matching = image.filter(|i| {
         i.request.bounds == state.bounds && (i.request.columns, i.request.rows) == state.size
+    });
+    let densities = density_styles(theme);
+    let land_style = Style::default().fg(match theme {
+        crate::config::Theme::Default => Color::Indexed(240),
+        crate::config::Theme::Light => Color::Indexed(246),
+        crate::config::Theme::Mono => Color::Reset,
     });
     if let Some(image) = matching {
         let cursor =
@@ -263,24 +348,33 @@ pub(super) fn draw(
             for x in 0..width as usize {
                 let i = y * width as usize + x;
                 let selected = cursor == Some((x, y));
-                let symbol = if selected {
-                    '◆'
-                } else if image.counts[i] > 0 {
-                    '●'
+                let count = image.counts[i];
+                let symbol = if selected || count > 0 || image.land[i] != ' ' {
+                    '·'
                 } else {
-                    image.land[i]
+                    ' '
                 };
-                let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y + y as u16)];
-                cell.set_char(symbol).set_style(if selected {
-                    style(theme, Role::Focus).add_modifier(Modifier::BOLD)
-                } else if image.counts[i] > 0 {
-                    style(theme, Role::Shortcut)
+                let mut marker_style = if count > 0 {
+                    densities[density_band(count)]
+                } else if selected {
+                    style(theme, Role::Focus)
                 } else {
-                    style(theme, Role::Muted)
-                });
+                    land_style
+                };
+                if selected {
+                    marker_style = marker_style.add_modifier(Modifier::REVERSED);
+                }
+                let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y + y as u16)];
+                cell.set_char(symbol).set_style(marker_style);
             }
         }
     }
+    draw_density_legend(
+        frame,
+        Rect::new(inner.x, inner.bottom() - 2, inner.width, 1),
+        densities,
+        theme,
+    );
     let cell = state.cell();
     let count = matching.and_then(|i| {
         state
@@ -311,6 +405,101 @@ pub(super) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn density_markers_keep_one_dot_size_and_legible_selection_in_every_theme() {
+        use crate::config::Theme;
+        use ratatui::{Terminal, backend::TestBackend};
+        for theme in [Theme::Default, Theme::Light, Theme::Mono] {
+            let rect = Rect::new(0, 0, 82, 24);
+            let mut terminal = Terminal::new(TestBackend::new(rect.width, rect.height)).unwrap();
+            let mut state = State::default();
+            terminal
+                .draw(|frame| draw(frame, &mut state, None, None, rect, true, theme))
+                .unwrap();
+            let (columns, rows) = state.size;
+            let mut counts = vec![0; columns * rows];
+            counts[..8].copy_from_slice(&[1, 9, 10, 49, 50, 199, 200, u32::MAX]);
+            let request = Request {
+                filter: Filter::default(),
+                bounds: state.bounds,
+                columns,
+                rows,
+            };
+            let mut land = vec!['⠿'; columns * rows];
+            land[9] = ' ';
+            let image = Arc::new(Image {
+                request,
+                land: Arc::new(land),
+                counts,
+                countries: vec![],
+            });
+            let selected = state.bounds.cell(4, 0, columns, rows);
+            state.cursor = (
+                selected.x + selected.width / 2,
+                selected.y + selected.height / 2,
+            );
+            terminal
+                .draw(|frame| {
+                    frame
+                        .buffer_mut()
+                        .set_style(rect, super::super::styles::base(theme));
+                    draw(frame, &mut state, Some(&image), None, rect, true, theme);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(state.area.x + 9, state.area.y)].symbol(), " ");
+            let marker = |column: u16| &buffer[(state.area.x + column, state.area.y)];
+            for column in 0..8 {
+                assert_eq!(marker(column).symbol(), "·");
+                assert!(!marker(column).modifier.contains(Modifier::BOLD));
+                assert_eq!(
+                    marker(column).modifier.contains(Modifier::UNDERLINED),
+                    theme == Theme::Mono
+                );
+                assert_eq!(
+                    marker(column).modifier.contains(Modifier::REVERSED),
+                    column == 4
+                );
+            }
+            assert_eq!(marker(8).symbol(), "·");
+            if theme != Theme::Mono {
+                assert_ne!(marker(8).fg, marker(0).fg);
+            }
+            for column in [0, 2, 4, 6] {
+                assert_eq!(marker(column).fg, marker(column + 1).fg);
+            }
+            if theme == Theme::Mono {
+                for cell in &buffer.content {
+                    assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
+                }
+            } else {
+                for column in [0, 2, 4] {
+                    assert_ne!(marker(column).fg, marker(column + 2).fg);
+                }
+                if theme == Theme::Light {
+                    for column in 0..8 {
+                        assert_ne!(marker(column).fg, marker(column).bg);
+                    }
+                }
+            }
+            let legend: String = (rect.x..rect.right())
+                .map(|x| buffer[(x, rect.bottom() - 3)].symbol())
+                .collect();
+            for label in DENSITY_LABELS {
+                assert!(legend.contains(label));
+            }
+            // The empty-cell cursor is also a small dot, with no fictitious density.
+            let empty = state.bounds.cell(8, 0, columns, rows);
+            state.cursor = (empty.x + empty.width / 2, empty.y + empty.height / 2);
+            terminal
+                .draw(|frame| draw(frame, &mut state, Some(&image), None, rect, true, theme))
+                .unwrap();
+            let cell = &terminal.backend().buffer()[(state.area.x + 8, state.area.y)];
+            assert_eq!(cell.symbol(), "·");
+            assert!(cell.modifier.contains(Modifier::REVERSED));
+        }
+    }
+
     #[test]
     fn offline_raster_has_land_and_ocean_in_known_locations() {
         let land = raster(GeoBounds::default(), 180, 45);
@@ -380,7 +569,7 @@ mod tests {
                 request,
             });
             let mut state = State::default();
-            let rect = Rect::new(0, 0, columns as u16 + 2, rows as u16 + 3);
+            let rect = Rect::new(0, 0, columns as u16 + 2, rows as u16 + 4);
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(rect.width, rect.height))
                     .unwrap();
