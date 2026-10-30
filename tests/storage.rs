@@ -1224,12 +1224,16 @@ fn dense_geographic_pages_match_existing_stable_sort_orders() {
         model::Sort,
     };
     let (_dir, mut store) = db();
-    let rows: Vec<_> = (0..4200)
+    let rows: Vec<_> = (0..10000)
         .map(|i| Station {
             stationuuid: uuid::Uuid::from_u128(i + 1).to_string(),
             name: format!("dense {i:04}"),
             geo_lat: Some(48.85),
             geo_long: Some(2.35),
+            countrycode: if i % 2 == 0 { "FR" } else { "CN" }.into(),
+            language: if i % 2 == 0 { "english" } else { "chinese" }.into(),
+            tags: if i % 2 == 0 { "jazz" } else { "rock" }.into(),
+            custom: i % 10 == 0,
             clickcount: (i % 100) as u64,
             bitrate: (i % 4) as u32 * 64,
             active: true,
@@ -1237,21 +1241,103 @@ fn dense_geographic_pages_match_existing_stable_sort_orders() {
         })
         .collect();
     store.bootstrap(&rows, || false).unwrap();
+    let filters = [
+        Filter::default(),
+        Filter {
+            country: Some("FR".into()),
+            ..Filter::default()
+        },
+        Filter {
+            country: Some("ZZ".into()),
+            ..Filter::default()
+        },
+        Filter {
+            language: Some("english".into()),
+            ..Filter::default()
+        },
+        Filter {
+            tag: Some("jazz".into()),
+            ..Filter::default()
+        },
+        Filter {
+            min_bitrate: 64,
+            ..Filter::default()
+        },
+        Filter {
+            query: "dense".into(),
+            ..Filter::default()
+        },
+        Filter {
+            query: "dense 0001".into(),
+            ..Filter::default()
+        },
+        Filter {
+            query: "France".into(),
+            ..Filter::default()
+        },
+        Filter {
+            custom: true,
+            ..Filter::default()
+        },
+    ];
     for sort in [Sort::Clickcount, Sort::Bitrate, Sort::Name] {
-        for offset in [0, 4100] {
-            let filter = Filter {
-                limit: 100,
-                offset,
-                sort,
-                ..Filter::default()
-            };
-            let expected = store.search(&filter).unwrap();
-            let geo = Filter {
-                geo: Some(GeoFilter::Cell(GeoBounds::default())),
-                ..filter
-            };
-            assert_eq!(store.search(&geo).unwrap(), expected);
-            assert_eq!(store.search_count(&geo).unwrap(), 4200);
+        for base in &filters {
+            for offset in [0, 4900, 9900, 20000] {
+                let filter = Filter {
+                    limit: 100,
+                    offset,
+                    sort,
+                    ..base.clone()
+                };
+                let expected = store.search(&filter).unwrap();
+                let total = store.search_count(&filter).unwrap();
+                let geo = Filter {
+                    geo: Some(GeoFilter::Cell(GeoBounds::default())),
+                    ..filter
+                };
+                assert_eq!(store.search(&geo).unwrap(), expected, "{geo:?}");
+                assert_eq!(store.search_count(&geo).unwrap(), total);
+                assert_eq!(
+                    store
+                        .geo_counts(&geo, GeoBounds::default(), 7, 3, || false)
+                        .unwrap()
+                        .iter()
+                        .sum::<u32>(),
+                    total as u32
+                );
+            }
         }
     }
+}
+
+#[test]
+fn explore_includes_active_custom_stations_but_excludes_inactive_favorites() {
+    use radio_cli::geo::{GeoBounds, GeoFilter};
+    let (_dir, store) = db();
+    let mut custom = station("custom on map");
+    custom.custom = true;
+    custom.geo_lat = Some(45.0);
+    custom.geo_long = Some(10.0);
+    store.upsert(&custom).unwrap();
+    let mut inactive = station("inactive favorite");
+    inactive.geo_lat = custom.geo_lat;
+    inactive.geo_long = custom.geo_long;
+    inactive.active = false;
+    store.upsert(&inactive).unwrap();
+    store.favorite(&inactive.stationuuid, true).unwrap();
+    let filter = Filter {
+        geo: Some(GeoFilter::Cell(GeoBounds::default())),
+        limit: 100,
+        ..Filter::default()
+    };
+    assert_eq!(store.search(&filter).unwrap(), vec![custom]);
+    assert_eq!(
+        store
+            .geo_counts(&filter, GeoBounds::default(), 7, 3, || false)
+            .unwrap()
+            .iter()
+            .sum::<u32>(),
+        1
+    );
+    assert_eq!(store.search_count(&Filter::default()).unwrap(), 2);
 }

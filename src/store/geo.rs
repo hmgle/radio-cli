@@ -1,6 +1,8 @@
 use super::*;
 use crate::geo::{GeoBounds, GeoFilter, WORLD_WIDTH};
 
+pub(super) const SORT_THRESHOLD: usize = 4096;
+
 pub(super) fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "ALTER TABLE stations ADD COLUMN geo_x INTEGER;

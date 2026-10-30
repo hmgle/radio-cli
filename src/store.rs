@@ -383,6 +383,14 @@ impl Store {
     }
 
     fn conditions(&self, filter: &Filter) -> (String, Vec<Value>, &'static str) {
+        self.conditions_with_spatial(filter, true)
+    }
+
+    fn conditions_with_spatial(
+        &self,
+        filter: &Filter,
+        spatial: bool,
+    ) -> (String, Vec<Value>, &'static str) {
         let mut clauses = vec![
             "(s.active=1 OR s.custom=1 OR EXISTS(SELECT 1 FROM favorites f WHERE f.uuid=s.uuid))"
                 .to_owned(),
@@ -405,6 +413,7 @@ impl Store {
         if filter.history {
             clauses[0] = "EXISTS(SELECT 1 FROM history h WHERE h.uuid=s.uuid)".into();
         }
+        let mut text_candidates = false;
         let query = filter.query.trim();
         if !query.is_empty() {
             // Resolve localized names at query time so existing catalogs do not
@@ -413,6 +422,7 @@ impl Store {
             let normalized = query.to_lowercase();
             source = "stations s NOT INDEXED";
             if let Some(candidate) = self.trigram_candidate(&normalized) {
+                text_candidates = true;
                 // A literal trigram narrows candidates; instr below checks
                 // the complete query without decoding positional postings.
                 let mut candidates =
@@ -425,12 +435,17 @@ impl Store {
                     ));
                     args.extend(codes.iter().map(|code| Value::from((*code).to_owned())));
                 }
-                clauses.push(if codes.is_empty() {
-                    source = "station_search CROSS JOIN stations s ON s.rowid=station_search.rowid";
-                    "station_search MATCH ?".to_owned()
-                } else {
-                    format!("s.rowid IN ({candidates})")
-                });
+                clauses.push(
+                    if codes.is_empty()
+                        && !matches!(filter.geo, Some(crate::geo::GeoFilter::Cell(_)))
+                    {
+                        source =
+                            "station_search CROSS JOIN stations s ON s.rowid=station_search.rowid";
+                        "station_search MATCH ?".to_owned()
+                    } else {
+                        format!("s.rowid IN ({candidates})")
+                    },
+                );
             }
             if codes.is_empty() {
                 clauses.push("instr(s.search,?)>0".into());
@@ -464,12 +479,32 @@ impl Store {
             clauses[0] = "s.active=1".into();
             match geo {
                 crate::geo::GeoFilter::Missing => clauses.push("s.geo_x IS NULL".into()),
-                crate::geo::GeoFilter::Cell(bounds) => {
+                crate::geo::GeoFilter::Cell(bounds) if spatial => {
                     clauses.push(geo::predicate(bounds, &mut args));
-                    if filter.query.trim().is_empty() {
+                    // A full longitude scan through a non-covering spatial
+                    // index turns filtered world maps into random table reads.
+                    if (!text_candidates && bounds.width < crate::geo::WORLD_WIDTH)
+                        || geo::plain(filter)
+                    {
                         source = "stations s INDEXED BY station_geo";
                     }
+                    if filter.query.trim().is_empty()
+                        && let Some(country) = filter.country.as_ref().filter(|c| !c.is_empty())
+                        && self
+                            .conn
+                            .prepare_cached("SELECT n FROM facets_cache WHERE kind=0 AND value=?1")
+                            .and_then(|mut stmt| {
+                                stmt.query_row([country.to_uppercase()], |r| r.get::<_, usize>(0))
+                                    .optional()
+                            })
+                            .is_ok_and(|n| n.unwrap_or(0) <= geo::SORT_THRESHOLD)
+                    {
+                        // A small country is an upper bound on any of its map
+                        // cells. This hint only chooses an index, never rows.
+                        source = "stations s INDEXED BY station_country";
+                    }
                 }
+                crate::geo::GeoFilter::Cell(_) => {}
             }
         }
         (clauses.join(" AND "), args, source)
@@ -642,13 +677,20 @@ impl Store {
     }
 
     pub fn search(&self, filter: &Filter) -> Result<Vec<Station>> {
+        // The bounded geographic probe and its page must see the same rows,
+        // including when called directly outside the TUI reader's snapshot.
+        let _snapshot = if filter.geo.is_some() && self.conn.is_autocommit() {
+            Some(self.conn.unchecked_transaction()?)
+        } else {
+            None
+        };
         let (mut conditions, mut args, mut source) = self.conditions(filter);
-        // Dense geographic cells can contain tens of thousands of co-located
-        // stations. Use the existing covering sort index against compact row
-        // candidates, avoiding random table reads for every candidate. Small
-        // cells keep the direct spatial range scan.
+        // Probe matching row IDs, not just geographic density: a city may have
+        // thousands of stations but only a few matching the user's filters.
+        // Small result sets reuse the probe; dense sets use a sort index and a
+        // compact spatial membership set to avoid sorting random table reads.
         if let Some(crate::geo::GeoFilter::Cell(bounds)) = filter.geo
-            && geo::plain(filter)
+            && !filter.history
             && let Some(index) = match filter.sort {
                 crate::model::Sort::Clickcount => Some("stations s INDEXED BY station_sort"),
                 crate::model::Sort::Name => Some("stations s INDEXED BY station_name"),
@@ -656,18 +698,50 @@ impl Store {
                 _ => None,
             }
         {
-            let mut spatial_args = vec![];
-            let spatial = geo::predicate(bounds, &mut spatial_args);
-            let candidates = format!(
-                "SELECT s.rowid FROM stations s INDEXED BY station_geo WHERE s.active=1 AND {spatial}"
+            let probe = format!(
+                "SELECT s.rowid FROM {source} WHERE {conditions} LIMIT {}",
+                geo::SORT_THRESHOLD + 1
             );
-            let n: usize = self.conn.query_row(
-                &format!("SELECT count(*) FROM ({candidates} LIMIT 4097)"),
-                params_from_iter(&spatial_args),
-                |r| r.get(0),
-            )?;
-            if n > 4096 {
-                conditions = format!("s.active=1 AND s.rowid IN ({candidates})");
+            // Unfiltered probes are covering index scans: count inside SQLite
+            // instead of copying thousands of IDs we will immediately discard.
+            let ids = if geo::plain(filter) {
+                None
+            } else {
+                Some(
+                    self.conn
+                        .prepare_cached(&probe)?
+                        .query_map(params_from_iter(&args), |r| r.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?,
+                )
+            };
+            let n = if let Some(ids) = &ids {
+                ids.len()
+            } else {
+                self.conn
+                    .prepare_cached(&format!("SELECT count(*) FROM ({probe})"))?
+                    .query_row(params_from_iter(&args), |r| r.get::<_, usize>(0))?
+            };
+            if n == 0 {
+                return Ok(vec![]);
+            }
+            if n <= geo::SORT_THRESHOLD
+                && let Some(ids) = ids
+            {
+                conditions = format!("s.rowid IN ({})", vec!["?"; ids.len()].join(","));
+                args = ids.into_iter().map(Value::Integer).collect();
+                source = "stations s";
+            } else if n > geo::SORT_THRESHOLD {
+                let mut spatial_args = vec![];
+                let spatial = geo::predicate(bounds, &mut spatial_args);
+                let candidates = format!(
+                    "SELECT s.rowid FROM stations s INDEXED BY station_geo WHERE s.active=1 AND {spatial}"
+                );
+                // Membership already checks coordinates. Keep the remaining
+                // predicates so the sort scan fetches table rows only when a
+                // non-covering filter actually needs them.
+                (conditions, args, _) = self.conditions_with_spatial(filter, false);
+                conditions = format!("s.rowid IN ({candidates}) AND {conditions}");
+                spatial_args.extend(args);
                 args = spatial_args;
                 source = index;
             }

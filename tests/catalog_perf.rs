@@ -380,7 +380,18 @@ fn geographic_catalog_benchmark() {
                     stationuuid: uuid::Uuid::from_u128(id as u128 + 1).to_string(),
                     name: format!("Geo Station {id}"),
                     url: format!("http://127.0.0.1:1/{id}"),
-                    countrycode: if id % 2 == 0 { "FR" } else { "CN" }.into(),
+                    countrycode: if id % 10000 == 0 {
+                        "ZZ"
+                    } else if id % 2 == 0 {
+                        "FR"
+                    } else {
+                        "CN"
+                    }
+                    .into(),
+                    language: if id % 2 == 0 { "english" } else { "chinese" }.into(),
+                    tags: if id % 2 == 0 { "jazz" } else { "rock" }.into(),
+                    bitrate: (id % 4) * 64,
+                    clickcount: (id % 1000) as u64,
                     geo_lat: Some(lat),
                     geo_long: Some(lon),
                     active: true,
@@ -391,6 +402,65 @@ fn geographic_catalog_benchmark() {
         store.stage(&rows).unwrap();
     }
     store.finish_sync().unwrap();
+    let filters = [
+        ("plain", Filter::default()),
+        (
+            "country",
+            Filter {
+                country: Some("FR".into()),
+                ..Filter::default()
+            },
+        ),
+        (
+            "rare country",
+            Filter {
+                country: Some("ZZ".into()),
+                ..Filter::default()
+            },
+        ),
+        (
+            "no matches",
+            Filter {
+                country: Some("XX".into()),
+                ..Filter::default()
+            },
+        ),
+        (
+            "language",
+            Filter {
+                language: Some("english".into()),
+                ..Filter::default()
+            },
+        ),
+        (
+            "tag",
+            Filter {
+                tag: Some("jazz".into()),
+                ..Filter::default()
+            },
+        ),
+        (
+            "bitrate",
+            Filter {
+                min_bitrate: 128,
+                ..Filter::default()
+            },
+        ),
+        (
+            "broad query",
+            Filter {
+                query: "Geo".into(),
+                ..Filter::default()
+            },
+        ),
+        (
+            "rare query",
+            Filter {
+                query: "Geo Station 100000".into(),
+                ..Filter::default()
+            },
+        ),
+    ];
     for (name, bounds) in [
         ("world", GeoBounds::default()),
         (
@@ -403,31 +473,46 @@ fn geographic_catalog_benchmark() {
             },
         ),
     ] {
-        let (p50, p95) = measure(
-            || {
-                std::hint::black_box(
-                    store
-                        .geo_counts(&Filter::default(), bounds, 100, 25, || false)
-                        .unwrap(),
-                );
-            },
-            20,
-        );
-        eprintln!("map {name} P50={p50:.2}ms P95={p95:.2}ms");
+        for (label, filter) in &filters {
+            let (p50, p95) = measure(
+                || {
+                    std::hint::black_box(
+                        store.geo_counts(filter, bounds, 100, 25, || false).unwrap(),
+                    );
+                },
+                5,
+            );
+            eprintln!("map {name} {label} P50={p50:.2}ms P95={p95:.2}ms");
+        }
     }
-    let f = Filter {
-        geo: Some(GeoFilter::Cell(GeoBounds::default().cell(50, 5, 100, 25))),
-        limit: 100,
-        ..Filter::default()
-    };
-    let (p50, p95) = measure(
-        || {
-            std::hint::black_box(store.search(&f).unwrap());
-            std::hint::black_box(store.search_count(&f).unwrap());
-        },
-        20,
-    );
-    eprintln!("map page P50={p50:.2}ms P95={p95:.2}ms");
+    for (label, filter) in &filters {
+        for (density, bounds) in [
+            ("dense", GeoBounds::default().cell(50, 5, 100, 25)),
+            ("sparse", GeoBounds::default().cell(12, 18, 100, 25)),
+        ] {
+            for sort in [Sort::Clickcount, Sort::Name, Sort::Bitrate] {
+                for offset in [0, 20000] {
+                    let f = Filter {
+                        geo: Some(GeoFilter::Cell(bounds)),
+                        limit: 100,
+                        sort,
+                        offset,
+                        ..filter.clone()
+                    };
+                    let (p50, p95) = measure(
+                        || {
+                            std::hint::black_box(store.search(&f).unwrap());
+                            std::hint::black_box(store.search_count(&f).unwrap());
+                        },
+                        5,
+                    );
+                    eprintln!(
+                        "map page {density} {label} {sort:?} offset={offset} P50={p50:.2}ms P95={p95:.2}ms"
+                    );
+                }
+            }
+        }
+    }
     let conn = rusqlite::Connection::open(&path).unwrap();
     let size: i64 = conn
         .query_row(
