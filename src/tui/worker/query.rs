@@ -1256,9 +1256,11 @@ mod map_tests {
             .err()
             .expect("map scan should be interrupted");
         assert!(shared.pending.lock().unwrap().urgent());
-        assert!(
-            matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if code.code == rusqlite::ErrorCode::OperationInterrupted)
-        );
+        assert!(matches!(
+            error.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::OperationInterrupted
+        ));
     }
 
     #[test]
