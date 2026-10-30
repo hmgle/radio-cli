@@ -108,7 +108,10 @@ impl Store {
         f.geo = Some(GeoFilter::Missing);
         f.country = None;
         let (conditions, args, source) = self.conditions(&f);
-        let mut stmt=self.conn.prepare_cached(&format!("SELECT s.country,count(*) FROM {source} WHERE {conditions} GROUP BY s.country ORDER BY s.country LIMIT 1000"))?;
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT s.country,count(*) FROM {source} WHERE {conditions} \
+             GROUP BY s.country ORDER BY s.country LIMIT 1000"
+        ))?;
         Ok(stmt
             .query_map(params_from_iter(args), |r| {
                 Ok(crate::model::Facet {

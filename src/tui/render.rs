@@ -563,10 +563,15 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             || (app.focus != Focus::Details
                 && (!explore || (app.focus == Focus::List && !app.map.chooser))))
     {
+        let source_label = if app.filter.geo == Some(crate::geo::GeoFilter::Missing) {
+            crate::t!("explore_missing")
+        } else {
+            app.source.label()
+        };
         let title = crate::t!(
             "list_title",
             "prefix" => if layout.shared { crate::t!("list_shared") } else { "2" },
-            "source" => if app.filter.geo==Some(crate::geo::GeoFilter::Missing) {crate::t!("explore_missing")}else{app.source.label()},
+            "source" => source_label,
             "count" => app.length(view),
             "total" => if app.source == Source::Recordings {
                 view.recordings_total
