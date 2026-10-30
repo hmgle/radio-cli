@@ -6265,6 +6265,43 @@ fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
 }
 
 #[test]
+fn explore_reads_its_revision_when_a_page_already_pinned_the_store_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine.store.upsert(&station("mapped")).unwrap();
+    engine.store.set_meta("pref_source", "stations").unwrap();
+    drop(engine);
+    let engine = Engine::new(
+        crate::test_support::config(dir.path()),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let store_revision = engine.store.revision().unwrap();
+    engine.store.set_meta("pref_source", "stations").unwrap();
+    assert_eq!(engine.store.revision().unwrap(), store_revision);
+    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let filter = Filter {
+        limit: 100,
+        ..Filter::default()
+    };
+    // The worker pins the store revision before its command loop, and a steady
+    // catalog never changes it again. The geographic revision still has to be
+    // read, or the map compares every image against a stale zero.
+    worker::refresh(&engine, &filter, &shared).unwrap();
+    let before = shared.lock().unwrap().snapshot();
+    assert_eq!(before.geo_revision, 0);
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
+    let after = shared.lock().unwrap().snapshot();
+    assert_eq!(after.geo_revision, engine.store.geo_revision().unwrap());
+    assert!(after.geo_revision > 0);
+    assert!(!Arc::ptr_eq(&before, &after));
+    worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
+    assert!(Arc::ptr_eq(&after, &shared.lock().unwrap().snapshot()));
+    assert_eq!(engine.store.revision().unwrap(), store_revision);
+}
+
+#[test]
 fn explore_refresh_keeps_the_matching_map_visible_and_resubmits_once() {
     let mut data = view();
     let mut live = data.clone();

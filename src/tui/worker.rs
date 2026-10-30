@@ -358,7 +358,7 @@ fn catalog_note(store: &Store, days: u16) -> Result<String> {
     })
 }
 
-fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
+pub(super) fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
     let result = refresh_page(engine, filter, view);
     if let Err(error) = &result {
         let mut data = view.lock().unwrap();
@@ -454,8 +454,17 @@ pub(super) fn refresh_if_needed(
         }
     };
     let mut data = view.lock().unwrap();
-    if data.store_revision != Some(revision) {
-        data.geo_revision = engine.store.geo_revision()?;
+    // A page read can pin store_revision before this first probe, so the
+    // geographic revision must also be read while it is still unset. Otherwise
+    // the Explore map compares every image against a stale zero and never
+    // renders the density grid.
+    if data.store_revision != Some(revision) || data.geo_revision == 0 {
+        let geo_revision = engine.store.geo_revision()?;
+        if data.geo_revision != geo_revision {
+            data.geo_revision = geo_revision;
+            data.revision += 1;
+            data.immediate_revision += 1;
+        }
     }
     let needed = data.refresh_requested
         || data.store_revision != Some(revision)
