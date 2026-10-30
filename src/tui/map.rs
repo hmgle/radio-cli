@@ -258,7 +258,7 @@ fn draw_density_legend(
         if x + width > area.right() {
             break;
         }
-        buffer[(x, area.y)].set_char('·').set_style(style);
+        buffer[(x, area.y)].set_char('⠿').set_style(style);
         buffer.set_string(
             x + 2,
             area.y,
@@ -349,10 +349,12 @@ pub(super) fn draw(
                 let i = y * width as usize + x;
                 let selected = cursor == Some((x, y));
                 let count = image.counts[i];
-                let symbol = if selected || count > 0 || image.land[i] != ' ' {
-                    '·'
+                // Color the original 2x4 Braille mask without collapsing its
+                // subpixels. Only empty sea cells need a synthetic single dot.
+                let symbol = if image.land[i] == ' ' && (selected || count > 0) {
+                    '⠐'
                 } else {
-                    ' '
+                    image.land[i]
                 };
                 let mut marker_style = if count > 0 {
                     densities[density_band(count)]
@@ -406,7 +408,7 @@ pub(super) fn draw(
 mod tests {
     use super::*;
     #[test]
-    fn density_markers_keep_one_dot_size_and_legible_selection_in_every_theme() {
+    fn density_colors_preserve_braille_subpixels_in_every_theme() {
         use crate::config::Theme;
         use ratatui::{Terminal, backend::TestBackend};
         for theme in [Theme::Default, Theme::Light, Theme::Mono] {
@@ -425,8 +427,11 @@ mod tests {
                 columns,
                 rows,
             };
+            let shapes = ['⠁', '⠂', '⠃', '⠿', '⣀', '⣿', '⣤', '⣷', '⡇'];
             let mut land = vec!['⠿'; columns * rows];
-            land[9] = ' ';
+            land[..9].copy_from_slice(&shapes);
+            land[9..12].fill(' ');
+            counts[9] = 10; // Offshore station, absent from the land mask.
             let image = Arc::new(Image {
                 request,
                 land: Arc::new(land),
@@ -447,10 +452,11 @@ mod tests {
                 })
                 .unwrap();
             let buffer = terminal.backend().buffer();
-            assert_eq!(buffer[(state.area.x + 9, state.area.y)].symbol(), " ");
+            assert_eq!(buffer[(state.area.x + 9, state.area.y)].symbol(), "⠐");
+            assert_eq!(buffer[(state.area.x + 11, state.area.y)].symbol(), " ");
             let marker = |column: u16| &buffer[(state.area.x + column, state.area.y)];
             for column in 0..8 {
-                assert_eq!(marker(column).symbol(), "·");
+                assert_eq!(marker(column).symbol(), shapes[column as usize].to_string());
                 assert!(!marker(column).modifier.contains(Modifier::BOLD));
                 assert_eq!(
                     marker(column).modifier.contains(Modifier::UNDERLINED),
@@ -461,7 +467,7 @@ mod tests {
                     column == 4
                 );
             }
-            assert_eq!(marker(8).symbol(), "·");
+            assert_eq!(marker(8).symbol(), "⡇");
             if theme != Theme::Mono {
                 assert_ne!(marker(8).fg, marker(0).fg);
             }
@@ -488,14 +494,15 @@ mod tests {
             for label in DENSITY_LABELS {
                 assert!(legend.contains(label));
             }
-            // The empty-cell cursor is also a small dot, with no fictitious density.
-            let empty = state.bounds.cell(8, 0, columns, rows);
+            // Selection keeps a land cell's complete mask; an empty sea cell
+            // gets a single Braille subpixel without a fictitious density.
+            let empty = state.bounds.cell(10, 0, columns, rows);
             state.cursor = (empty.x + empty.width / 2, empty.y + empty.height / 2);
             terminal
                 .draw(|frame| draw(frame, &mut state, Some(&image), None, rect, true, theme))
                 .unwrap();
-            let cell = &terminal.backend().buffer()[(state.area.x + 8, state.area.y)];
-            assert_eq!(cell.symbol(), "·");
+            let cell = &terminal.backend().buffer()[(state.area.x + 10, state.area.y)];
+            assert_eq!(cell.symbol(), "⠐");
             assert!(cell.modifier.contains(Modifier::REVERSED));
         }
     }

@@ -153,11 +153,13 @@ stations. With map focus, use arrows or `hjkl` to move, `z` / `Z` to zoom up to
 map zooms around the pointer. Playback and volume shortcuts keep their usual
 meaning.
 
-The land outline and station cells use uniformly small dots. Gray marks land;
-blue, teal, amber, and red indicate 1–9, 10–49, 50–199, and 200+ stations per
-cell; the map shows a color legend.
-The cursor reverses the selected cell without changing its dot size. Monochrome
-mode underlines station dots and keeps the selected-cell count without colors.
+The map preserves its fine Braille dot pattern, with up to eight small dots
+in each terminal cell. Station density colors the existing dots while retaining
+the coastline shape. Gray marks land; blue, teal, amber, and red indicate 1–9,
+10–49, 50–199, and 200+ stations per cell, as shown in the legend. Stations in
+empty sea cells use a single Braille dot. The cursor reverses the selected cell
+without replacing its dot pattern. Monochrome mode underlines station cells and
+keeps the selected-cell count without colors.
 
 Search and filters apply to the map and results. Press `c` to browse stations
 without coordinates by country/region, then `Esc` to return to the map. Run
