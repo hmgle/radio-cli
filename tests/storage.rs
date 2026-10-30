@@ -1216,3 +1216,42 @@ fn version_five_geography_backfills_and_sync_publishes_atomically() {
     store.finish_sync().unwrap();
     assert_eq!(counts(&store).iter().sum::<u32>(), 0);
 }
+
+#[test]
+fn dense_geographic_pages_match_existing_stable_sort_orders() {
+    use radio_cli::{
+        geo::{GeoBounds, GeoFilter},
+        model::Sort,
+    };
+    let (_dir, mut store) = db();
+    let rows: Vec<_> = (0..4200)
+        .map(|i| Station {
+            stationuuid: uuid::Uuid::from_u128(i + 1).to_string(),
+            name: format!("dense {i:04}"),
+            geo_lat: Some(48.85),
+            geo_long: Some(2.35),
+            clickcount: (i % 100) as u64,
+            bitrate: (i % 4) as u32 * 64,
+            active: true,
+            ..Station::default()
+        })
+        .collect();
+    store.bootstrap(&rows, || false).unwrap();
+    for sort in [Sort::Clickcount, Sort::Bitrate, Sort::Name] {
+        for offset in [0, 4100] {
+            let filter = Filter {
+                limit: 100,
+                offset,
+                sort,
+                ..Filter::default()
+            };
+            let expected = store.search(&filter).unwrap();
+            let geo = Filter {
+                geo: Some(GeoFilter::Cell(GeoBounds::default())),
+                ..filter
+            };
+            assert_eq!(store.search(&geo).unwrap(), expected);
+            assert_eq!(store.search_count(&geo).unwrap(), 4200);
+        }
+    }
+}

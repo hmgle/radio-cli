@@ -40,6 +40,16 @@ pub(super) fn predicate(b: GeoBounds, args: &mut Vec<Value>) -> String {
     }
     sql
 }
+pub(super) fn plain(f: &Filter) -> bool {
+    f.query.trim().is_empty()
+        && f.country.is_none()
+        && f.language.is_none()
+        && f.tag.is_none()
+        && f.min_bitrate == 0
+        && !f.custom
+        && !f.favorites
+        && !f.history
+}
 impl Store {
     pub fn geo_revision(&self) -> Result<u64> {
         Ok(self.conn.query_row(
@@ -63,14 +73,7 @@ impl Store {
         );
         let mut f = filter.clone();
         f.geo = Some(GeoFilter::Cell(bounds));
-        let plain = f.query.trim().is_empty()
-            && f.country.is_none()
-            && f.language.is_none()
-            && f.tag.is_none()
-            && f.min_bitrate == 0
-            && !f.custom
-            && !f.favorites
-            && !f.history;
+        let plain = plain(&f);
         let (conditions, args, source) = if plain {
             let mut args = vec![];
             (

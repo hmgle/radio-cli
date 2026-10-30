@@ -452,9 +452,14 @@ impl Store {
                 args.push(format!(",{},", value.trim().to_lowercase()).into());
             }
         }
-        clauses.push("s.bitrate>=?".into());
-        args.push((filter.min_bitrate as i64).into());
+        if filter.min_bitrate > 0 {
+            clauses.push("s.bitrate>=?".into());
+            args.push((filter.min_bitrate as i64).into());
+        }
         if let Some(geo) = filter.geo {
+            if filter.history {
+                clauses.push("EXISTS(SELECT 1 FROM history h WHERE h.uuid=s.uuid)".into());
+            }
             clauses[0] = "s.active=1".into();
             match geo {
                 crate::geo::GeoFilter::Missing => clauses.push("s.geo_x IS NULL".into()),
@@ -636,7 +641,36 @@ impl Store {
     }
 
     pub fn search(&self, filter: &Filter) -> Result<Vec<Station>> {
-        let (conditions, mut args, source) = self.conditions(filter);
+        let (mut conditions, mut args, mut source) = self.conditions(filter);
+        // Dense geographic cells can contain tens of thousands of co-located
+        // stations. Use the existing covering sort index against compact row
+        // candidates, avoiding random table reads for every candidate. Small
+        // cells keep the direct spatial range scan.
+        if let Some(crate::geo::GeoFilter::Cell(bounds)) = filter.geo
+            && geo::plain(filter)
+            && let Some(index) = match filter.sort {
+                crate::model::Sort::Clickcount => Some("stations s INDEXED BY station_sort"),
+                crate::model::Sort::Name => Some("stations s INDEXED BY station_name"),
+                crate::model::Sort::Bitrate => Some("stations s INDEXED BY station_bitrate"),
+                _ => None,
+            }
+        {
+            let mut spatial_args = vec![];
+            let spatial = geo::predicate(bounds, &mut spatial_args);
+            let candidates = format!(
+                "SELECT s.rowid FROM stations s INDEXED BY station_geo WHERE s.active=1 AND {spatial}"
+            );
+            let n: usize = self.conn.query_row(
+                &format!("SELECT count(*) FROM ({candidates} LIMIT 4097)"),
+                params_from_iter(&spatial_args),
+                |r| r.get(0),
+            )?;
+            if n > 4096 {
+                conditions = format!("s.active=1 AND s.rowid IN ({candidates})");
+                args = spatial_args;
+                source = index;
+            }
+        }
         let order = Self::search_order(filter);
         // The random page has already been shuffled. Other sorts still need
         // their outer order, including history which overrides filter.sort.
