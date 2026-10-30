@@ -186,7 +186,7 @@ impl Reader {
                 crate::error::ErrorCode::Cancelled
             ));
         }
-        store.read_snapshot(|store| {
+        let (counts, countries, revision) = store.read_snapshot(|store| {
             let counts = store.geo_counts(
                 &request.filter,
                 request.bounds,
@@ -207,19 +207,23 @@ impl Reader {
                 self.map_countries = Some((request.filter.clone(), revision, countries.clone()));
                 countries
             };
-            Ok(super::super::map::Image {
-                land: cached_land.unwrap_or_else(|| {
-                    Arc::new(super::super::map::raster(
-                        request.bounds,
-                        request.columns,
-                        request.rows,
-                    ))
-                }),
-                counts,
-                countries,
-                revision,
-                request: request.clone(),
-            })
+            Ok((counts, countries, revision))
+        })?;
+        // Terrain depends only on the viewport; release the WAL snapshot before
+        // doing CPU work that does not read the catalog.
+        let land = cached_land.unwrap_or_else(|| {
+            Arc::new(super::super::map::raster(
+                request.bounds,
+                request.columns,
+                request.rows,
+            ))
+        });
+        Ok(super::super::map::Image {
+            land,
+            counts,
+            countries,
+            revision,
+            request: request.clone(),
         })
     }
 
