@@ -6218,9 +6218,11 @@ fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
         bounds: crate::geo::GeoBounds::default(),
         columns: 1,
         rows: 1,
+        countries: true,
     };
     data.map_image = Some(Arc::new(super::map::Image {
-        request,
+        request: request.clone(),
+        revision: data.geo_revision,
         land: Arc::new(vec![' ']),
         counts: vec![0],
         countries: vec![crate::model::Facet {
@@ -6229,7 +6231,14 @@ fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
         }],
     }));
     app.key(key(KeyCode::Char('c')), &data, &sender);
+    app.map.submitted = Some((request, data.geo_revision));
     assert!(app.map.chooser);
+    // A catalog refresh must not let Enter choose a stale country's count.
+    data.geo_revision += 1;
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(app.map.chooser);
+    assert!(receiver.try_recv().is_err());
+    Arc::make_mut(data.map_image.as_mut().unwrap()).revision = data.geo_revision;
     app.key(key(KeyCode::Enter), &data, &sender);
     assert_eq!(app.filter.geo, Some(crate::geo::GeoFilter::Missing));
     assert_eq!(app.filter.country.as_deref(), Some(""));
@@ -6261,6 +6270,7 @@ fn explore_layout_snapshots_show_map_and_narrow_focus() {
             bounds: app.map.bounds,
             columns: app.map.size.0,
             rows: app.map.size.1,
+            countries: false,
         };
         let mut counts = vec![0; request.columns * request.rows];
         for (lat, lon) in [(48.85, 2.35), (31.2, 121.5), (40.7, -74.0)] {
@@ -6273,6 +6283,7 @@ fn explore_layout_snapshots_show_map_and_narrow_focus() {
         }
         app.map.submitted = Some((request.clone(), data.geo_revision));
         data.map_image = Some(Arc::new(super::map::Image {
+            revision: data.geo_revision,
             land: Arc::new(super::map::raster(
                 request.bounds,
                 request.columns,

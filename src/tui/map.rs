@@ -18,10 +18,12 @@ pub(super) struct Request {
     pub bounds: GeoBounds,
     pub columns: usize,
     pub rows: usize,
+    pub countries: bool,
 }
 #[derive(Clone)]
 pub(super) struct Image {
     pub request: Request,
+    pub revision: u64,
     pub land: Arc<Vec<char>>,
     pub counts: Vec<u32>,
     pub countries: Vec<Facet>,
@@ -316,6 +318,13 @@ pub(super) fn draw(
             .country_index
             .saturating_sub(inner.height.saturating_sub(2) as usize);
         let mut lines = vec![crate::t!("explore_countries").to_string()];
+        if image.is_none() {
+            lines.push(
+                error
+                    .map(crate::clean_text)
+                    .unwrap_or_else(|| crate::t!("explore_loading").into()),
+            );
+        }
         lines.extend(
             countries
                 .iter()
@@ -479,6 +488,7 @@ mod tests {
                 bounds: state.bounds,
                 columns,
                 rows,
+                countries: false,
             };
             let shapes = ['⠁', '⠂', '⠃', '⠿', '⣀', '⣿', '⣤', '⣷', '⡇'];
             let mut land = vec!['⠿'; columns * rows];
@@ -487,6 +497,7 @@ mod tests {
             counts[9] = 10; // Offshore station, absent from the land mask.
             let image = Arc::new(Image {
                 request,
+                revision: 0,
                 land: Arc::new(land),
                 counts,
                 countries: vec![],
@@ -627,9 +638,11 @@ mod tests {
                 bounds: GeoBounds::default(),
                 columns,
                 rows,
+                countries: false,
             };
             let image = Arc::new(Image {
                 land: Arc::new(raster(request.bounds, columns, rows)),
+                revision: 0,
                 counts: vec![1; columns * rows],
                 countries: vec![],
                 request,

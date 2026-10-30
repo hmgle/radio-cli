@@ -2228,6 +2228,7 @@ impl App {
             bounds: self.map.bounds,
             columns: self.map.size.0,
             rows: self.map.size.1,
+            countries: self.map.chooser || self.map.country_origin.is_some(),
         };
         let key = (request.clone(), view.geo_revision);
         if self.map.submitted.as_ref() != Some(&key) {
@@ -2254,6 +2255,15 @@ impl App {
             let countries = view
                 .map_image
                 .as_ref()
+                .filter(|i| {
+                    i.request.countries
+                        && i.revision == view.geo_revision
+                        && self
+                            .map
+                            .submitted
+                            .as_ref()
+                            .is_some_and(|(r, _)| r == &i.request)
+                })
                 .map(|i| i.countries.as_slice())
                 .unwrap_or_default();
             match key.code {

@@ -32,6 +32,20 @@ struct Pending {
     facets_generation: u64,
 }
 
+impl Pending {
+    fn urgent(&self) -> bool {
+        self.page.is_some() || self.locate.is_some() || self.facets.is_some()
+    }
+}
+
+fn map_cancelled(shared: &Shared, generation: u64) -> bool {
+    if shared.stop.load(Ordering::Acquire) {
+        return true;
+    }
+    let pending = shared.pending.lock().unwrap();
+    pending.map_generation != generation || pending.urgent()
+}
+
 struct Shared {
     pending: Mutex<Pending>,
     ready: Condvar,
@@ -160,6 +174,55 @@ struct Reader {
 }
 
 impl Reader {
+    fn map(
+        &mut self,
+        store: &Store,
+        request: &super::super::map::Request,
+        cached_land: Option<Arc<Vec<char>>>,
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<super::super::map::Image> {
+        if cancelled() {
+            anyhow::bail!(crate::error::DomainError::new(
+                crate::error::ErrorCode::Cancelled
+            ));
+        }
+        store.read_snapshot(|store| {
+            let counts = store.geo_counts(
+                &request.filter,
+                request.bounds,
+                request.columns,
+                request.rows,
+                cancelled,
+            )?;
+            let revision = store.geo_revision()?;
+            let countries = if !request.countries {
+                vec![]
+            } else if let Some((filter, known, countries)) = &self.map_countries
+                && filter == &request.filter
+                && *known == revision
+            {
+                countries.clone()
+            } else {
+                let countries = store.geo_missing_countries(&request.filter)?;
+                self.map_countries = Some((request.filter.clone(), revision, countries.clone()));
+                countries
+            };
+            Ok(super::super::map::Image {
+                land: cached_land.unwrap_or_else(|| {
+                    Arc::new(super::super::map::raster(
+                        request.bounds,
+                        request.columns,
+                        request.rows,
+                    ))
+                }),
+                counts,
+                countries,
+                revision,
+                request: request.clone(),
+            })
+        })
+    }
+
     fn page(&mut self, store: &Store, filter: &Filter) -> Result<Rows> {
         let mut key = filter.clone();
         key.limit = 0;
@@ -249,8 +312,11 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
             }
         };
         #[cfg(test)]
-        if let Some(hook) = shared.before_read.lock().unwrap().take() {
-            hook();
+        {
+            let hook = shared.before_read.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
         }
         if shared.stop.load(Ordering::Acquire) {
             return;
@@ -259,10 +325,9 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
             Request::Map(generation, request) => {
                 let cancellation = Arc::downgrade(&shared);
                 store.cancel_queries_when(move || {
-                    cancellation.upgrade().is_none_or(|s| {
-                        s.stop.load(Ordering::Acquire)
-                            || s.pending.lock().unwrap().map_generation != generation
-                    })
+                    cancellation
+                        .upgrade()
+                        .is_none_or(|s| map_cancelled(&s, generation))
                 });
                 let cached_land = view.upgrade().and_then(|v| {
                     v.lock()
@@ -276,41 +341,8 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                         })
                         .map(|i| i.land.clone())
                 });
-                let result = store.read_snapshot(|store| {
-                    let counts = store.geo_counts(
-                        &request.filter,
-                        request.bounds,
-                        request.columns,
-                        request.rows,
-                        || {
-                            shared.stop.load(Ordering::Acquire)
-                                || shared.pending.lock().unwrap().map_generation != generation
-                        },
-                    )?;
-                    let revision = store.geo_revision()?;
-                    let countries = if let Some((filter, known, countries)) = &reader.map_countries
-                        && filter == &request.filter
-                        && *known == revision
-                    {
-                        countries.clone()
-                    } else {
-                        let countries = store.geo_missing_countries(&request.filter)?;
-                        reader.map_countries =
-                            Some((request.filter.clone(), revision, countries.clone()));
-                        countries
-                    };
-                    Ok(super::super::map::Image {
-                        land: cached_land.unwrap_or_else(|| {
-                            Arc::new(super::super::map::raster(
-                                request.bounds,
-                                request.columns,
-                                request.rows,
-                            ))
-                        }),
-                        counts,
-                        countries,
-                        request: request.clone(),
-                    })
+                let result = reader.map(&store, &request, cached_land, || {
+                    map_cancelled(&shared, generation)
                 });
                 let cancellation = Arc::downgrade(&shared);
                 store.cancel_queries_when(move || {
@@ -322,11 +354,20 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                     return;
                 };
                 let mut data = view.lock().unwrap();
-                if shared.pending.lock().unwrap().map_generation != generation
+                let mut pending = shared.pending.lock().unwrap();
+                if shared.stop.load(Ordering::Acquire)
+                    || pending.map_generation != generation
                     || data.map_request.as_ref() != Some(&request)
                 {
                     continue;
                 }
+                if result.is_err() && pending.urgent() {
+                    // Keep the same generation so the UI need not resubmit it.
+                    // The next iteration services the pending interactive read.
+                    pending.map = Some((generation, request));
+                    continue;
+                }
+                drop(pending);
                 match result {
                     Ok(image) => {
                         data.map_image = Some(Arc::new(image));
@@ -468,7 +509,7 @@ mod tests {
         }
     }
 
-    fn wait(view: &Arc<Mutex<View>>, predicate: impl Fn(&View) -> bool) {
+    pub(super) fn wait(view: &Arc<Mutex<View>>, predicate: impl Fn(&View) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(3);
         while !predicate(&view.lock().unwrap()) {
             assert!(Instant::now() < deadline, "query did not complete");
@@ -1171,6 +1212,129 @@ mod map_tests {
         time::{Duration, Instant},
     };
     #[test]
+    fn country_counts_are_read_only_when_requested_and_follow_catalog_revisions() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let mut reader = Reader::default();
+        let mut request = super::super::super::map::Request {
+            filter: Filter::default(),
+            bounds: crate::geo::GeoBounds::default(),
+            columns: 80,
+            rows: 20,
+            countries: false,
+        };
+        store
+            .test_connection()
+            .authorizer(Some(|context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        column_name: "country",
+                        ..
+                    }
+                ) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }));
+        assert!(
+            reader
+                .map(&store, &request, None, || false)
+                .unwrap()
+                .countries
+                .is_empty()
+        );
+        request.countries = true;
+        assert!(reader.map(&store, &request, None, || false).is_err());
+        store
+            .test_connection()
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        assert!(
+            reader
+                .map(&store, &request, None, || false)
+                .unwrap()
+                .countries
+                .is_empty()
+        );
+        store
+            .upsert(&Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: "Unmapped station".into(),
+                countrycode: "CN".into(),
+                active: true,
+                ..Station::default()
+            })
+            .unwrap();
+        let image = reader.map(&store, &request, None, || false).unwrap();
+        assert_eq!(image.revision, store.geo_revision().unwrap());
+        assert_eq!(
+            image.countries,
+            vec![crate::model::Facet {
+                value: "CN".into(),
+                count: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn pending_page_preempts_a_map_without_publishing_an_error_and_map_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let engine = crate::engine::Engine::new(
+            crate::test_support::config(dir.path()),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let worker = Worker::start(&path, &view).unwrap();
+        view.lock().unwrap().queries = Some(worker.sender.clone());
+        let (started, waiting) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+            started.send(()).unwrap();
+            blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+        }));
+        view.lock()
+            .unwrap()
+            .request_map(super::super::super::map::Request {
+                filter: Filter::default(),
+                bounds: crate::geo::GeoBounds::default(),
+                columns: 80,
+                rows: 20,
+                countries: false,
+            });
+        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        let filter = Filter {
+            limit: 100,
+            ..Filter::default()
+        };
+        super::super::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+        let (next_started, next_waiting) = mpsc::channel();
+        let (next_release, next_blocked) = mpsc::channel();
+        *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+            next_started.send(()).unwrap();
+            next_blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+        }));
+        release.send(()).unwrap();
+        next_waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        {
+            let data = view.lock().unwrap();
+            assert!(data.map_image.is_none());
+            assert!(data.map_error.is_none());
+            let pending = worker.sender.0.pending.lock().unwrap();
+            assert!(pending.map.is_some());
+            assert!(pending.page.is_none());
+        }
+        next_release.send(()).unwrap();
+        super::tests::wait(&view, |data| {
+            data.page_ready(&filter) && data.map_image.is_some()
+        });
+        assert!(view.lock().unwrap().map_error.is_none());
+    }
+
+    #[test]
     fn superseded_map_requests_publish_only_the_latest_grid_and_share_land() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("radio.db");
@@ -1198,6 +1362,7 @@ mod map_tests {
             bounds: crate::geo::GeoBounds::default(),
             columns: 80,
             rows: 20,
+            countries: false,
         };
         let (started, waiting) = mpsc::channel();
         let (release, blocked) = mpsc::channel();

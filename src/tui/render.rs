@@ -531,12 +531,14 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         && (!layout.shared || app.focus != Focus::List || app.map.chooser)
     {
         let map_image = view.map_image.as_ref().filter(|i| {
-            app.map
-                .submitted
-                .as_ref()
-                .is_some_and(|(request, revision)| {
-                    request == &i.request && *revision == view.geo_revision
-                })
+            i.revision == view.geo_revision
+                && app
+                    .map
+                    .submitted
+                    .as_ref()
+                    .is_some_and(|(request, revision)| {
+                        request == &i.request && *revision == view.geo_revision
+                    })
         });
         super::map::draw(
             frame,
