@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add offline world-map exploration with clickable station cells, up to 8× zoom,
+  and country browsing for stations without coordinates.
+
 ## 0.9.2 — 2026-10-29
 
 - Render TUI artwork with native Sixel in compatible tmux sessions, using the

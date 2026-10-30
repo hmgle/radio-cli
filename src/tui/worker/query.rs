@@ -25,6 +25,8 @@ struct Pending {
     page: Option<(u64, Page)>,
     locate: Option<(u64, String, u64, usize)>,
     facets: Option<(u64, usize, String)>,
+    map: Option<(u64, super::super::map::Request)>,
+    map_generation: u64,
     page_generation: u64,
     locate_generation: u64,
     facets_generation: u64,
@@ -43,6 +45,19 @@ struct Shared {
 pub(super) struct Sender(Arc<Shared>);
 
 impl Sender {
+    pub fn cancel_map(&self) {
+        let mut pending = self.0.pending.lock().unwrap();
+        pending.map = None;
+        pending.map_generation += 1;
+    }
+
+    pub fn map(&self, request: super::super::map::Request) {
+        let mut pending = self.0.pending.lock().unwrap();
+        pending.map_generation += 1;
+        pending.map = Some((pending.map_generation, request));
+        self.0.ready.notify_one();
+    }
+
     pub fn page(&self, filter: Filter, revision: (u64, u64), note: String) -> u64 {
         let mut pending = self.0.pending.lock().unwrap();
         pending.page_generation += 1;
@@ -125,6 +140,7 @@ impl Drop for Worker {
 }
 
 enum Request {
+    Map(u64, super::super::map::Request),
     Page(u64, Page),
     Locate(u64, String, u64, usize),
     Facets(u64, usize, String),
@@ -140,6 +156,7 @@ struct Rows {
 #[derive(Default)]
 struct Reader {
     count: Option<(Filter, (u64, u64), usize)>,
+    map_countries: Option<(Filter, u64, Vec<crate::model::Facet>)>,
 }
 
 impl Reader {
@@ -225,6 +242,9 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                 if let Some((g, selected, prefix)) = pending.facets.take() {
                     break Request::Facets(g, selected, prefix);
                 }
+                if let Some((generation, request)) = pending.map.take() {
+                    break Request::Map(generation, request);
+                }
                 pending = shared.ready.wait(pending).unwrap();
             }
         };
@@ -236,6 +256,88 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
             return;
         }
         match request {
+            Request::Map(generation, request) => {
+                let cancellation = Arc::downgrade(&shared);
+                store.cancel_queries_when(move || {
+                    cancellation.upgrade().is_none_or(|s| {
+                        s.stop.load(Ordering::Acquire)
+                            || s.pending.lock().unwrap().map_generation != generation
+                    })
+                });
+                let cached_land = view.upgrade().and_then(|v| {
+                    v.lock()
+                        .unwrap()
+                        .map_image
+                        .as_ref()
+                        .filter(|i| {
+                            i.request.bounds == request.bounds
+                                && i.request.columns == request.columns
+                                && i.request.rows == request.rows
+                        })
+                        .map(|i| i.land.clone())
+                });
+                let result = store.read_snapshot(|store| {
+                    let counts = store.geo_counts(
+                        &request.filter,
+                        request.bounds,
+                        request.columns,
+                        request.rows,
+                        || {
+                            shared.stop.load(Ordering::Acquire)
+                                || shared.pending.lock().unwrap().map_generation != generation
+                        },
+                    )?;
+                    let revision = store.geo_revision()?;
+                    let countries = if let Some((filter, known, countries)) = &reader.map_countries
+                        && filter == &request.filter
+                        && *known == revision
+                    {
+                        countries.clone()
+                    } else {
+                        let countries = store.geo_missing_countries(&request.filter)?;
+                        reader.map_countries =
+                            Some((request.filter.clone(), revision, countries.clone()));
+                        countries
+                    };
+                    Ok(super::super::map::Image {
+                        land: cached_land.unwrap_or_else(|| {
+                            Arc::new(super::super::map::raster(
+                                request.bounds,
+                                request.columns,
+                                request.rows,
+                            ))
+                        }),
+                        counts,
+                        countries,
+                        request: request.clone(),
+                    })
+                });
+                let cancellation = Arc::downgrade(&shared);
+                store.cancel_queries_when(move || {
+                    cancellation
+                        .upgrade()
+                        .is_none_or(|s| s.stop.load(Ordering::Acquire))
+                });
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                let mut data = view.lock().unwrap();
+                if shared.pending.lock().unwrap().map_generation != generation
+                    || data.map_request.as_ref() != Some(&request)
+                {
+                    continue;
+                }
+                match result {
+                    Ok(image) => {
+                        data.map_image = Some(Arc::new(image));
+                        data.map_error = None;
+                    }
+                    Err(error) => data.map_error = Some(format!("{error:#}")),
+                }
+                data.revision += 1;
+                data.immediate_revision += 1;
+            }
+
             Request::Page(generation, page) => {
                 let result = reader.page(&store, &page.filter);
                 let Some(view) = view.upgrade() else {
@@ -1058,5 +1160,99 @@ mod tests {
         drop(worker);
         assert!(start.elapsed() < Duration::from_secs(2));
         assert!(shared.stop.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::*;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    #[test]
+    fn superseded_map_requests_publish_only_the_latest_grid_and_share_land() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        store
+            .upsert(&Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: "geographic".into(),
+                active: true,
+                geo_lat: Some(45.0),
+                geo_long: Some(10.0),
+                ..Station::default()
+            })
+            .unwrap();
+        let engine = crate::engine::Engine::new(
+            crate::test_support::config(dir.path()),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let worker = Worker::start(&path, &view).unwrap();
+        view.lock().unwrap().queries = Some(worker.sender.clone());
+        let request = super::super::super::map::Request {
+            filter: Filter::default(),
+            bounds: crate::geo::GeoBounds::default(),
+            columns: 80,
+            rows: 20,
+        };
+        let (started, waiting) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+            started.send(()).unwrap();
+            blocked.recv_timeout(Duration::from_secs(3)).unwrap();
+        }));
+        view.lock().unwrap().request_map(request.clone());
+        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        let latest = super::super::super::map::Request {
+            columns: 100,
+            ..request
+        };
+        view.lock().unwrap().request_map(latest.clone());
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let data = view.lock().unwrap();
+            if let Some(image) = &data.map_image {
+                assert_eq!(image.request, latest);
+                assert_eq!(image.counts.iter().sum::<u32>(), 1);
+                break;
+            }
+            drop(data);
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        let land = view
+            .lock()
+            .unwrap()
+            .map_image
+            .as_ref()
+            .unwrap()
+            .land
+            .clone();
+        let filtered = super::super::super::map::Request {
+            filter: Filter {
+                query: "absent".into(),
+                ..Filter::default()
+            },
+            ..latest
+        };
+        view.lock().unwrap().request_map(filtered.clone());
+        loop {
+            let data = view.lock().unwrap();
+            if let Some(image) = &data.map_image
+                && image.request == filtered
+            {
+                assert!(Arc::ptr_eq(&image.land, &land));
+                assert_eq!(image.counts.iter().sum::<u32>(), 0);
+                break;
+            }
+            drop(data);
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }

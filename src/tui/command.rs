@@ -196,6 +196,7 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "favorites add",
     "favorites remove",
     "history",
+    "explore",
     "info",
     "current",
     "station add",
@@ -206,6 +207,7 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "doctor",
     "help",
     "quit",
+    "focus map",
     "focus sources",
     "focus list",
     "focus details",
@@ -288,6 +290,16 @@ pub(super) fn parse(
                 .ok_or_else(|| anyhow::anyhow!(crate::t!("command_usage_volume")))?;
             return Ok(Parsed::Worker(Command::Volume(value)));
         }
+        "explore" if words.len() == 1 => {
+            return Ok(Parsed::Source(
+                Source::Explore,
+                crate::cli::Page {
+                    limit: 100,
+                    offset: 0,
+                    all: false,
+                },
+            ));
+        }
         "focus" => {
             let panel = match words
                 .get(1)
@@ -299,6 +311,7 @@ pub(super) fn parse(
                 Some("details" | "3") => Focus::Details,
                 Some("player" | "4") => Focus::Player,
                 Some("activity" | "5") => Focus::Activity,
+                Some("map" | "6") => Focus::Map,
                 _ => bail!(crate::t!("command_usage_focus")),
             };
             return Ok(Parsed::Focus(panel));

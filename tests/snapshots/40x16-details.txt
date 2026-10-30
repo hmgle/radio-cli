@@ -3,7 +3,7 @@
 │Song title                            │
 ╰──────────────────────────────────────╯
 ╭ 1 Sources ───────────────────────────╮
-│>All       Saved    Recent    Files   │
+│>All     Saved  Recent  Files  Map    │
 ╰──────────────────────────────────────╯
 ┏ ▶ [2/3] Details · 2 back · j/k scroll┓
 ┃Selected Station                      ┃

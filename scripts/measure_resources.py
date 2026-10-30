@@ -127,7 +127,7 @@ def main():
                     document.update(stationuuid=row[0], name=row[1])
                     row[10] = json.dumps(document, ensure_ascii=False)
                     yield row
-            db.executemany("insert into stations values (?,?,?,?,?,?,?,?,?,?,?)", rows())
+            db.executemany(f"insert into stations values ({','.join('?' for _ in template)})", rows())
             db.commit()
             db.close()
             results = {}

@@ -263,6 +263,10 @@ help_nav_title = "导航"
 help_nav = """
 Tab / Shift-Tab\t切换面板
 1–5\t直达面板
+6\t聚焦探索地图；Enter 转到结果列表
+z / Z / 0（地图）\t放大 / 缩小 / 返回全球
+hjkl / 方向键（地图）\t移动地图光标；到达视野边缘时平移
+c（探索）\t按国家地区浏览无坐标电台；Esc 返回地图
 Left / Right 或 h / l\t左右切换面板
 Ctrl-h/j/k/l 或 Ctrl-方向键\t按方向切换面板
 [ / ]\t切换目录分类（各分类记住自己的页和选中行）
@@ -322,6 +326,7 @@ help_commands = """
 :info [UUID]\t在详情面板查看电台
 :current\t查看当前播放电台完整详情
 :favorites list|add|remove [UUID]\t
+:explore\t打开离线世界地图
 :history\t最近播放
 :recordings list\t录音记录
 :recordings play ID / :recordings remove ID [--index-only]\t
@@ -340,7 +345,7 @@ help_commands = """
 :subtitles on|off|toggle|history|clear|retry\t控制直播字幕与会话历史
 :set subtitles.model ID\t切换会话字幕模型
 :doctor\t检查音频依赖与目录权限
-:focus sources|list|details|player|activity\t
+:focus sources|list|details|player|activity|map\t
 :quit / :q\t收尾并退出
 """
 help_mouse_title = "鼠标"
@@ -418,7 +423,7 @@ command_unknown_help = "未知命令: {word}"
 command_unknown = "未知 TUI 命令；:help 查看帮助"
 command_usage_set = "用法: set language en|zh-CN / set mouse true|false / set subtitles.model ID"
 command_usage_volume = "用法: volume <0–100>"
-command_usage_focus = "用法: focus sources|list|details|player|activity"
+command_usage_focus = "用法: focus sources|list|details|player|activity|map"
 command_process_options = "TUI 命令不接受进程级配置参数"
 command_paging = "TUI 使用 PgUp/PgDn 分页；--all 仅供 CLI 导出"
 language_set = "界面语言已切换为 {language}"
@@ -449,3 +454,17 @@ subtitle_interrupted = "采集已中断"
 subtitle_usage = "用法：:subtitles on|off|toggle|history|clear|retry"
 subtitle_decoding = "正在识别语音 · 字幕有延迟"
 subtitle_connection = "字幕连接已结束；可用 :subtitles retry 重试"
+
+focus_map = "地图"
+source_explore = "地图探索"
+source_explore_short = "地图"
+explore_title = "6 地图探索 · {zoom}×"
+explore_small = "请扩大终端以浏览地图"
+explore_countries = "无坐标电台 · ↑/↓ 选择 Enter 确认 Esc 返回"
+explore_unknown = "未知国家地区"
+explore_count = "此网格内有 {count} 个电台"
+explore_loading = "地图加载中…"
+explore_empty = "此网格内没有电台。移动或缩放地图，或按 c 按国家浏览无坐标电台。运行 :sync 更新地理元数据。"
+context_map = "hjkl/方向键移动 · z/Z 缩放 · 0 全球 · Enter 列表 · c 无坐标电台"
+
+explore_missing = "无坐标电台"

@@ -17,14 +17,16 @@ pub(super) enum Focus {
     Details,
     Player,
     Activity,
+    Map,
 }
 impl Focus {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Sources,
         Self::List,
         Self::Details,
         Self::Player,
         Self::Activity,
+        Self::Map,
     ];
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|f| *f == self).unwrap()
@@ -36,6 +38,7 @@ impl Focus {
             Self::Details => crate::t!("focus_details"),
             Self::Player => crate::t!("focus_player"),
             Self::Activity => crate::t!("focus_activity"),
+            Self::Map => crate::t!("focus_map"),
         }
     }
 }
@@ -45,6 +48,7 @@ pub(super) enum Source {
     Favorites,
     History,
     Recordings,
+    Explore,
 }
 impl Source {
     pub fn preference(self) -> &'static str {
@@ -53,6 +57,7 @@ impl Source {
             Self::Favorites => "favorites",
             Self::History => "history",
             Self::Recordings => "recordings",
+            Self::Explore => "explore",
         }
     }
     pub fn restore(
@@ -66,6 +71,7 @@ impl Source {
             Some("favorites") => Self::Favorites,
             Some("history") => Self::History,
             Some("recordings") => Self::Recordings,
+            Some("explore") => Self::Explore,
             _ => Self::Stations,
         })
     }
@@ -92,11 +98,12 @@ impl Source {
         }
         Ok((filter, selected))
     }
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Stations,
         Self::Favorites,
         Self::History,
         Self::Recordings,
+        Self::Explore,
     ];
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|s| *s == self).unwrap()
@@ -107,6 +114,7 @@ impl Source {
             Self::Favorites => crate::t!("source_favorites_short"),
             Self::History => crate::t!("source_history_short"),
             Self::Recordings => crate::t!("source_recordings_short"),
+            Self::Explore => crate::t!("source_explore_short"),
         }
     }
     pub fn label(self) -> &'static str {
@@ -115,6 +123,7 @@ impl Source {
             Self::Favorites => crate::t!("source_favorites"),
             Self::History => crate::t!("source_history"),
             Self::Recordings => crate::t!("source_recordings"),
+            Self::Explore => crate::t!("source_explore"),
         }
     }
 }
@@ -448,6 +457,7 @@ struct SourcePosition {
 }
 
 pub(super) struct App {
+    pub map: super::map::State,
     last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
     jump_progress: usize,
@@ -496,10 +506,10 @@ pub(super) struct App {
     activity_tail: u64,
     pub activity_new: u64,
     pub activity_removed: bool,
-    pub rects: [Rect; 5],
+    pub rects: [Rect; 6],
     pub filter_summary: Rect,
-    pub source_rows: [Rect; 4],
-    positions: [Option<SourcePosition>; 4],
+    pub source_rows: [Rect; 5],
+    positions: [Option<SourcePosition>; 5],
     pub quit: bool,
     pub too_small: bool,
     size: (u16, u16),
@@ -514,6 +524,7 @@ impl Default for App {
         let mut list = ListState::default();
         list.select(Some(0));
         Self {
+            map: Default::default(),
             last_click: None,
             jump_binding: "''".into(),
             jump_progress: 0,
@@ -565,9 +576,9 @@ impl Default for App {
             activity_tail: 0,
             activity_new: 0,
             activity_removed: false,
-            rects: [Rect::default(); 5],
+            rects: [Rect::default(); 6],
             filter_summary: Rect::default(),
-            source_rows: [Rect::default(); 4],
+            source_rows: [Rect::default(); 5],
             positions: Default::default(),
             quit: false,
             too_small: false,
@@ -594,7 +605,7 @@ impl App {
             ..Self::default()
         })
     }
-    pub fn set_rects(&mut self, rects: [Rect; 5]) {
+    pub fn set_rects(&mut self, rects: [Rect; 6]) {
         if self.rects != rects {
             self.last_click = None;
         }
@@ -656,8 +667,8 @@ impl App {
     pub fn update_size(&mut self, width: u16, height: u16) {
         if self.size != (width, height) {
             self.last_click = None;
-            self.rects = [Rect::default(); 5];
-            self.source_rows = [Rect::default(); 4];
+            self.rects = [Rect::default(); 6];
+            self.source_rows = [Rect::default(); 5];
             self.filter_summary = Rect::default();
             self.size = (width, height);
         }
@@ -901,6 +912,7 @@ impl App {
 
     fn clear_filters(&mut self, sender: &CommandSender) {
         self.filter = Filter {
+            geo: self.filter.geo,
             favorites: self.source == Source::Favorites,
             history: self.source == Source::History,
             recordings: self.source == Source::Recordings,
@@ -925,7 +937,21 @@ impl App {
             filter: self.filter.clone(),
             selected_id: self.selected_id.clone(),
         });
+        if let Some(country) = self.map.country_origin.take() {
+            self.filter.country = country;
+        }
         self.source = source;
+        self.filter.geo = if source == Source::Explore {
+            Some(crate::geo::GeoFilter::Cell(self.map.cell()))
+        } else {
+            None
+        };
+        if source == Source::Explore && self.focus != Focus::Sources {
+            self.focus = Focus::Map;
+        } else if self.focus == Focus::Map {
+            self.focus = Focus::List;
+        }
+        self.map.chooser = false;
         self.filter.favorites = source == Source::Favorites;
         self.filter.history = source == Source::History;
         self.filter.recordings = source == Source::Recordings;
@@ -1005,7 +1031,7 @@ impl App {
     }
     fn move_selection(&mut self, delta: i32, view: &View) {
         match self.focus {
-            Focus::Sources => {}
+            Focus::Sources | Focus::Map => {}
             Focus::List => {
                 // Loading and failed queries have no actionable rows. Keep the
                 // last selection identity so recovery can restore it.
@@ -1219,10 +1245,19 @@ impl App {
                         self.help = true;
                         self.help_scroll = 0;
                     }
-                    Parsed::Focus(focus) => self.focus = focus,
+                    Parsed::Focus(focus) => {
+                        if focus == Focus::Map && self.source != Source::Explore {
+                            self.switch_source(Source::Explore, None, sender);
+                        }
+                        self.focus = focus;
+                    }
                     Parsed::Source(source, page) => {
                         self.switch_source(source, Some(page), sender);
-                        self.focus = Focus::List;
+                        self.focus = if source == Source::Explore {
+                            Focus::Map
+                        } else {
+                            Focus::List
+                        };
                     }
                     Parsed::Search(mut filter) => {
                         filter.favorites = self.source == Source::Favorites;
@@ -1230,6 +1265,7 @@ impl App {
                         if self.source == Source::Recordings {
                             self.source = Source::Stations;
                         }
+                        filter.geo = self.filter.geo;
                         self.filter = filter;
                         self.reset_selection();
                         self.focus = Focus::List;
@@ -1635,6 +1671,9 @@ impl App {
             }
             return;
         }
+        if key.code == KeyCode::F(5) {
+            self.map.submitted = None;
+        }
         if self.jump_key(key, view, sender) {
             return;
         }
@@ -1658,6 +1697,9 @@ impl App {
                 KeyCode::Char('b') => self.page(false, view, sender),
                 _ => {}
             }
+            return;
+        }
+        if self.map_key(key, view, sender) {
             return;
         }
         let gg = pending.is_some_and(|(key, _)| key == 'g') && key.code == KeyCode::Char('g');
@@ -1724,20 +1766,27 @@ impl App {
             }
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => self.dismissed_error = view.operation_error_id,
-            KeyCode::Tab => self.focus = Focus::ALL[(self.focus.index() + 1) % 5],
-            KeyCode::BackTab => self.focus = Focus::ALL[(self.focus.index() + 4) % 5],
+            KeyCode::Tab => {
+                self.focus = Focus::ALL
+                    [(self.focus.index() + 1) % if self.source == Source::Explore { 6 } else { 5 }]
+            }
+            KeyCode::BackTab => {
+                let n = if self.source == Source::Explore { 6 } else { 5 };
+                self.focus = Focus::ALL[(self.focus.index() + n - 1) % n];
+            }
+            KeyCode::Char('6') if self.source == Source::Explore => self.focus = Focus::Map,
             KeyCode::Char(c @ '1'..='5') => self.focus = Focus::ALL[c as usize - '1' as usize],
             KeyCode::Char('[') => {
-                self.switch_source(Source::ALL[(self.source.index() + 3) % 4], None, sender)
+                self.switch_source(Source::ALL[(self.source.index() + 4) % 5], None, sender)
             }
             KeyCode::Char(']') => {
-                self.switch_source(Source::ALL[(self.source.index() + 1) % 4], None, sender)
+                self.switch_source(Source::ALL[(self.source.index() + 1) % 5], None, sender)
             }
             KeyCode::Up | KeyCode::Char('k') if self.focus == Focus::Sources => {
-                self.switch_source(Source::ALL[(self.source.index() + 3) % 4], None, sender)
+                self.switch_source(Source::ALL[(self.source.index() + 4) % 5], None, sender)
             }
             KeyCode::Down | KeyCode::Char('j') if self.focus == Focus::Sources => {
-                self.switch_source(Source::ALL[(self.source.index() + 1) % 4], None, sender)
+                self.switch_source(Source::ALL[(self.source.index() + 1) % 5], None, sender)
             }
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1, view),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1, view),
@@ -1764,7 +1813,13 @@ impl App {
                 self.help = true;
                 self.help_scroll = 0;
             }
-            KeyCode::Enter if self.focus == Focus::Sources => self.focus = Focus::List,
+            KeyCode::Enter if self.focus == Focus::Sources => {
+                self.focus = if self.source == Source::Explore {
+                    Focus::Map
+                } else {
+                    Focus::List
+                }
+            }
             KeyCode::Enter if self.focus == Focus::Player => {
                 if let Some(station) = &view.status.station {
                     self.request_info(station.stationuuid.clone(), true, sender);
@@ -1968,6 +2023,26 @@ impl App {
             self.clear_filters(sender);
             return;
         }
+        if self.source == Source::Explore && self.map.area.contains(point) && !self.map.chooser {
+            let anchor = self.map.point(event.column, event.row);
+            match event.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.focus = Focus::Map;
+                    self.map.cursor = anchor;
+                    self.map.deadline = None;
+                    self.apply_map_selection(sender);
+                }
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    self.focus = Focus::Map;
+                    self.map
+                        .zoom(event.kind == MouseEventKind::ScrollUp, anchor);
+                    self.map.deadline = Some(now + Duration::from_millis(100));
+                    self.apply_map_selection_deferred();
+                }
+                _ => {}
+            }
+            return;
+        }
         let Some(focus) = std::iter::once(self.focus)
             .chain(Focus::ALL)
             .find(|f| self.rects[f.index()].contains(point))
@@ -2078,4 +2153,152 @@ fn matching_facets<'a>(
         .iter()
         .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
         .collect()
+}
+
+impl App {
+    fn apply_map_selection_deferred(&mut self) {
+        self.map.chooser = false;
+        if let Some(country) = self.map.country_origin.take() {
+            self.filter.country = country;
+        }
+        self.filter.geo = Some(crate::geo::GeoFilter::Cell(self.map.cell()));
+        self.filter.offset = 0;
+        self.reset_selection();
+        self.search_due = self.map.deadline.or(Some(Instant::now()));
+    }
+    fn apply_map_selection(&mut self, sender: &CommandSender) {
+        self.apply_map_selection_deferred();
+        self.flush_search(sender);
+    }
+    pub fn update_map(&mut self, live: &mut View, view: &View, sender: &CommandSender) -> bool {
+        if self.source != Source::Explore {
+            if self.map.submitted.take().is_some() {
+                live.clear_map();
+                return true;
+            }
+            return false;
+        }
+        if self.too_small {
+            return false;
+        }
+        let mut changed = false;
+        if !self.map.initialized {
+            if let Some((x, y)) = view
+                .status
+                .station
+                .as_ref()
+                .and_then(|s| crate::geo::coordinates(s.geo_lat, s.geo_long))
+            {
+                self.map.cursor = (x, y);
+            }
+            self.map.initialized = true;
+            changed = true;
+        }
+        let selection = crate::geo::GeoFilter::Cell(self.map.cell());
+        if changed || (self.map.country_origin.is_none() && self.filter.geo != Some(selection)) {
+            self.apply_map_selection_deferred();
+            changed = true;
+        }
+        if self.map.deadline.is_some_and(|at| Instant::now() < at) {
+            return changed;
+        }
+        self.map.deadline = None;
+        let mut filter = self.filter.clone();
+        filter.geo = None;
+        filter.offset = 0;
+        filter.limit = 0;
+        filter.sort = crate::model::Sort::default();
+        if let Some(country) = &self.map.country_origin {
+            filter.country = country.clone();
+        }
+        let request = super::map::Request {
+            filter,
+            bounds: self.map.bounds,
+            columns: self.map.size.0,
+            rows: self.map.size.1,
+        };
+        let key = (request.clone(), view.geo_revision);
+        if self.map.submitted.as_ref() != Some(&key) {
+            live.request_map(request);
+            self.map.submitted = Some(key);
+            changed = true;
+        }
+        if self.search_due.is_some_and(|at| Instant::now() >= at) {
+            self.flush_search(sender);
+        }
+        changed
+    }
+    fn map_key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) -> bool {
+        if self.source != Source::Explore {
+            return false;
+        }
+        if key.code == KeyCode::Esc && self.map.country_origin.is_some() {
+            self.filter.country = self.map.country_origin.take().unwrap();
+            self.focus = Focus::Map;
+            self.apply_map_selection(sender);
+            return true;
+        }
+        if self.map.chooser {
+            let countries = view
+                .map_image
+                .as_ref()
+                .map(|i| i.countries.as_slice())
+                .unwrap_or_default();
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('c') => self.map.chooser = false,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.map.country_index =
+                        (self.map.country_index + 1).min(countries.len().saturating_sub(1))
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.map.country_index = self.map.country_index.saturating_sub(1)
+                }
+                KeyCode::Enter => {
+                    if let Some(country) = countries.get(self.map.country_index) {
+                        if self.map.country_origin.is_none() {
+                            self.map.country_origin = Some(self.filter.country.clone());
+                        }
+                        self.filter.country = Some(country.value.clone());
+                        self.filter.geo = Some(crate::geo::GeoFilter::Missing);
+                        self.filter.offset = 0;
+                        self.map.chooser = false;
+                        self.focus = Focus::List;
+                        self.reset_selection();
+                        self.flush_search(sender);
+                    }
+                }
+                _ => return false,
+            }
+            return true;
+        }
+        if key.code == KeyCode::Char('c') {
+            self.map.chooser = true;
+            self.map.country_index = 0;
+            self.focus = Focus::Map;
+            return true;
+        }
+        if self.focus != Focus::Map {
+            return false;
+        }
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => self.map.step(-1, 0),
+            KeyCode::Right | KeyCode::Char('l') => self.map.step(1, 0),
+            KeyCode::Up | KeyCode::Char('k') => self.map.step(0, -1),
+            KeyCode::Down | KeyCode::Char('j') => self.map.step(0, 1),
+            KeyCode::Char('z') => self.map.zoom(true, self.map.cursor),
+            KeyCode::Char('Z') => self.map.zoom(false, self.map.cursor),
+            KeyCode::Char('0') => {
+                self.map.zoom = 0;
+                self.map.bounds = crate::geo::GeoBounds::default();
+            }
+            KeyCode::Enter => {
+                self.focus = Focus::List;
+                return true;
+            }
+            _ => return false,
+        }
+        self.map.deadline = Some(Instant::now() + Duration::from_millis(100));
+        self.apply_map_selection_deferred();
+        true
+    }
 }

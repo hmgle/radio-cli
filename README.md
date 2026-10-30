@@ -143,6 +143,23 @@ truncated and reported.
 `Tab` completes commands. `:record UUID` only accepts the station that is
 currently playing; use `radio record UUID` for an independent recording.
 
+### Explore map
+
+Open **Explore** in Sources or run `:explore`. On wide terminals the offline
+world map appears beside the station list; on narrow terminals use `6` for the
+map, `2` for results, and `3` for details. Click a map cell to list its
+stations. With map focus, use arrows or `hjkl` to move, `z` / `Z` to zoom up to
+8×, `0` to return to the world, and `Enter` to focus results. The wheel over the
+map zooms around the pointer. Playback and volume shortcuts keep their usual
+meaning.
+
+Search and filters apply to the map and results. Press `c` to browse stations
+without coordinates by country/region, then `Esc` to return to the map. Run
+`radio sync` after upgrading to populate coordinates; older catalogs have none.
+Geographic metadata comes from station submissions and may be inaccurate. The
+bundled Natural Earth 110m land outline is public domain and uses no online
+tiles. Small islands and enlarged coastlines may be simplified.
+
 ### CLI reference
 
 Global options apply to every subcommand:

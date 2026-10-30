@@ -8,7 +8,7 @@
 │  Favorites     │┃     Another Station         [FR] 192 kbps AAC┃│Details: Selected list row      │
 │  Recent plays  │┃                                              ┃│                                │
 │  Recordings    │┃                                              ┃│Catalog                         │
-│                │┃                                              ┃│Country:                        │
+│  Explore       │┃                                              ┃│Country:                        │
 │                │┃                                              ┃│  France (FR)                   │
 │j/k select      │┃                                              ┃│Language:                       │
 │Enter open      │┃                                              ┃│  french                        │

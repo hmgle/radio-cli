@@ -54,7 +54,8 @@ pub(super) fn station<'a>(app: &App, view: &'a View) -> Option<&'a Station> {
 
 pub(super) fn area(app: &App, view: &View, screen: Rect) -> Option<Rect> {
     let rect = app.rects[Focus::Details.index()];
-    if app.theme == Theme::Mono
+    if (app.source == Source::Explore && app.focus != Focus::Details)
+        || app.theme == Theme::Mono
         || screen.width < 100
         || screen.height < 24
         || rect.width < 26

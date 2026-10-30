@@ -353,3 +353,88 @@ fn catalog_performance_matrix() {
     println!("v2-to-v5 migration {:.2}s", start.elapsed().as_secs_f64());
     assert_eq!(migrated.count().unwrap(), 200001);
 }
+
+#[test]
+#[ignore = "release geography performance and resource fixture"]
+fn geographic_catalog_benchmark() {
+    use radio_cli::geo::{GeoBounds, GeoFilter};
+    let dir = tempfile::tempdir().unwrap();
+    let path = std::env::var_os("RADIO_MAP_BENCH_DB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| dir.path().join("radio.db"));
+    let mut store = Store::open(&path).unwrap();
+    store.begin_sync().unwrap();
+    for page in 0..200 {
+        let rows: Vec<_> = (0..1000)
+            .map(|i| {
+                let id = page * 1000 + i;
+                let (lat, lon) = match id % 5 {
+                    0 => (48.85, 2.35), // Dense, overlapping city points.
+                    1 => (0.0, 179.9),
+                    _ => (
+                        (id % 18000) as f64 / 100.0 - 90.0,
+                        ((id * 7919) % 36000) as f64 / 100.0 - 180.0,
+                    ),
+                };
+                Station {
+                    stationuuid: uuid::Uuid::from_u128(id as u128 + 1).to_string(),
+                    name: format!("Geo Station {id}"),
+                    url: format!("http://127.0.0.1:1/{id}"),
+                    countrycode: if id % 2 == 0 { "FR" } else { "CN" }.into(),
+                    geo_lat: Some(lat),
+                    geo_long: Some(lon),
+                    active: true,
+                    ..Station::default()
+                }
+            })
+            .collect();
+        store.stage(&rows).unwrap();
+    }
+    store.finish_sync().unwrap();
+    for (name, bounds) in [
+        ("world", GeoBounds::default()),
+        (
+            "8x",
+            GeoBounds {
+                x: 170_000_000,
+                y: 30_000_000,
+                width: 45_000_000,
+                height: 22_500_000,
+            },
+        ),
+    ] {
+        let (p50, p95) = measure(
+            || {
+                std::hint::black_box(
+                    store
+                        .geo_counts(&Filter::default(), bounds, 100, 25, || false)
+                        .unwrap(),
+                );
+            },
+            20,
+        );
+        eprintln!("map {name} P50={p50:.2}ms P95={p95:.2}ms");
+    }
+    let f = Filter {
+        geo: Some(GeoFilter::Cell(GeoBounds::default().cell(50, 5, 100, 25))),
+        limit: 100,
+        ..Filter::default()
+    };
+    let (p50, p95) = measure(
+        || {
+            std::hint::black_box(store.search(&f).unwrap());
+            std::hint::black_box(store.search_count(&f).unwrap());
+        },
+        20,
+    );
+    eprintln!("map page P50={p50:.2}ms P95={p95:.2}ms");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let size: i64 = conn
+        .query_row(
+            "SELECT sum(pgsize) FROM dbstat WHERE name='station_geo'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    eprintln!("geography index {:.2} MiB", size as f64 / 1048576.0);
+}

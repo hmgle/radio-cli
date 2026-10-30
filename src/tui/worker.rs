@@ -58,6 +58,10 @@ pub(super) struct View {
     pub track_artwork: Option<crate::engine::artwork::TrackArtwork>,
     published: Option<(u64, Arc<View>)>,
     queries: Option<query::Sender>,
+    pub map_image: Option<Arc<super::map::Image>>,
+    pub map_request: Option<super::map::Request>,
+    pub map_error: Option<String>,
+    pub geo_revision: u64,
     store_revision: Option<(u64, u64)>,
     refresh_requested: bool,
     page_retry_at: Option<Instant>,
@@ -95,6 +99,23 @@ pub(super) struct View {
     pub recordings_total: usize,
 }
 impl View {
+    pub fn clear_map(&mut self) {
+        if let Some(queries) = &self.queries {
+            queries.cancel_map();
+        }
+        self.map_request = None;
+        self.map_image = None;
+        self.map_error = None;
+        self.revision += 1;
+    }
+    pub fn request_map(&mut self, request: super::map::Request) {
+        if let Some(queries) = &self.queries {
+            queries.map(request.clone());
+            self.map_request = Some(request);
+            self.map_error = None;
+        }
+    }
+
     pub fn new(status: Status) -> Self {
         Self {
             subtitles: crate::speech::Snapshot::default(),
@@ -102,6 +123,10 @@ impl View {
             track_artwork: None,
             published: None,
             queries: None,
+            map_image: None,
+            map_request: None,
+            map_error: None,
+            geo_revision: 0,
             store_revision: None,
             refresh_requested: false,
             page_retry_at: None,
@@ -428,7 +453,10 @@ pub(super) fn refresh_if_needed(
             return Ok(());
         }
     };
-    let data = view.lock().unwrap();
+    let mut data = view.lock().unwrap();
+    if data.store_revision != Some(revision) {
+        data.geo_revision = engine.store.geo_revision()?;
+    }
     let needed = data.refresh_requested
         || data.store_revision != Some(revision)
         || recording_ended
@@ -551,7 +579,9 @@ pub(super) fn execute(
             }
         }
         Command::Search(value) => {
-            let source = if value.history {
+            let source = if value.geo.is_some() {
+                super::state::Source::Explore
+            } else if value.history {
                 super::state::Source::History
             } else if value.favorites {
                 super::state::Source::Favorites

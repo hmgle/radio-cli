@@ -151,7 +151,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App, view: &View) {
 }
 
 struct ScreenLayout {
-    rects: [Rect; 5],
+    rects: [Rect; 6],
     bottom: Rect,
     shared: bool,
     task_main: bool,
@@ -169,7 +169,7 @@ fn screen_layout(
         height: area.height.saturating_sub(subtitle_height),
         ..area
     };
-    let mut rects = [Rect::default(); 5];
+    let mut rects = [Rect::default(); 6];
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -263,7 +263,7 @@ fn station_row(
 fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     let mut painted = None;
     let area = frame.area();
-    app.source_rows = [Rect::default(); 4];
+    app.source_rows = [Rect::default(); 5];
     app.filter_summary = Rect::default();
     app.update_size(area.width, area.height);
     if app.too_small {
@@ -280,7 +280,22 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     } else {
         0
     };
-    let layout = screen_layout(area, app.focus, view.task_active, subtitle_height);
+    let mut layout = screen_layout(area, app.focus, view.task_active, subtitle_height);
+    if app.source == Source::Explore && !layout.task_main {
+        if layout.shared {
+            layout.rects[Focus::Map.index()] = layout.rects[Focus::List.index()];
+        } else {
+            let list = layout.rects[Focus::List.index()];
+            let details = layout.rects[Focus::Details.index()];
+            let central = Rect::new(list.x, list.y, details.right() - list.x, list.height);
+            let columns =
+                Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .split(central);
+            layout.rects[Focus::Map.index()] = columns[0];
+            layout.rects[Focus::Details.index()] = columns[0];
+            layout.rects[Focus::List.index()] = columns[1];
+        }
+    }
     if subtitle_height > 0 {
         // Leave the command/hint bar at the bottom; place captions just above it.
         let rect = Rect {
@@ -458,7 +473,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         source_rect,
     );
     let inner = source_rect.inner(ratatui::layout::Margin::new(1, 1));
-    if source_rect.height >= 6 {
+    if source_rect.height >= 7 {
         for source in Source::ALL {
             let rect = Rect::new(inner.x, inner.y + source.index() as u16, inner.width, 1);
             app.source_rows[source.index()] = rect;
@@ -489,7 +504,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     } else {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 4); 4])
+            .constraints([Constraint::Ratio(1, 5); 5])
             .split(inner);
         for source in Source::ALL {
             let rect = columns[source.index()];
@@ -509,12 +524,47 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             );
         }
     }
-    let show_details = !layout.task_main && (!layout.shared || app.focus == Focus::Details);
-    if !layout.task_main && (!layout.shared || app.focus != Focus::Details) {
+    let explore = app.source == Source::Explore;
+    if explore
+        && !layout.task_main
+        && app.focus != Focus::Details
+        && (!layout.shared || app.focus != Focus::List || app.map.chooser)
+    {
+        let map_image = view.map_image.as_ref().filter(|i| {
+            app.map
+                .submitted
+                .as_ref()
+                .is_some_and(|(request, revision)| {
+                    request == &i.request && *revision == view.geo_revision
+                })
+        });
+        super::map::draw(
+            frame,
+            &mut app.map,
+            map_image,
+            view.map_error.as_deref(),
+            app.rects[Focus::Map.index()],
+            active(Focus::Map),
+            app.theme,
+        );
+    } else {
+        app.map.area = Rect::default();
+    }
+    let show_details = !layout.task_main
+        && (if explore {
+            app.focus == Focus::Details
+        } else {
+            !layout.shared || app.focus == Focus::Details
+        });
+    if !layout.task_main
+        && (!layout.shared
+            || (app.focus != Focus::Details
+                && (!explore || (app.focus == Focus::List && !app.map.chooser))))
+    {
         let title = crate::t!(
             "list_title",
             "prefix" => if layout.shared { crate::t!("list_shared") } else { "2" },
-            "source" => app.source.label(),
+            "source" => if app.filter.geo==Some(crate::geo::GeoFilter::Missing) {crate::t!("explore_missing")}else{app.source.label()},
             "count" => app.length(view),
             "total" => if app.source == Source::Recordings {
                 view.recordings_total
@@ -1108,6 +1158,7 @@ fn empty_hint(app: &App) -> &'static str {
         Source::Stations => crate::t!("empty_stations"),
         Source::Favorites => crate::t!("empty_favorites"),
         Source::History => crate::t!("empty_history"),
+        Source::Explore => crate::t!("explore_empty"),
     }
 }
 
@@ -1325,6 +1376,7 @@ pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {
         (_, Focus::Details) => crate::t!("context_details"),
         (_, Focus::Player) => crate::t!("context_player"),
         (_, Focus::Activity) => crate::t!("context_activity"),
+        (_, Focus::Map) => crate::t!("context_map"),
     }
 }
 

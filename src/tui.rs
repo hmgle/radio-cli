@@ -3,6 +3,7 @@ mod capabilities;
 mod command;
 mod display;
 mod help;
+mod map;
 mod output;
 mod render;
 mod state;
@@ -124,6 +125,7 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
             }
             app.request_selected_backups(&snapshot, &sender);
             app.request_facets(&sender);
+            dirty |= app.update_map(&mut view.lock().unwrap(), &snapshot, &sender);
             if dirty
                 || revision != snapshot.revision
                     && (immediate_revision != snapshot.immediate_revision

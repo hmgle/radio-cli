@@ -264,6 +264,10 @@ help_nav_title = "Navigation"
 help_nav = """
 Tab / Shift-Tab\tSwitch panels
 1–5\tFocus a panel
+6\tFocus the Explore map; Enter switches to results
+z / Z / 0 (map)\tZoom in / out / return to world
+hjkl / arrows (map)\tMove the map cursor; pan at the viewport edge
+c (Explore)\tBrowse stations without coordinates by country/region; Esc returns to the map
 Left / Right or h / l\tSwitch panels sideways
 Ctrl-h/j/k/l or Ctrl-arrows\tSwitch panels by direction
 [ / ]\tSwitch category (each remembers its page and row)
@@ -323,6 +327,7 @@ help_commands = """
 :info [UUID]\tInspect a station
 :current\tInspect the playing station
 :favorites list|add|remove [UUID]\t
+:explore\tOpen the offline world map
 :history\tRecent plays
 :recordings list\tRecording records
 :recordings play ID / :recordings remove ID [--index-only]\t
@@ -341,7 +346,7 @@ The last 100 commands persist in command-history.json in the data directory
 :subtitles on|off|toggle|history|clear|retry\tControl live subtitles and session history
 :set subtitles.model ID\tChange the session subtitle model
 :doctor\tCheck media tools and directory permissions
-:focus sources|list|details|player|activity\t
+:focus sources|list|details|player|activity|map\t
 :quit / :q\tFinalize and quit
 """
 help_mouse_title = "Mouse"
@@ -419,7 +424,7 @@ command_unknown_help = "Unknown command: {word}"
 command_unknown = "Unknown TUI command; :help shows usage"
 command_usage_set = "Usage: set language en|zh-CN / set mouse true|false / set subtitles.model ID"
 command_usage_volume = "Usage: volume <0–100>"
-command_usage_focus = "Usage: focus sources|list|details|player|activity"
+command_usage_focus = "Usage: focus sources|list|details|player|activity|map"
 command_process_options = "TUI commands do not accept process-level options"
 command_paging = "The TUI pages with PgUp/PgDn; --all is for CLI export only"
 language_set = "Language set to {language}"
@@ -450,3 +455,17 @@ subtitle_interrupted = "Capture interrupted"
 subtitle_usage = "Usage: :subtitles on|off|toggle|history|clear|retry"
 subtitle_decoding = "Recognizing speech · delayed subtitles"
 subtitle_connection = "Subtitle connection ended; use :subtitles retry"
+
+focus_map = "Map"
+source_explore = "Explore"
+source_explore_short = "Map"
+explore_title = "6 Explore · {zoom}×"
+explore_small = "Enlarge the terminal to explore the map"
+explore_countries = "Without coordinates · ↑/↓ Enter · Esc"
+explore_unknown = "Unknown country/region"
+explore_count = "{count} stations in cell"
+explore_loading = "Loading map…"
+explore_empty = "No stations in this cell. Move or zoom the map; press c to browse stations without coordinates. Run :sync to refresh geographic metadata."
+context_map = "hjkl/arrows move · z/Z zoom · 0 world · Enter list · c without coordinates"
+
+explore_missing = "Stations without coordinates"

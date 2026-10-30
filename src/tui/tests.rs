@@ -1362,6 +1362,8 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
     let mut job = None;
     for source in Source::ALL {
         let value = Filter {
+            geo: (source == Source::Explore)
+                .then_some(crate::geo::GeoFilter::Cell(crate::geo::GeoBounds::default())),
             favorites: source == Source::Favorites,
             history: source == Source::History,
             limit: 100,
@@ -6129,5 +6131,134 @@ fn source_preference_write_failure_does_not_block_list_queries() {
         if !recordings {
             assert_eq!(data.rows.len(), 1);
         }
+    }
+}
+
+#[test]
+fn explore_click_selects_exact_cell_without_playing_and_ignores_gutters() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let data = view();
+    let (sender, receiver) = command::channel(20);
+    let mut app = App::default();
+    app.source = Source::Explore;
+    app.focus = Focus::Map;
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let area = app.map.area;
+    assert!(area.width > 0);
+    let point = app.map.point(area.x + 2, area.y + 2);
+    let expected = app.map.bounds.cell(2, 2, app.map.size.0, app.map.size.1);
+    let click = |x, y| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(click(area.x + 2, area.y + 2), &data, &sender);
+    assert_eq!(app.map.cursor, point);
+    assert_eq!(app.filter.geo, Some(crate::geo::GeoFilter::Cell(expected)));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
+    assert!(receiver.try_recv().is_err());
+    app.mouse(click(area.x - 1, area.y), &data, &sender);
+    assert!(receiver.try_recv().is_err());
+    for code in [KeyCode::Char('z'), KeyCode::Char('Z'), KeyCode::Char('0')] {
+        app.focus = Focus::Map;
+        app.key(key(code), &data, &sender);
+    }
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
+    let mut data = view();
+    let (sender, receiver) = command::channel(20);
+    let mut app = App::default();
+    app.source = Source::Explore;
+    app.focus = Focus::Map;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(app.map.area.width > 0);
+    let request = super::map::Request {
+        filter: Filter::default(),
+        bounds: crate::geo::GeoBounds::default(),
+        columns: 1,
+        rows: 1,
+    };
+    data.map_image = Some(Arc::new(super::map::Image {
+        request,
+        land: Arc::new(vec![' ']),
+        counts: vec![0],
+        countries: vec![crate::model::Facet {
+            value: String::new(),
+            count: 2,
+        }],
+    }));
+    app.key(key(KeyCode::Char('c')), &data, &sender);
+    assert!(app.map.chooser);
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert_eq!(app.filter.geo, Some(crate::geo::GeoFilter::Missing));
+    assert_eq!(app.filter.country.as_deref(), Some(""));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert_eq!(app.focus, Focus::Map);
+    assert!(matches!(
+        app.filter.geo,
+        Some(crate::geo::GeoFilter::Cell(_))
+    ));
+    assert_eq!(app.filter.country, None);
+    app.key(key(KeyCode::Char('2')), &data, &sender);
+    assert_eq!(app.focus, Focus::List);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(app.map.area, ratatui::layout::Rect::default());
+}
+
+#[test]
+fn explore_layout_snapshots_show_map_and_narrow_focus() {
+    for (width, height) in [(80, 24), (160, 48)] {
+        let mut app = App::default();
+        app.source = Source::Explore;
+        app.focus = Focus::Map;
+        let mut data = view();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let request = super::map::Request {
+            filter: Filter::default(),
+            bounds: app.map.bounds,
+            columns: app.map.size.0,
+            rows: app.map.size.1,
+        };
+        let mut counts = vec![0; request.columns * request.rows];
+        for (lat, lon) in [(48.85, 2.35), (31.2, 121.5), (40.7, -74.0)] {
+            let (x, y) = crate::geo::coordinates(Some(lat), Some(lon)).unwrap();
+            let (x, y) = request
+                .bounds
+                .project(x, y, request.columns, request.rows)
+                .unwrap();
+            counts[y * request.columns + x] += 1;
+        }
+        app.map.submitted = Some((request.clone(), data.geo_revision));
+        data.map_image = Some(Arc::new(super::map::Image {
+            land: Arc::new(super::map::raster(
+                request.bounds,
+                request.columns,
+                request.rows,
+            )),
+            counts,
+            countries: vec![],
+            request,
+        }));
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let rendered = text(&terminal)
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/snapshots/{width}x{height}-explore.txt"));
+        if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
+            std::fs::write(&path, &rendered).unwrap();
+        }
+        assert_eq!(rendered, std::fs::read_to_string(path).unwrap());
     }
 }

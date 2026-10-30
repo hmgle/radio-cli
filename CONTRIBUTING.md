@@ -140,6 +140,23 @@ sorting case, counts, station location, facets, URL checks, and migration cost.
 It also reports index sizes. Run on an otherwise idle machine; its five-sample
 P95 is the slowest observed sample and is sensitive to other disk and CPU work.
 
+For offline map measurements, run:
+
+```sh
+cargo test --release --test catalog_perf geographic_catalog_benchmark -- --ignored --nocapture
+cargo test --release --lib map_raster_benchmark -- --ignored --nocapture
+RADIO_MAP_BENCH_DB=/tmp/radio-map/radio.db cargo test --release --test catalog_perf geographic_catalog_benchmark -- --ignored --nocapture
+uv run scripts/measure_map_resources.py --binary target/release/radio --data-dir /tmp/radio-map
+```
+
+Create `/tmp/radio-map` before requesting a persistent fixture. Use an isolated
+data directory: resource sampling writes session preferences. The geography
+fixture uses 200,000 local stations, including dense city coordinates and points
+near the date line. The resource sampler requires Linux `/proc`; SQL and raster
+benchmarks also run on macOS. Compare results on an idle machine. The map source,
+checksum, and binary format are recorded in `src/tui/map/SOURCE.txt`; regenerate
+with `uv run scripts/generate-map.py` when deliberately updating the land data.
+
 ## Commits
 
 Short, imperative subject lines in the style of the existing history, e.g.
