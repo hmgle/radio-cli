@@ -6286,15 +6286,24 @@ fn explore_refresh_keeps_the_matching_map_visible_and_resubmits_once() {
         request,
     }));
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
-    let before = terminal.backend().buffer().clone();
     assert!(!text(&terminal).contains(crate::t!("explore_loading")));
     assert!(!app.update_map(&mut live, &data, &sender));
 
+    // Moving within the viewport retains the density grid but debounces reads.
+    // Hold the deadline explicitly so the assertion cannot race slow CI hosts.
+    app.key(key(KeyCode::Right), &data, &sender);
+    app.map.deadline = Some(Instant::now() + Duration::from_secs(60));
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let before = terminal.backend().buffer().clone();
     app.key(key(KeyCode::F(5)), &data, &sender);
     assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
     assert_eq!(app.map.submitted, submitted);
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     assert_eq!(terminal.backend().buffer(), &before);
+    assert!(!app.update_map(&mut live, &data, &sender));
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(terminal.backend().buffer(), &before);
+    app.map.deadline = Some(Instant::now());
     assert!(app.update_map(&mut live, &data, &sender));
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     assert_eq!(terminal.backend().buffer(), &before);
