@@ -1684,7 +1684,8 @@ impl App {
             return;
         }
         if key.code == KeyCode::F(5) {
-            self.map.submitted = None;
+            // Keep the matching image visible until the replacement arrives.
+            self.map.refresh_requested = true;
         }
         if self.jump_key(key, view, sender) {
             return;
@@ -2184,6 +2185,7 @@ impl App {
     }
     pub fn update_map(&mut self, live: &mut View, view: &View, sender: &CommandSender) -> bool {
         if self.source != Source::Explore {
+            self.map.refresh_requested = false;
             if self.map.submitted.take().is_some() {
                 live.clear_map();
                 return true;
@@ -2231,7 +2233,9 @@ impl App {
             countries: self.map.chooser || self.map.country_origin.is_some(),
         };
         let key = (request.clone(), view.geo_revision);
-        if self.map.submitted.as_ref() != Some(&key) {
+        if std::mem::take(&mut self.map.refresh_requested)
+            || self.map.submitted.as_ref() != Some(&key)
+        {
             live.request_map(request);
             self.map.submitted = Some(key);
             changed = true;

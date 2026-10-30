@@ -6265,6 +6265,50 @@ fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
 }
 
 #[test]
+fn explore_refresh_keeps_the_matching_map_visible_and_resubmits_once() {
+    let mut data = view();
+    let mut live = data.clone();
+    let (sender, receiver) = command::channel(20);
+    let mut app = App::default();
+    app.source = Source::Explore;
+    app.focus = Focus::Map;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(app.update_map(&mut live, &data, &sender));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
+    let submitted = app.map.submitted.clone();
+    let request = submitted.as_ref().unwrap().0.clone();
+    data.map_image = Some(Arc::new(super::map::Image {
+        revision: data.geo_revision,
+        land: Arc::new(vec!['⠿'; request.columns * request.rows]),
+        counts: vec![1; request.columns * request.rows],
+        countries: vec![],
+        request,
+    }));
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let before = terminal.backend().buffer().clone();
+    assert!(!text(&terminal).contains(crate::t!("explore_loading")));
+    assert!(!app.update_map(&mut live, &data, &sender));
+
+    app.key(key(KeyCode::F(5)), &data, &sender);
+    assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
+    assert_eq!(app.map.submitted, submitted);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(terminal.backend().buffer(), &before);
+    assert!(app.update_map(&mut live, &data, &sender));
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(terminal.backend().buffer(), &before);
+    assert!(!app.update_map(&mut live, &data, &sender));
+    assert!(receiver.try_recv().is_err());
+
+    // A changed filter must still hide the old filter's density counts.
+    app.filter.language = Some("french".into());
+    assert!(app.update_map(&mut live, &data, &sender));
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains(crate::t!("explore_loading")));
+}
+
+#[test]
 fn explore_country_chooser_shows_loading_until_country_data_arrives() {
     let mut data = view();
     let (sender, receiver) = command::channel(20);
