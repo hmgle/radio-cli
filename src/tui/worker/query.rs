@@ -1212,6 +1212,52 @@ mod map_tests {
         time::{Duration, Instant},
     };
     #[test]
+    fn urgent_request_interrupts_an_active_map_sql_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        // A temporary view supplies a long scan without a large disk fixture.
+        store.test_connection().execute_batch(
+            "CREATE TEMP VIEW stations AS
+            WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000000)
+            SELECT 1 AS active,180000000 AS geo_x,90000000 AS geo_y,',english,' AS languages FROM n;"
+        ).unwrap();
+        let shared = Arc::new(Shared {
+            pending: Mutex::new(Pending::default()),
+            ready: Condvar::new(),
+            stop: AtomicBool::new(false),
+            interrupt: store.interrupt_handle(),
+            before_read: Mutex::new(None),
+        });
+        let cancellation = shared.clone();
+        let mut callbacks = 0;
+        store.cancel_queries_when(move || {
+            callbacks += 1;
+            if callbacks == 10 {
+                cancellation.pending.lock().unwrap().facets = Some((1, 0, String::new()));
+            }
+            map_cancelled(&cancellation, 0)
+        });
+        let request = super::super::super::map::Request {
+            filter: Filter {
+                language: Some("english".into()),
+                ..Filter::default()
+            },
+            bounds: crate::geo::GeoBounds::default(),
+            columns: 80,
+            rows: 20,
+            countries: false,
+        };
+        let error = Reader::default()
+            .map(&store, &request, None, || map_cancelled(&shared, 0))
+            .err()
+            .expect("map scan should be interrupted");
+        assert!(shared.pending.lock().unwrap().urgent());
+        assert!(
+            matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(code, _)) if code.code == rusqlite::ErrorCode::OperationInterrupted)
+        );
+    }
+
+    #[test]
     fn country_counts_are_read_only_when_requested_and_follow_catalog_revisions() {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         let dir = tempfile::tempdir().unwrap();
