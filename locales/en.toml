@@ -296,7 +296,7 @@ help_find_title = "Search and filters"
 help_find = """
 /\tSearch stations (Enter confirms, Esc restores the previous query, page and selection)
 F\tFilters (type to narrow · Up/Down candidates · Tab/Shift-Tab field · Enter applies · Esc closes)
-Ctrl-U\tIn the filter popup: clear search and filters
+Ctrl-U\tIn the filter popup: clear search and filters; Explore keeps the selected map cell
 """
 help_general_title = "General"
 help_general = """

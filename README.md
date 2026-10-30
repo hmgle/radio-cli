@@ -161,6 +161,10 @@ empty sea cells use a single Braille dot. The selected cell uses a large circle
 (`●`) while retaining its density color. Monochrome mode underlines station
 cells and keeps the selected-cell count without colors.
 
+Explore includes active catalog and custom stations; inactive favorites remain
+available in Favorites. Clearing search and filters keeps the selected map cell;
+press `0` with map focus to return to the world view.
+
 Search and filters apply to the map and results. Press `c` to browse stations
 without coordinates by country/region, then `Esc` to return to the map. Run
 `radio sync` after upgrading to populate coordinates; older catalogs have none.

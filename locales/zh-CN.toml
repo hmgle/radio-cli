@@ -295,7 +295,7 @@ help_find_title = "搜索与筛选"
 help_find = """
 /\t搜索电台（Enter 确认，Esc 恢复原查询、页和选中项）
 F\t筛选对话框（键入过滤 · Up/Down 候选 · Tab/Shift-Tab 切换字段 · Enter 应用 · Esc 关闭）
-Ctrl-U\t筛选窗内：清空搜索与筛选
+Ctrl-U\t筛选窗内：清空搜索与筛选；地图探索保留所选网格
 """
 help_general_title = "通用"
 help_general = """

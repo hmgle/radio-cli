@@ -6257,6 +6257,32 @@ fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
 }
 
 #[test]
+fn clearing_explore_filters_keeps_the_selected_cell() {
+    let data = view();
+    let (sender, receiver) = command::channel(20);
+    let mut app = App::default();
+    app.source = Source::Explore;
+    let cell = crate::geo::GeoFilter::Cell(app.map.cell());
+    app.filter.geo = Some(cell);
+    app.filter.query = "jazz".into();
+    app.filter.country = Some("FR".into());
+    app.filter.min_bitrate = 128;
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    app.key(
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        &data,
+        &sender,
+    );
+    let Ok(Command::Search(filter)) = receiver.try_recv() else {
+        panic!("expected filter refresh")
+    };
+    assert_eq!(filter.geo, Some(cell));
+    assert!(filter.query.is_empty());
+    assert_eq!(filter.country, None);
+    assert_eq!(filter.min_bitrate, 0);
+}
+
+#[test]
 fn explore_layout_snapshots_show_map_and_narrow_focus() {
     for (width, height) in [(80, 24), (160, 48)] {
         let mut app = App::default();
