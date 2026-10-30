@@ -93,20 +93,36 @@ impl State {
         self.cursor = anchor;
     }
     pub fn step(&mut self, dx: i64, dy: i64) {
-        let sx = (self.bounds.width / self.size.0 as i64).max(1);
-        let sy = (self.bounds.height / self.size.1 as i64).max(1);
-        self.cursor = (
-            (self.cursor.0 + dx * sx).rem_euclid(WORLD_WIDTH),
-            (self.cursor.1 + dy * sy).clamp(0, WORLD_HEIGHT - 1),
-        );
-        if self
+        let (col, row) = self
             .bounds
             .project(self.cursor.0, self.cursor.1, self.size.0, self.size.1)
-            .is_none()
-        {
-            self.bounds.x = (self.bounds.x + dx * sx).rem_euclid(WORLD_WIDTH);
-            self.bounds.y = (self.bounds.y + dy * sy).clamp(0, WORLD_HEIGHT - self.bounds.height);
+            .unwrap_or((0, 0));
+        let columns = self.size.0 as i64;
+        let rows = self.size.1 as i64;
+        let mut col = col as i64 + dx;
+        let row = row as i64 + dy;
+        if self.bounds.width == WORLD_WIDTH {
+            col = col.rem_euclid(columns);
+        } else if !(0..columns).contains(&col) {
+            let step = (self.bounds.width + columns - 1) / columns;
+            self.bounds.x = (self.bounds.x + dx * step).rem_euclid(WORLD_WIDTH);
         }
+        if !(0..rows).contains(&row) {
+            let step = (self.bounds.height + rows - 1) / rows;
+            self.bounds.y = (self.bounds.y + dy * step).clamp(0, WORLD_HEIGHT - self.bounds.height);
+        }
+        // Move by cells, whose widths can differ by one microdegree, instead
+        // of accumulating a truncated distance that can leave the cursor behind.
+        let cell = self.bounds.cell(
+            col.clamp(0, columns - 1) as usize,
+            row.clamp(0, rows - 1) as usize,
+            self.size.0,
+            self.size.1,
+        );
+        self.cursor = (
+            (cell.x + cell.width / 2) % WORLD_WIDTH,
+            cell.y + cell.height / 2,
+        );
     }
     pub fn point(&self, col: u16, row: u16) -> (i64, i64) {
         let cell = self.bounds.cell(
@@ -406,6 +422,44 @@ pub(super) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn arrows_advance_exactly_one_cell_on_uneven_grids() {
+        for (columns, rows) in [(68, 17), (76, 19), (319, 79)] {
+            let mut state = State {
+                size: (columns, rows),
+                ..State::default()
+            };
+            let start = state
+                .bounds
+                .project(state.cursor.0, state.cursor.1, columns, rows)
+                .unwrap();
+            for step in 1..=columns * 2 {
+                state.step(1, 0);
+                assert_eq!(
+                    state
+                        .bounds
+                        .project(state.cursor.0, state.cursor.1, columns, rows),
+                    Some(((start.0 + step) % columns, start.1))
+                );
+            }
+            for step in 1..=rows {
+                state.step(0, 1);
+                assert_eq!(
+                    state
+                        .bounds
+                        .project(state.cursor.0, state.cursor.1, columns, rows),
+                    Some((start.0, (start.1 + step).min(rows - 1)))
+                );
+            }
+            state.step(-1, -1);
+            assert_eq!(
+                state
+                    .bounds
+                    .project(state.cursor.0, state.cursor.1, columns, rows),
+                Some(((start.0 + columns - 1) % columns, rows - 2))
+            );
+        }
+    }
     #[test]
     fn density_colors_preserve_braille_subpixels_in_every_theme() {
         use crate::config::Theme;

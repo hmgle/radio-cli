@@ -6169,6 +6169,41 @@ fn explore_click_selects_exact_cell_without_playing_and_ignores_gutters() {
 }
 
 #[test]
+fn explore_directional_focus_skips_the_hidden_details_panel() {
+    let data = view();
+    let (sender, _receiver) = command::channel(20);
+    let mut app = App::default();
+    app.source = Source::Explore;
+    app.focus = Focus::List;
+    let mut terminal = Terminal::new(TestBackend::new(160, 48)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.key(
+        KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.focus, Focus::Map);
+    app.key(
+        KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.focus, Focus::Sources);
+    app.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.focus, Focus::Map);
+    app.key(
+        KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL),
+        &data,
+        &sender,
+    );
+    assert_eq!(app.focus, Focus::List);
+}
+
+#[test]
 fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
     let mut data = view();
     let (sender, receiver) = command::channel(20);

@@ -1003,6 +1003,18 @@ impl App {
         if let Some((_, focus)) = Focus::ALL
             .iter()
             .filter(|f| **f != self.focus)
+            .filter(|f| {
+                if self.source == Source::Explore {
+                    // Details replace the map only while explicitly focused.
+                    **f != if self.focus == Focus::Details {
+                        Focus::Map
+                    } else {
+                        Focus::Details
+                    }
+                } else {
+                    **f != Focus::Map
+                }
+            })
             .filter_map(|f| {
                 let rect = self.rects[f.index()];
                 let a = i32::from(rect.x) * 2 + i32::from(rect.width) - x;
