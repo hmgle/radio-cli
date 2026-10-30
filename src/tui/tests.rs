@@ -6243,6 +6243,14 @@ fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
     assert_eq!(app.filter.geo, Some(crate::geo::GeoFilter::Missing));
     assert_eq!(app.filter.country.as_deref(), Some(""));
     assert!(matches!(receiver.try_recv(), Ok(Command::Search(_))));
+    app.key(key(KeyCode::Char('c')), &data, &sender);
+    assert!(app.map.chooser);
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(!app.map.chooser);
+    assert!(app.map.country_origin.is_some());
+    assert_eq!(app.filter.geo, Some(crate::geo::GeoFilter::Missing));
+    assert_eq!(app.filter.country.as_deref(), Some(""));
+    assert!(receiver.try_recv().is_err());
     app.key(key(KeyCode::Esc), &data, &sender);
     assert_eq!(app.focus, Focus::Map);
     assert!(matches!(
@@ -6254,6 +6262,50 @@ fn explore_narrow_layout_and_country_selection_remain_keyboard_accessible() {
     assert_eq!(app.focus, Focus::List);
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     assert_eq!(app.map.area, ratatui::layout::Rect::default());
+}
+
+#[test]
+fn explore_country_chooser_shows_loading_until_country_data_arrives() {
+    let mut data = view();
+    let (sender, receiver) = command::channel(20);
+    let mut app = App::default();
+    app.source = Source::Explore;
+    app.focus = Focus::Map;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let request = super::map::Request {
+        filter: Filter::default(),
+        bounds: app.map.bounds,
+        columns: app.map.size.0,
+        rows: app.map.size.1,
+        countries: false,
+    };
+    app.map.submitted = Some((request.clone(), data.geo_revision));
+    data.map_image = Some(Arc::new(super::map::Image {
+        revision: data.geo_revision,
+        land: Arc::new(vec![' '; request.columns * request.rows]),
+        counts: vec![0; request.columns * request.rows],
+        countries: vec![],
+        request,
+    }));
+    app.key(key(KeyCode::Char('c')), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains(crate::t!("explore_loading")));
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(app.map.chooser);
+    assert!(receiver.try_recv().is_err());
+
+    data.map_error = Some("country query failed".into());
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("country query failed"));
+    data.map_error = None;
+    // A completed request with no countries is an empty result, not loading.
+    Arc::make_mut(data.map_image.as_mut().unwrap())
+        .request
+        .countries = true;
+    app.map.submitted.as_mut().unwrap().0.countries = true;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(!text(&terminal).contains(crate::t!("explore_loading")));
 }
 
 #[test]

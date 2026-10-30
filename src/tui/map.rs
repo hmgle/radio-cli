@@ -318,7 +318,7 @@ pub(super) fn draw(
             .country_index
             .saturating_sub(inner.height.saturating_sub(2) as usize);
         let mut lines = vec![crate::t!("explore_countries").to_string()];
-        if image.is_none() {
+        if image.is_none_or(|image| !image.request.countries) {
             lines.push(
                 error
                     .map(crate::clean_text)

@@ -2245,12 +2245,6 @@ impl App {
         if self.source != Source::Explore {
             return false;
         }
-        if key.code == KeyCode::Esc && self.map.country_origin.is_some() {
-            self.filter.country = self.map.country_origin.take().unwrap();
-            self.focus = Focus::Map;
-            self.apply_map_selection(sender);
-            return true;
-        }
         if self.map.chooser {
             let countries = view
                 .map_image
@@ -2291,6 +2285,12 @@ impl App {
                 }
                 _ => return false,
             }
+            return true;
+        }
+        if key.code == KeyCode::Esc && self.map.country_origin.is_some() {
+            self.filter.country = self.map.country_origin.take().unwrap();
+            self.focus = Focus::Map;
+            self.apply_map_selection(sender);
             return true;
         }
         if key.code == KeyCode::Char('c') {
