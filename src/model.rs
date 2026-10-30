@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Station {
+    #[serde(deserialize_with = "coordinate")]
+    pub geo_lat: Option<f64>,
+    #[serde(deserialize_with = "coordinate")]
+    pub geo_long: Option<f64>,
     pub stationuuid: String,
     pub name: String,
     pub url: String,
@@ -65,6 +69,7 @@ impl Station {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
+    pub geo: Option<crate::geo::GeoFilter>,
     pub sort: Sort,
     pub query: String,
     pub country: Option<String>,
@@ -127,4 +132,10 @@ pub struct Recording {
     pub reconnects: u64,
     #[serde(default)]
     pub recovery_pending: bool,
+}
+
+// Bad geographic metadata must not discard an otherwise usable station.
+fn coordinate<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_f64().filter(|n| n.is_finite()))
 }

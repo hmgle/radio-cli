@@ -107,3 +107,5 @@ stderr. Subtitle codes are `subtitle_settings`, `subtitle_model` (parameter
 in bytes including reserve), `subtitle_busy`, and `subtitle_failed` (`detail`),
 all exit 1. There is no CLI transcription
 stream in this version.
+
+Station objects include nullable `geo_lat` and `geo_long` coordinates. Older records default to `null`; run `sync` to populate coordinates provided by the directory. The map uses complete, valid coordinate pairs without inferring locations.

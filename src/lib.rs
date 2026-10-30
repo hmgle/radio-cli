@@ -4,6 +4,7 @@ pub mod config;
 pub mod directory;
 pub mod engine;
 pub mod error;
+pub mod geo;
 pub mod messages;
 pub mod model;
 pub mod player;

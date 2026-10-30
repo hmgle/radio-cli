@@ -921,6 +921,7 @@ mod tests {
             CREATE TABLE stations (uuid TEXT PRIMARY KEY,name TEXT NOT NULL,search TEXT NOT NULL,
                 country TEXT NOT NULL,languages TEXT NOT NULL,tags TEXT NOT NULL,bitrate INTEGER NOT NULL,
                 popularity INTEGER NOT NULL,custom INTEGER NOT NULL,active INTEGER NOT NULL,json TEXT NOT NULL);
+            CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
             PRAGMA user_version=1;").unwrap();
         conn.execute(
             "INSERT INTO recordings VALUES (?1,?2,?3)",
@@ -939,7 +940,7 @@ mod tests {
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                 .unwrap(),
-            5
+            6
         );
     }
 

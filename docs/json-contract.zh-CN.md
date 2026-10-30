@@ -95,3 +95,5 @@ radio --lang en --json-v2 info missing    # station_not_found；退出码 1
 `subtitle_platform`（`platform`）、`subtitle_space`（`available`、`required`，
 以字节为单位且包含预留空间）、`subtitle_busy`、
 `subtitle_failed`（`detail`），退出码均为 1。此版本不提供 CLI 转写数据流。
+
+Station 对象新增可空的 `geo_lat`、`geo_long` 经纬度字段。旧数据缺失时为 `null`；运行 `sync` 可补齐上游提供的坐标。地图仅使用完整、有效的坐标对，不推测位置。

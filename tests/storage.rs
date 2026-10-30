@@ -762,6 +762,7 @@ fn url_index_backfills_legacy_rows_without_rejecting_shared_directory_urls() {
         DROP TABLE station_search_stats; DROP TABLE station_search_terms; DROP TABLE station_search; DROP INDEX station_sort; DROP INDEX station_name; DROP INDEX station_bitrate;
         DROP INDEX station_active; DROP INDEX station_directory;
         DROP TABLE facets_cache; DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
+    conn.execute_batch("DROP INDEX station_geo; ALTER TABLE stations DROP COLUMN geo_x; ALTER TABLE stations DROP COLUMN geo_y; DELETE FROM meta WHERE key='geo_revision';").unwrap();
     drop(conn);
     store = Store::open(&path).unwrap();
     assert_eq!(store.directory_count().unwrap(), 2);
@@ -1027,6 +1028,7 @@ fn migrations_from_intermediate_versions_preserve_derived_data() {
         if version == 3 {
             conn.execute_batch("DROP TABLE facets_cache;").unwrap();
         }
+        conn.execute_batch("DROP INDEX station_geo; ALTER TABLE stations DROP COLUMN geo_x; ALTER TABLE stations DROP COLUMN geo_y; DELETE FROM meta WHERE key='geo_revision';").unwrap();
         conn.pragma_update(None, "user_version", version).unwrap();
         drop(conn);
         let store = Store::open(&path).unwrap();
@@ -1100,4 +1102,117 @@ fn stale_trigram_statistics_do_not_exclude_new_or_edited_matches() {
             row.stationuuid
         );
     }
+}
+
+#[test]
+fn geographic_grid_filters_and_catalog_revisions_stay_consistent() {
+    use radio_cli::geo::{GeoBounds, GeoFilter};
+    let (_dir, store) = db();
+    let initial = store.geo_revision().unwrap();
+    let mut mapped = station("mapped");
+    mapped.geo_lat = Some(0.0);
+    mapped.geo_long = Some(180.0);
+    store.upsert(&mapped).unwrap();
+    let missing = station("missing");
+    store.upsert(&missing).unwrap();
+    assert_eq!(
+        store.station(&mapped.stationuuid).unwrap().geo_long,
+        Some(180.0)
+    );
+    let revision = store.geo_revision().unwrap();
+    assert!(revision > initial);
+    store.played(&mapped.stationuuid).unwrap();
+    store.favorite(&mapped.stationuuid, true).unwrap();
+    assert_eq!(revision, store.geo_revision().unwrap());
+    let world = GeoBounds::default();
+    let counts = store
+        .geo_counts(&Filter::default(), world, 7, 3, || false)
+        .unwrap();
+    assert_eq!(counts.iter().sum::<u32>(), 1);
+    for row in 0..3 {
+        for col in 0..7 {
+            let f = Filter {
+                geo: Some(GeoFilter::Cell(world.cell(col, row, 7, 3))),
+                limit: 100,
+                ..Filter::default()
+            };
+            assert_eq!(
+                store.search_count(&f).unwrap(),
+                counts[row * 7 + col] as usize
+            );
+        }
+    }
+    let f = Filter {
+        geo: Some(GeoFilter::Missing),
+        limit: 100,
+        ..Filter::default()
+    };
+    assert_eq!(store.search(&f).unwrap()[0].name, "missing");
+    assert_eq!(
+        store.geo_missing_countries(&Filter::default()).unwrap()[0].count,
+        1
+    );
+    mapped.geo_lat = None;
+    store.upsert(&mapped).unwrap();
+    assert_eq!(
+        store
+            .geo_counts(&Filter::default(), world, 7, 3, || false)
+            .unwrap()
+            .iter()
+            .sum::<u32>(),
+        0
+    );
+}
+
+#[test]
+fn invalid_geography_does_not_discard_station_metadata() {
+    for value in [
+        serde_json::json!(null),
+        serde_json::json!("bad"),
+        serde_json::json!({"bad":true}),
+    ] {
+        let s: Station =
+            serde_json::from_value(serde_json::json!({"name":"valid","geo_lat":value})).unwrap();
+        assert_eq!(s.name, "valid");
+        assert_eq!(s.geo_lat, None);
+    }
+    assert!(radio_cli::geo::coordinates(Some(91.0), Some(0.0)).is_none());
+    assert!(radio_cli::geo::coordinates(Some(f64::NAN), Some(0.0)).is_none());
+}
+
+#[test]
+fn version_five_geography_backfills_and_sync_publishes_atomically() {
+    use radio_cli::geo::GeoBounds;
+    let (dir, store) = db();
+    let mut s = station("old");
+    s.geo_lat = Some(25.0);
+    s.geo_long = Some(170.0);
+    store.upsert(&s).unwrap();
+    drop(store);
+    let path = dir.path().join("radio.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP INDEX station_geo; ALTER TABLE stations DROP COLUMN geo_x; ALTER TABLE stations DROP COLUMN geo_y; DELETE FROM meta WHERE key='geo_revision'; PRAGMA user_version=5;").unwrap();
+    drop(conn);
+    let mut store = Store::open(&path).unwrap();
+    let counts = |store: &Store| {
+        store
+            .geo_counts(&Filter::default(), GeoBounds::default(), 100, 25, || false)
+            .unwrap()
+    };
+    assert_eq!(counts(&store).iter().sum::<u32>(), 1);
+    let before = counts(&store);
+    let revision = store.geo_revision().unwrap();
+    store.begin_sync().unwrap();
+    s.geo_long = Some(-120.0);
+    store.stage(&[s.clone()]).unwrap();
+    assert_eq!(counts(&store), before);
+    assert_eq!(store.geo_revision().unwrap(), revision);
+    store.finish_sync().unwrap();
+    assert_ne!(counts(&store), before);
+    assert_eq!(store.geo_revision().unwrap(), revision + 1);
+    s.geo_lat = None;
+    store.begin_sync().unwrap();
+    store.stage(&[s]).unwrap();
+    store.finish_sync().unwrap();
+    assert_eq!(counts(&store).iter().sum::<u32>(), 0);
 }

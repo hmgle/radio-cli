@@ -1,4 +1,5 @@
 mod facets;
+mod geo;
 
 use crate::error::{DomainError, ErrorCode};
 use crate::model::{Filter, Recording, Station};
@@ -51,10 +52,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 5 {
+        if version > 6 {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 5 {
+        if version < 6 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -84,7 +85,7 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2..=5 => {},
+                2..=6 => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             if version < 3 {
@@ -144,7 +145,10 @@ impl Store {
                     ANALYZE;",
                 )?;
             }
-            tx.pragma_update(None, "user_version", 5)?;
+            if version < 6 {
+                geo::migrate(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 6)?;
             tx.commit()?;
         }
         Ok(Self { conn })
@@ -153,6 +157,7 @@ impl Store {
     pub fn upsert(&self, station: &Station) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         Self::write_station(&tx, "stations", station)?;
+        geo::changed(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -179,6 +184,7 @@ impl Store {
         if cancelled() {
             bail!(DomainError::new(ErrorCode::Cancelled));
         }
+        geo::changed(&tx)?;
         tx.commit()?;
         // Advisory maintenance must not fail an already published catalog.
         let _ = self.refresh_search_stats();
@@ -205,11 +211,11 @@ impl Store {
         } else {
             Default::default()
         };
-        let sql = format!("INSERT INTO {table} (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+        let sql = format!("INSERT INTO {table} (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url,geo_x,geo_y)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
-            bitrate=excluded.bitrate,popularity=excluded.popularity,custom=excluded.custom,active=excluded.active,json=excluded.json,normalized_url=excluded.normalized_url
+            bitrate=excluded.bitrate,popularity=excluded.popularity,custom=excluded.custom,active=excluded.active,json=excluded.json,normalized_url=excluded.normalized_url,geo_x=excluded.geo_x,geo_y=excluded.geo_y
             WHERE {table}.custom=0 OR {custom}");
         // Facet queries compare normalized prefixes with binary SQL equality.
         // Keep country codes uppercase and language/tag tokens Unicode lowercase
@@ -235,7 +241,9 @@ impl Store {
             s.custom,
             s.active,
             serde_json::to_string(s)?,
-            crate::service::normalized_url(s.primary_url()).ok()
+            crate::service::normalized_url(s.primary_url()).ok(),
+            crate::geo::coordinates(s.geo_lat, s.geo_long).map(|p| p.0),
+            crate::geo::coordinates(s.geo_lat, s.geo_long).map(|p| p.1)
         ])?;
         if maintain_facets {
             facets::update(
@@ -272,7 +280,7 @@ impl Store {
     pub fn begin_sync(&self) -> Result<()> {
         self.conn.execute_batch(
             "DROP TABLE IF EXISTS temp.incoming;
-            CREATE TEMP TABLE incoming AS SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url FROM stations WHERE 0;
+            CREATE TEMP TABLE incoming AS SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url,geo_x,geo_y FROM stations WHERE 0;
             CREATE UNIQUE INDEX temp.incoming_uuid ON incoming(uuid);",
         )?;
         Ok(())
@@ -305,10 +313,10 @@ impl Store {
         }
         tx.execute("UPDATE stations SET active=0 WHERE custom=0", [])?;
         tx.execute_batch(
-            "INSERT INTO stations (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url) SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url FROM incoming WHERE true
+            "INSERT INTO stations (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url,geo_x,geo_y) SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url,geo_x,geo_y FROM incoming WHERE true
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
-            bitrate=excluded.bitrate,popularity=excluded.popularity,active=1,json=excluded.json,normalized_url=excluded.normalized_url
+            bitrate=excluded.bitrate,popularity=excluded.popularity,active=1,json=excluded.json,normalized_url=excluded.normalized_url,geo_x=excluded.geo_x,geo_y=excluded.geo_y
             WHERE stations.custom=0;",
         )?;
         tx.execute(
@@ -319,6 +327,7 @@ impl Store {
         if cancelled() {
             bail!(DomainError::new(ErrorCode::Cancelled));
         }
+        geo::changed(&tx)?;
         tx.commit()?;
         // Planner maintenance cannot turn a successful publication into a
         // reported failure after its transaction has already committed.
@@ -445,6 +454,18 @@ impl Store {
         }
         clauses.push("s.bitrate>=?".into());
         args.push((filter.min_bitrate as i64).into());
+        if let Some(geo) = filter.geo {
+            clauses[0] = "s.active=1".into();
+            match geo {
+                crate::geo::GeoFilter::Missing => clauses.push("s.geo_x IS NULL".into()),
+                crate::geo::GeoFilter::Cell(bounds) => {
+                    clauses.push(geo::predicate(bounds, &mut args));
+                    if filter.query.trim().is_empty() {
+                        source = "stations s INDEXED BY station_geo";
+                    }
+                }
+            }
+        }
         (clauses.join(" AND "), args, source)
     }
 
@@ -782,6 +803,7 @@ impl Store {
                 )?;
             }
         }
+        geo::changed(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -812,6 +834,7 @@ impl Store {
             tx.execute("DELETE FROM stations WHERE uuid=?1", [uuid])?;
             facets::update(&tx, &before, &Default::default())?;
         }
+        geo::changed(&tx)?;
         tx.commit()?;
         Ok(referenced || keep_references)
     }

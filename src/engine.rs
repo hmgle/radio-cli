@@ -23,7 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Status {
     pub station: Option<Station>,
     pub title: String,
