@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased
-
 ## 0.10.0 — 2026-10-31
 
 - Add offline world-map exploration to the TUI. Open **Explore** in Sources or
