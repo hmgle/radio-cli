@@ -2,11 +2,43 @@
 
 ## Unreleased
 
-- Preserve the fine Braille map dots when coloring Explore station density,
-  and mark the selected cell with a large circle.
+## 0.10.0 — 2026-10-31
 
-- Add offline world-map exploration with clickable station cells, up to 8× zoom,
-  and country browsing for stations without coordinates.
+- Add offline world-map exploration to the TUI. Open **Explore** in Sources or
+  run `:explore`; wide terminals show the map beside the station list, and
+  narrow ones focus it with `6`. Click a map cell to list its stations, move the
+  cursor with arrows or `hjkl`, zoom with `z` / `Z` up to 8×, zoom the wheel
+  around the pointer, return to the world with `0`, and press `Enter` to focus
+  the results. `:focus` accepts `map` beside the existing panels.
+- Render the map from the bundled public-domain Natural Earth 110m land outline
+  without online tiles. Keep the fine Braille dots — up to eight subpixels per
+  terminal cell — and color them by station density: blue, teal, amber, and red
+  mark 1–9, 10–49, 50–199, and 200+ stations per cell, with a legend under the
+  map. Stations in empty sea cells use a single dot, the selected cell uses a
+  large circle that keeps its density color, and monochrome mode underlines
+  station cells without colors.
+- Browse stations without coordinates by country/region with `c` in Explore,
+  returning to the map with `Esc`. Clearing search and filters keeps the
+  selected map cell.
+- Store station coordinates and expose them as nullable `geo_lat` and
+  `geo_long` in JSON station objects; existing fields are unchanged.
+- Keep the map responsive: interactive queries preempt in-progress map reads,
+  filtered geographic queries use the new spatial index, and coordinates are
+  computed once per write.
+
+### Compatibility
+
+- Existing databases migrate atomically to schema v6 on first open, adding the
+  coordinate columns, a partial spatial index, and a geographic revision
+  counter, and backfilling coordinates from stored station JSON. Older binaries
+  cannot open the upgraded database; keep a pre-upgrade copy if downgrade
+  support is needed.
+- Existing catalogs carry no coordinates until `radio sync` runs, so the map
+  starts empty. The map uses only complete, valid coordinate pairs and never
+  infers locations; stations without coordinates stay reachable through the
+  country chooser, Favorites, and the list.
+- Geographic metadata comes from station submissions and may be inaccurate.
+  Small islands and enlarged coastlines are simplified in the bundled outline.
 
 ## 0.9.2 — 2026-10-29
 
