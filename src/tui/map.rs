@@ -181,7 +181,7 @@ pub(super) fn raster(bounds: GeoBounds, columns: usize, rows: usize) -> Vec<char
             offset += count * 8;
         }
         crossings.sort_unstable_by(f64::total_cmp);
-        for span in crossings.chunks_exact(2) {
+        for span in crossings.as_chunks::<2>().0 {
             for wrap in [-1, 0, 1] {
                 let left =
                     span[0] + 180_000_000.0 + wrap as f64 * WORLD_WIDTH as f64 - bounds.x as f64;
