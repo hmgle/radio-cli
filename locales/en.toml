@@ -471,3 +471,4 @@ context_map = "hjkl/arrows move · z/Z zoom · 0 world · Enter list · c withou
 explore_missing = "Stations without coordinates"
 
 explore_density = "Stations/cell"
+session_save_failed = "Cannot save session preferences or playback history"

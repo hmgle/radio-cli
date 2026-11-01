@@ -597,7 +597,7 @@ pub(super) fn execute(
             } else {
                 super::state::Source::Stations
             };
-            if let Err(error) = engine.store.set_meta("pref_source", source.preference()) {
+            if let Err(error) = engine.save_preference("pref_source", source.preference()) {
                 view.lock().unwrap().fail_operation(&format!("{error:#}"));
             }
             *filter = value;
@@ -718,7 +718,7 @@ pub(super) fn execute(
             data.log(crate::t!("catalog_task_cancel_requested"));
         }
         Command::Recordings(value) => {
-            if let Err(error) = engine.store.set_meta("pref_source", "recordings") {
+            if let Err(error) = engine.save_preference("pref_source", "recordings") {
                 view.lock().unwrap().fail_operation(&format!("{error:#}"));
             }
             *filter = value;
@@ -772,7 +772,7 @@ pub(super) fn run(
     stop: Arc<AtomicBool>,
     mut filter: Filter,
 ) -> Result<()> {
-    engine.enable_background_media();
+    engine.enable_background_media()?;
     let queries = query::Worker::start(&engine.config.data_dir.join("radio.db"), &view)?;
     view.lock().unwrap().queries = Some(queries.sender.clone());
     refresh(&engine, &filter, &view)?;

@@ -292,7 +292,7 @@ mod tests {
         let mut config = crate::test_support::config(dir.path());
         config.settings.artwork = crate::config::ArtworkMode::Track;
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.enable_background_media();
+        engine.enable_background_media().unwrap();
         engine.status.station = Some(Station {
             stationuuid: "playing".into(),
             ..Default::default()
@@ -675,7 +675,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.enable_background_media();
+        engine.enable_background_media().unwrap();
         engine.status.station = Some(Station {
             stationuuid: uuid::Uuid::new_v4().to_string(),
             url: "http://localhost/live".into(),
@@ -819,7 +819,7 @@ mod tests {
         let mut config = test_support::config(dir.path());
         config.settings.artwork = crate::config::ArtworkMode::Track;
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.enable_background_media();
+        engine.enable_background_media().unwrap();
         let station = Station {
             stationuuid: uuid::Uuid::new_v4().to_string(),
             name: "Local ICY".into(),
@@ -873,7 +873,7 @@ mod tests {
         let mut config = test_support::config(dir.path());
         config.settings.artwork = ArtworkMode::Track;
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.enable_background_media();
+        engine.enable_background_media().unwrap();
         engine.status.station = Some(Station {
             stationuuid: "playing".into(),
             ..Station::default()
@@ -931,7 +931,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.enable_background_media();
+        engine.enable_background_media().unwrap();
         let station = Station {
             stationuuid: uuid::Uuid::new_v4().to_string(),
             name: "Local".into(),

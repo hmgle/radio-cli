@@ -1,4 +1,5 @@
 pub(crate) mod artwork;
+mod persistence;
 mod playback;
 mod recording;
 mod status;
@@ -77,6 +78,7 @@ pub struct Engine {
 
 /// Shared services and published session state owned by the engine.
 pub struct Session {
+    persistence: Option<persistence::Writer>,
     pub subtitles: crate::speech::Controller,
     pub(crate) artwork: artwork::Controller,
     pub config: Config,
@@ -89,6 +91,27 @@ pub struct Session {
     pub(crate) diagnostics: Option<Background<(serde_json::Value, bool)>>,
     pub(crate) library_task: Option<Background<String>>,
     pub playback_failed: bool,
+}
+
+impl Session {
+    pub(crate) fn save_preference(&self, key: &str, value: &str) -> Result<()> {
+        if let Some(writer) = &self.persistence {
+            writer.preference(key, value);
+            Ok(())
+        } else {
+            self.store.set_meta(key, value)
+        }
+    }
+
+    fn remember_play(&self, uuid: &str) -> Result<()> {
+        if let Some(writer) = &self.persistence {
+            writer.played(uuid);
+            Ok(())
+        } else {
+            self.store.played(uuid)?;
+            self.store.set_meta("pref_last_station", uuid)
+        }
+    }
 }
 
 impl std::ops::Deref for Engine {
@@ -137,6 +160,7 @@ impl Engine {
         };
         Ok(Self {
             session: Session {
+                persistence: None,
                 subtitles: crate::speech::Controller::default(),
                 artwork: artwork::Controller::default(),
                 config,
@@ -394,10 +418,18 @@ impl Engine {
             .stop_recording(&mut self.session, &mut self.playback, reason)
     }
 
-    pub(crate) fn enable_background_media(&mut self) {
+    pub(crate) fn enable_background_media(&mut self) -> Result<()> {
+        if self.persistence.is_none() {
+            self.persistence = Some(persistence::Writer::start(
+                self.config.data_dir.join("radio.db"),
+                self._lock.clone(),
+            )?);
+        }
+        self.store.fail_writes_fast()?;
         self.background_media = true;
         let enabled = self.config.settings.subtitles.enabled;
         self.subtitles.enabled(enabled);
+        Ok(())
     }
 
     pub fn delete_recording(&mut self, id: String, index_only: bool) -> Result<()> {
@@ -451,6 +483,9 @@ impl Engine {
         self.subtitles.enabled(false);
         self.playback.click_task = None;
         self.diagnostics = None;
+        if let Some(writer) = &self.persistence {
+            writer.close();
+        }
         // Allow normal finalization, then cancel verification if its budget
         // expires. Outstanding HTTP results never need joining.
         let deadline = Instant::now() + Duration::from_secs(6);
@@ -458,17 +493,30 @@ impl Engine {
             || !self.playback.retiring.is_empty()
             || !self.recording.retiring_probes.is_empty()
             || !self.artwork.quiescent()
-            || !self.subtitles.quiescent())
+            || !self.subtitles.quiescent()
+            || self
+                .persistence
+                .as_ref()
+                .is_some_and(|writer| !writer.finished()))
             && Instant::now() < deadline
         {
             self.poll_background()?;
             std::thread::sleep(Duration::from_millis(10));
         }
         self.recording.finalizing = None;
+        if let Some(writer) = self.persistence.take() {
+            writer.poll().context(crate::t!("session_save_failed"))?;
+            if !writer.finished() {
+                bail!(crate::t!("session_save_failed"));
+            }
+        }
         Ok(())
     }
 
     fn poll_background(&mut self) -> Result<()> {
+        if let Some(writer) = &self.persistence {
+            writer.poll().context(crate::t!("session_save_failed"))?;
+        }
         self.subtitles.poll_retiring();
         if let Some(result) = self.library_task.as_ref().and_then(Background::poll) {
             self.library_task = None;
@@ -495,6 +543,88 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_session_writes_keep_controls_responsive_under_a_write_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let station = Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "Remembered".into(),
+            active: true,
+            ..Station::default()
+        };
+        engine.store.upsert(&station).unwrap();
+        engine.enable_background_media().unwrap();
+        let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = Instant::now();
+        for _ in 0..10 {
+            engine.volume(-1).unwrap();
+        }
+        engine.save_preference("pref_source", "favorites").unwrap();
+        engine.remember_play(&station.stationuuid).unwrap();
+        engine.stop_playback().unwrap();
+        engine.tick().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert_eq!(engine.status.volume, 70);
+        // Let the writer hit contention before sending the newer value.
+        std::thread::sleep(Duration::from_millis(150));
+        engine.volume(-5).unwrap();
+        connection.execute_batch("ROLLBACK").unwrap();
+        // Closing flushes the latest value even before the debounce expires.
+        engine.shutdown().unwrap();
+        assert_eq!(
+            engine.store.meta("pref_volume").unwrap().as_deref(),
+            Some("65")
+        );
+        assert_eq!(
+            engine.store.meta("pref_source").unwrap().as_deref(),
+            Some("favorites")
+        );
+        assert_eq!(
+            engine.store.meta("pref_last_station").unwrap().as_deref(),
+            Some(station.stationuuid.as_str())
+        );
+        assert_eq!(
+            engine
+                .store
+                .search_count(&Filter {
+                    history: true,
+                    ..Filter::default()
+                })
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn background_session_write_failures_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine
+            .store
+            .test_connection()
+            .execute_batch(
+                "CREATE TRIGGER deny_preferences BEFORE INSERT ON meta
+             BEGIN SELECT RAISE(ABORT,'preference denied'); END;",
+            )
+            .unwrap();
+        engine.enable_background_media().unwrap();
+        engine.volume(-1).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Err(error) = engine.tick() {
+                assert!(format!("{error:#}").contains("preference denied"));
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        engine.shutdown().unwrap();
+    }
 
     #[test]
     fn invalid_subtitle_model_reports_id_without_changing_settings() {
@@ -579,7 +709,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.enable_background_media();
+        engine.enable_background_media().unwrap();
         engine.play("https://example.com/live").unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while !engine.playback_failed {
@@ -639,7 +769,7 @@ mod tests {
                 let mut engine =
                     Engine::new(config(dir.path()), Arc::new(AtomicBool::new(false))).unwrap();
                 if background {
-                    engine.enable_background_media();
+                    engine.enable_background_media().unwrap();
                 }
                 let station = Station {
                     stationuuid: uuid::Uuid::new_v4().to_string(),

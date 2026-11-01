@@ -14,6 +14,21 @@ pub struct Store {
 }
 
 impl Store {
+    pub(crate) fn open_writer(path: &Path) -> Result<Self> {
+        // The session owner has already migrated the database. A short lock
+        // budget lets background writers retry and observe shutdown promptly.
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;")?;
+        Ok(Self { conn })
+    }
+
+    pub(crate) fn fail_writes_fast(&self) -> Result<()> {
+        self.conn
+            .busy_timeout(std::time::Duration::from_millis(20))?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn test_connection(&self) -> &Connection {
         &self.conn
@@ -257,10 +272,38 @@ impl Store {
     }
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
-        self.conn.execute(
+        Self::write_meta(&self.conn, key, value)
+    }
+
+    fn write_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+        conn.execute(
             "INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE meta.value IS NOT excluded.value",
             params![key, value],
         )?;
+        Ok(())
+    }
+
+    pub(crate) fn save_session(
+        &mut self,
+        preferences: &std::collections::BTreeMap<String, String>,
+        plays: &[(String, String)],
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (uuid, at) in plays {
+            tx.execute(
+                "INSERT INTO history(uuid,played_at) VALUES (?1,?2)",
+                params![uuid, at],
+            )?;
+            let threshold = tx.last_insert_rowid().saturating_sub(1000);
+            tx.execute("DELETE FROM history WHERE id<=?1", [threshold])?;
+            Self::write_meta(&tx, "pref_last_station", uuid)?;
+        }
+        for (key, value) in preferences {
+            Self::write_meta(&tx, key, value)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

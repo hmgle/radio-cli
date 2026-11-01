@@ -410,10 +410,7 @@ impl PlaybackController {
                                         && self.source_kind != SourceKind::Local
                                     {
                                         if self.source_kind != SourceKind::Ephemeral {
-                                            session.store.played(&s.stationuuid)?;
-                                            session
-                                                .store
-                                                .set_meta("pref_last_station", &s.stationuuid)?;
+                                            session.remember_play(&s.stationuuid)?;
                                         }
                                         self.session_started = true;
                                         if !s.custom
@@ -453,7 +450,7 @@ impl PlaybackController {
                             Event::Volume(volume) => {
                                 if volume != session.status.volume {
                                     session.status.volume = volume;
-                                    session.store.set_meta("pref_volume", &volume.to_string())?;
+                                    session.save_preference("pref_volume", &volume.to_string())?;
                                 }
                             }
                             Event::End(reason) if reason == "redirect" => {}
@@ -525,7 +522,7 @@ impl PlaybackController {
         }
         session.status.volume = value;
         session.config.settings.volume = value;
-        session.store.set_meta("pref_volume", &value.to_string())?;
+        session.save_preference("pref_volume", &value.to_string())?;
         Ok(())
     }
 
