@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 — 2026-11-01
 
 - Keep TUI volume preferences and playback history off the media thread,
   coalescing preference updates for up to 250 ms and flushing queued changes

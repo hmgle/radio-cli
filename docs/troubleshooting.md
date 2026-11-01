@@ -132,6 +132,24 @@ SQLite, not in the config file.
 
 See the [configuration reference](configuration.md) for all keys and constraints.
 
+## Session preferences or history are not saved
+
+The TUI reports `Cannot save session preferences or playback history` when its
+background writer cannot commit queued volume, source, and playback-history
+updates. Sustained database lock contention from another process, an unwritable
+data directory, or a full disk can cause it.
+
+- Close other radio-cli sessions that use the same data directory, or isolate
+  this one with `--data-dir`.
+- Check that `<data>/radio.db` is on a writable filesystem with free space;
+  `radio doctor` reports the space checks.
+- Restart the TUI. Session persistence stays unavailable until then and queued
+  changes are dropped.
+
+Normal shutdown flushes pending changes within its cleanup budget and reports
+failure if they cannot be saved. Abrupt termination can lose recent updates, so
+quit with `q` or `Ctrl-C` and let recording finalization and the flush finish.
+
 ## Recording fails or remains incomplete
 
 Confirm that FFmpeg and ffprobe are available and that the destination is on a

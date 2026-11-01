@@ -316,6 +316,7 @@ jump_to_playing = "<F6>"
 | 流播放失败或没有声音 | 用 mpv 直接试播 URL，检查音量和静音状态，再运行 `radio devices` |
 | 另一个会话占用数据目录 | 关闭其他 TUI/播放/录音会话，或换用 `--data-dir` |
 | 配置修改不生效 | 检查配置路径、TOML 语法和未知字段，然后重启 radio-cli |
+| 会话偏好或播放历史未保存 | 关闭同一数据目录的其他会话后重启 TUI，并确认数据库可写、空间充足 |
 | 录音不完整或无法发布 | 保留 `.part` 文件，查看 `radio recordings list`，再运行 `radio recordings recover` |
 | artwork 不显示 | 运行 `radio sync`，确认终端支持对应图片协议，并检查详情面板尺寸 |
 

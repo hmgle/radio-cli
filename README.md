@@ -349,6 +349,7 @@ days. For formats, space checks, reconnect behavior, and recovery steps, see the
 | Stream fails or there is no sound | Try the URL in mpv, check volume/mute, then run `radio devices` |
 | Another session owns the data directory | Close the other TUI/playback/recording session or use another `--data-dir` |
 | Config changes are ignored | Check the config path, TOML syntax, and unknown keys; restart radio-cli |
+| Session preferences or history are not saved | Close other sessions on the data directory and restart the TUI; confirm the database is writable and has space |
 | Recording is incomplete or cannot be published | Keep the `.part` file, inspect `radio recordings list`, then run `radio recordings recover` |
 | Artwork is missing | Run `radio sync`, use a supported terminal/protocol, and check the details panel size |
 
