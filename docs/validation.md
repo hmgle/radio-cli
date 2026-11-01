@@ -1,5 +1,53 @@
 # 验证记录
 
+## Session writer contention review — 2026-11-01
+
+- 复核报告提供的 20 万电台首次发布测量为 stage 2212.64 ms、publish 7516.42 ms，
+  相同数据重复发布约 1.7 秒。本次在本地 Linux、Release 构建、隔离临时目录复跑
+  `cargo test --release --locked --test catalog_perf unchanged_catalog_publication_cost -- --ignored --nocapture`：
+  首次 stage 1487.93 ms、publish 6362.19 ms；三次不变数据发布分别为 2219.81、
+  2203.13、2197.69 ms。均使用确定性的 20 万条本地合成电台，无公共网络请求。
+- 上述 publish 是 `finish_sync()` 的总墙钟时间，包含提交后的搜索统计与优化维护，
+  并非精确的单个 IMMEDIATE 事务持锁时长；夹具未提供地理坐标，也不涉及地理迁移
+  回填。这些测量不能直接证明整个耗时都持有写锁，也不是最坏硬件上的时长上限。
+- 会话写线程的运行期连续竞争预算从 5 秒提高到 30 秒，为大目录发布和较慢存储
+  留出余量，同时仍使无法解除的外部锁最终报错。退出改用独立清理期限，不被此前
+  已消耗的运行期预算截断。新增回归使用实际默认预算和 8 秒 IMMEDIATE 锁，确认
+  释放后可保存最新偏好及播放历史；短预算测试覆盖退出期限与运行期限的独立性。
+- 注入普通 panic 和持有 pending 互斥锁时的 panic，确认 `poll()` 报告一次失败、
+  `finished` 同时可见、后续偏好与历史入队被拒绝，`finish()` 返回错误。持锁 panic
+  引发的 mutex poison 也能恢复访问并发布终态，不使清理等待耗尽退出预算。
+- 本次最终 Linux 全目标、全特性 Rust 测试为 449 passed、0 failed、9 ignored
+  （lib 336、CLI 31、directory 8、media 36、storage 30、TUI 8）；Python 5 项通过。
+- `cargo fmt --check`、严格 all-target/all-feature Clippy、Rust 1.88.0 全目标全特性
+  `cargo check --locked` 均通过。本节记录本地验证，不代表已运行远端或其他平台 CI。
+
+## Unreleased review follow-up — 2026-11-01
+
+当前实现自动迁移至 schema v8：v7 引入相关内容版本表与 12 个触发器，v8 引入录音
+开始时间排序索引。下文 v5、v6 等版本号属于注明日期的历史快照，不是当前数据库版本。
+
+- Linux `cargo test --all-targets --all-features --locked`：444 passed，零失败
+  （lib 331、CLI 31、directory 8、media 36、storage 30、TUI 8）；9 个 ignored
+  测试不计入此数量。真实媒体和终端测试使用隔离目录及本地夹具。
+- `cargo fmt --check`、严格 all-target/all-feature Clippy、Rust 1.88 全目标检查
+  均通过；`uv run --no-project --python 3.12 python tests/speech_worker.py`
+  的 5 项 Python 测试通过。
+- 显式 Release `storage::catalog_benchmark` 通过：5 万条合成电台混合查询 P95
+  为 25.39 ms，低于 100 ms 门槛。这是当前环境的一次观测，不是比较性提速结论。
+- 锁竞争回归让每次电台更新、收藏切换、备用地址更新、自定义电台删除和录音索引
+  保存都遇到 100 ms 的外部写事务。普通连接保留 5 秒等待，各操作成功；另有测试
+  确认锁持有期间音量、来源偏好和历史通过后台队列提交，媒体控制在 250 ms 内返回。
+- 注入偏好写入失败，验证 `shutdown()` 继续处理录音收尾并清空持久化句柄；缩短
+  测试退出预算后持续占用写锁，验证刷盘报错、录音任务取消，锁释放后不再出现晚到
+  写入。写线程错误与 finished 原子发布，观察到错误后无法继续入队。
+- 外部 crate 测试通过 `Engine` 完成添加、编辑、备用地址、收藏、删除，以及目录
+  bootstrap、同步、带策略同步、刷新与点击上报；全程不取得可变 `Session`。
+- 缓存和快照测试统一使用生产的 `list_revision()`，覆盖外部提交、事务回滚与偏好
+  更新隔离；旧 `revision()` 保留为连接活动诊断 API。
+- crate 文件清单包含 CHANGELOG 和新增代码模块，不包含 npm 文件。以上为本地
+  Linux 验证，不代表已运行远端或其他平台 CI。
+
 ## 0.8.0 release candidate — 2026-10-22
 
 - Linux all-target/all-feature tests: 345 passed, zero failures (lib 245, cli 29,
