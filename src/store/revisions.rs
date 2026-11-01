@@ -1,7 +1,8 @@
 use super::*;
 
+/// An opaque list cache key for one database, scoped to its filter's source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ListRevision([u64; 4]);
+pub struct ListRevision([u64; 4]);
 
 pub(super) fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -27,7 +28,11 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
 }
 
 impl Store {
-    pub(crate) fn list_revision(&self, filter: &Filter) -> Result<ListRevision> {
+    /// Track content relevant to a station or recording list across connections.
+    /// Preferences and maintenance do not invalidate this key. Compare keys
+    /// only for the same database and filter; read rows in the same snapshot
+    /// when coupling a key to cached query results.
+    pub fn list_revision(&self, filter: &Filter) -> Result<ListRevision> {
         let revisions = self.conn.query_row(
             "SELECT
                 (SELECT n FROM content_revisions WHERE name='stations'),

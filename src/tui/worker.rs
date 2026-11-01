@@ -213,7 +213,7 @@ impl View {
         let delay = Duration::from_millis((500_u64 << self.page_retry_attempt.min(6)).min(30_000));
         self.page_retry_at = Some(Instant::now() + delay);
         self.page_retry_attempt = self.page_retry_attempt.saturating_add(1);
-        // The retry deadline now owns this request, even if revision() failed.
+        // The retry deadline owns this request even if list_revision() failed.
         self.refresh_requested = false;
         let generation = self.page.as_ref().map_or(0, |p| p.generation);
         self.page = Some(PageState {

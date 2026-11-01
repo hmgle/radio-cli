@@ -2154,10 +2154,13 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
     assert!(text(&terminal).contains("Details query failed"));
     assert_no_cjk(&text(&terminal));
     assert!(!text(&terminal).contains("old detail"));
-    let before = engine.store().revision().unwrap();
+    let before = engine.store().list_revision(&Filter::default()).unwrap();
     let external = Store::open(&dir.path().join("radio.db")).unwrap();
     external.favorite(&row.stationuuid, true).unwrap();
-    assert_ne!(engine.store().revision().unwrap(), before);
+    assert_ne!(
+        engine.store().list_revision(&Filter::default()).unwrap(),
+        before
+    );
     worker::execute(
         Command::Refresh,
         &mut engine,
@@ -5102,9 +5105,12 @@ fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
     assert!(data.lock().unwrap().backups.is_empty());
     worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
     assert_eq!(data.lock().unwrap().rows_revision, 1);
-    let revision = engine.store().revision().unwrap();
+    let revision = engine.store().list_revision(&Filter::default()).unwrap();
     engine.store().set_meta("pref_source", "stations").unwrap();
-    assert_eq!(engine.store().revision().unwrap(), revision);
+    assert_eq!(
+        engine.store().list_revision(&Filter::default()).unwrap(),
+        revision
+    );
     let snapshot = data.lock().unwrap().snapshot();
     let (tx, rx) = command::channel(10);
     let mut app = App::default();
@@ -6288,9 +6294,12 @@ fn explore_reads_its_revision_when_a_page_already_pinned_the_store_revision() {
         Arc::new(AtomicBool::new(false)),
     )
     .unwrap();
-    let store_revision = engine.store().revision().unwrap();
+    let store_revision = engine.store().list_revision(&Filter::default()).unwrap();
     engine.store().set_meta("pref_source", "stations").unwrap();
-    assert_eq!(engine.store().revision().unwrap(), store_revision);
+    assert_eq!(
+        engine.store().list_revision(&Filter::default()).unwrap(),
+        store_revision
+    );
     let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let filter = Filter {
         limit: 100,
@@ -6309,7 +6318,10 @@ fn explore_reads_its_revision_when_a_page_already_pinned_the_store_revision() {
     assert!(!Arc::ptr_eq(&before, &after));
     worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
     assert!(Arc::ptr_eq(&after, &shared.lock().unwrap().snapshot()));
-    assert_eq!(engine.store().revision().unwrap(), store_revision);
+    assert_eq!(
+        engine.store().list_revision(&Filter::default()).unwrap(),
+        store_revision
+    );
 }
 
 #[test]

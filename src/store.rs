@@ -1,7 +1,7 @@
 mod facets;
 mod geo;
 mod revisions;
-pub(crate) use revisions::ListRevision;
+pub use revisions::ListRevision;
 
 use crate::error::{DomainError, ErrorCode};
 use crate::model::{Filter, Recording, Station};
@@ -415,6 +415,9 @@ impl Store {
         Ok(count)
     }
 
+    /// Connection activity for diagnostics, including preferences and SQL
+    /// maintenance. This is not a list cache key; use [`Self::list_revision`].
+    /// Values are meaningful only for repeated reads on the same connection.
     pub fn revision(&self) -> Result<(u64, u64)> {
         let external = self
             .conn
@@ -1402,19 +1405,19 @@ mod tests {
         let reader = Store::open_reader(&path).unwrap();
         let revision = reader
             .read_snapshot(|store| {
-                let revision = store.revision()?;
+                let revision = store.list_revision(&Filter::default())?;
                 writer.upsert(&Station {
                     stationuuid: uuid::Uuid::new_v4().to_string(),
                     name: "new row".into(),
                     active: true,
                     ..Station::default()
                 })?;
-                assert_eq!(store.revision()?, revision);
+                assert_eq!(store.list_revision(&Filter::default())?, revision);
                 assert_eq!(store.count()?, 0);
                 Ok(revision)
             })
             .unwrap();
-        assert_ne!(reader.revision().unwrap(), revision);
+        assert_ne!(reader.list_revision(&Filter::default()).unwrap(), revision);
         assert_eq!(reader.count().unwrap(), 1);
     }
 
