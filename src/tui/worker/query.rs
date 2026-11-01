@@ -2,7 +2,7 @@
 use super::{LocatedStation, PagePhase, PageState, View};
 use crate::{
     model::{FacetKind, Filter, Recording, Sort, Station},
-    store::Store,
+    store::{ListRevision, Store},
 };
 use anyhow::Result;
 use std::{
@@ -16,7 +16,7 @@ use std::{
 
 struct Page {
     filter: Filter,
-    revision: (u64, u64),
+    revision: ListRevision,
     note: String,
 }
 
@@ -72,7 +72,7 @@ impl Sender {
         self.0.ready.notify_one();
     }
 
-    pub fn page(&self, filter: Filter, revision: (u64, u64), note: String) -> u64 {
+    pub fn page(&self, filter: Filter, revision: ListRevision, note: String) -> u64 {
         let mut pending = self.0.pending.lock().unwrap();
         pending.page_generation += 1;
         pending.page = Some((
@@ -205,7 +205,7 @@ struct Rows {
 
 #[derive(Default)]
 struct Reader {
-    count: Option<(Filter, (u64, u64), usize)>,
+    count: Option<(Filter, ListRevision, usize)>,
     map_countries: Option<(Filter, u64, Vec<crate::model::Facet>)>,
 }
 
@@ -269,9 +269,8 @@ impl Reader {
         key.offset = 0;
         key.sort = Sort::default();
         let (rows, revision) = store.read_snapshot(|store| {
-            // Sample after pinning the snapshot, and compare tokens only on
-            // this reader connection.
-            let revision = store.revision()?;
+            // Revisions and rows must belong to the same WAL snapshot.
+            let revision = store.list_revision(filter)?;
             let known = self
                 .count
                 .as_ref()
@@ -318,7 +317,7 @@ impl Reader {
         })?;
         // A commit during the read invalidates caching even though this page
         // and its total belong to one internally consistent snapshot.
-        if store.revision()? == revision {
+        if store.list_revision(filter)? == revision {
             self.count = Some((key, revision, rows.total));
         } else {
             self.count = None;
@@ -550,7 +549,7 @@ mod tests {
         worker: &Worker,
         view: &Arc<Mutex<View>>,
         filter: Filter,
-        revision: (u64, u64),
+        revision: ListRevision,
     ) -> u64 {
         let mut data = view.lock().unwrap();
         data.store_revision = Some(revision);
@@ -588,7 +587,7 @@ mod tests {
              json_object('started_at',x) AS json FROM n;",
             )
             .unwrap();
-        let revision = store.revision().unwrap();
+        let revision = store.list_revision(&Filter::default()).unwrap();
         let view = Arc::new(Mutex::new(View::new(status())));
         let worker = Worker::start(&path, &view).unwrap();
         let (started, waiting) = mpsc::channel();
@@ -772,9 +771,30 @@ mod tests {
             ..Filter::default()
         };
         assert_eq!(reader.page(&reader_store, &filter).unwrap().total, 3);
+        store.set_meta("pref_volume", "50").unwrap();
+        // A preferences commit must not invalidate the cached total. Denying
+        // count() makes accidental recounting fail even on this small fixture.
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        reader_store
+            .test_connection()
+            .authorizer(Some(|context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Function {
+                        function_name: "count"
+                    }
+                ) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }));
         filter.offset = 1;
         filter.sort = Sort::Name;
         assert_eq!(reader.page(&reader_store, &filter).unwrap().total, 3);
+        reader_store
+            .test_connection()
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         rows[0].active = false;
         store.upsert(&rows[0]).unwrap();
         filter.offset = 8;
@@ -785,6 +805,71 @@ mod tests {
         filter.offset = 0;
         filter.limit = 100;
         assert_eq!(reader.page(&reader_store, &filter).unwrap().total, 2);
+    }
+
+    #[test]
+    fn unrelated_writes_keep_random_catalog_pages_and_external_favorites_refresh() {
+        for asynchronous in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut engine = Engine::new(
+                crate::test_support::config(dir.path()),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            for i in 0..10 {
+                engine
+                    .store
+                    .upsert(&Station {
+                        stationuuid: uuid::Uuid::new_v4().to_string(),
+                        name: format!("row {i}"),
+                        active: true,
+                        ..Station::default()
+                    })
+                    .unwrap();
+            }
+            let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+            let reader =
+                asynchronous.then(|| Worker::start(&dir.path().join("radio.db"), &view).unwrap());
+            if let Some(reader) = &reader {
+                view.lock().unwrap().queries = Some(reader.sender.clone());
+            }
+            let filter = Filter {
+                limit: 10,
+                sort: Sort::Random,
+                ..Filter::default()
+            };
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            wait(&view, |v| v.page_ready(&filter));
+            let before = view.lock().unwrap().snapshot();
+            let uuid = before.rows[0].stationuuid.clone();
+            engine.volume(-5).unwrap();
+            let external = Store::open(&dir.path().join("radio.db")).unwrap();
+            external.set_meta("pref_source", "stations").unwrap();
+            external.played(&uuid).unwrap();
+            external
+                .test_connection()
+                .execute(
+                    "INSERT INTO recordings(id,status,json) VALUES ('new','complete','{}')",
+                    [],
+                )
+                .unwrap();
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            assert!(Arc::ptr_eq(&before, &view.lock().unwrap().snapshot()));
+            external.favorite(&uuid, true).unwrap();
+            worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
+            wait(&view, |v| {
+                v.page_ready(&filter) && v.rows_revision > before.rows_revision
+            });
+            assert!(
+                view.lock()
+                    .unwrap()
+                    .rows
+                    .iter()
+                    .find(|s| s.stationuuid == uuid)
+                    .unwrap()
+                    .favorite
+            );
+        }
     }
 
     #[test]
@@ -800,17 +885,23 @@ mod tests {
         .unwrap();
         let view = Arc::new(Mutex::new(View::new(status())));
         let worker = Worker::start(&path, &view).unwrap();
-        view.lock().unwrap().store_revision = Some(store.revision().unwrap());
+        view.lock().unwrap().store_revision =
+            Some(store.list_revision(&Filter::default()).unwrap());
         let filter = Filter {
             recordings: true,
             limit: 100,
             ..Filter::default()
         };
-        request_page(&worker, &view, filter.clone(), store.revision().unwrap());
+        request_page(
+            &worker,
+            &view,
+            filter.clone(),
+            store.list_revision(&Filter::default()).unwrap(),
+        );
         wait(&view, |v| v.page_error(&filter).is_some());
         assert!(!view.lock().unwrap().page_ready(&filter));
         conn.execute("DELETE FROM recordings", []).unwrap();
-        let revision = store.revision().unwrap();
+        let revision = store.list_revision(&Filter::default()).unwrap();
         view.lock().unwrap().store_revision = Some(revision);
         request_page(&worker, &view, filter.clone(), revision);
         wait(&view, |v| v.recordings_revision == 1);
@@ -831,7 +922,7 @@ mod tests {
         .unwrap();
         let view = Arc::new(Mutex::new(View::new(status())));
         let worker = Worker::start(&path, &view).unwrap();
-        let revision = store.revision().unwrap();
+        let revision = store.list_revision(&Filter::default()).unwrap();
         view.lock().unwrap().store_revision = Some(revision);
         let (started, waiting) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
@@ -915,8 +1006,8 @@ mod tests {
                 .authorizer(Some(|context: AuthContext<'_>| {
                     if matches!(
                         context.action,
-                        AuthAction::Pragma {
-                            pragma_name: "data_version",
+                        AuthAction::Read {
+                            table_name: "content_revisions",
                             ..
                         }
                     ) {
@@ -979,7 +1070,7 @@ mod tests {
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             wait(&view, |v| v.page_ready(&filter));
             assert!(!view.lock().unwrap().rows[0].favorite);
-            let before = engine.store.revision().unwrap();
+            let before = engine.store.list_revision(&filter).unwrap();
             {
                 let mut data = view.lock().unwrap();
                 data.fail_page(&filter, "Transient query failure".into());
@@ -987,7 +1078,7 @@ mod tests {
             }
             let external = Store::open(&path).unwrap();
             external.favorite(&row.stationuuid, true).unwrap();
-            assert_ne!(engine.store.revision().unwrap(), before);
+            assert_ne!(engine.store.list_revision(&filter).unwrap(), before);
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             assert!(
                 view.lock().unwrap().page_error(&filter).is_none(),
@@ -1072,6 +1163,9 @@ mod tests {
             Some(playing.as_str())
         );
 
+        // History alone no longer refreshes this catalog page. Changing a
+        // favorite does affect its visible rows and requires revalidation.
+        engine.store.favorite(&playing, true).unwrap();
         // Hold the real reader so the otherwise brief refresh is deterministic.
         let (started, waiting) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
@@ -1096,8 +1190,8 @@ mod tests {
         assert_eq!((app.list.selected(), app.list.offset()), (Some(17), 10));
         let selected = app.selected(&refreshing).unwrap().stationuuid.clone();
 
-        // Another mutation while the reader waits must retain the visible page.
-        engine.store.set_meta("test_refresh", "again").unwrap();
+        // Another row mutation while the reader waits retains the visible page.
+        engine.store.favorite(&selected, true).unwrap();
         worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
         {
             let data = view.lock().unwrap();
@@ -1138,7 +1232,7 @@ mod tests {
             Command::Refresh,
         ] {
             worker::execute(command, &mut engine, &mut filter, &mut job, &view).unwrap();
-            let revision = engine.store.revision().unwrap();
+            let revision = engine.store.list_revision(&filter).unwrap();
             // Isolate retry intent from the preference write's revision change.
             view.lock().unwrap().store_revision = Some(revision);
             engine
@@ -1147,8 +1241,8 @@ mod tests {
                 .authorizer(Some(|context: AuthContext<'_>| {
                     if matches!(
                         context.action,
-                        AuthAction::Pragma {
-                            pragma_name: "data_version",
+                        AuthAction::Read {
+                            table_name: "content_revisions",
                             ..
                         }
                     ) {
@@ -1185,7 +1279,7 @@ mod tests {
                 .store
                 .test_connection()
                 .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-            assert_eq!(engine.store.revision().unwrap(), revision);
+            assert_eq!(engine.store.list_revision(&filter).unwrap(), revision);
             let logs = view.lock().unwrap().logs.len();
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             assert_eq!(view.lock().unwrap().logs.len(), logs);
@@ -1245,9 +1339,9 @@ mod tests {
         }
         // Acknowledge the repair's revision first, so only the retry deadline
         // can trigger recovery rather than detection of an external commit.
-        let before = engine.store.revision().unwrap();
+        let before = engine.store.list_revision(&filter).unwrap();
         conn.execute("DELETE FROM recordings", []).unwrap();
-        let after = engine.store.revision().unwrap();
+        let after = engine.store.list_revision(&filter).unwrap();
         view.lock().unwrap().store_revision = Some(after);
         assert_ne!(before, after);
         view.lock().unwrap().page_retry_at = Some(Instant::now());

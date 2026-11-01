@@ -1,5 +1,7 @@
 mod facets;
 mod geo;
+mod revisions;
+pub(crate) use revisions::ListRevision;
 
 use crate::error::{DomainError, ErrorCode};
 use crate::model::{Filter, Recording, Station};
@@ -51,7 +53,7 @@ impl Store {
 
     pub(crate) fn read_snapshot<T>(&self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
         let tx = self.conn.unchecked_transaction()?;
-        // BEGIN is deferred. Pin the WAL snapshot before reading data_version
+        // BEGIN is deferred. Pin the WAL snapshot before reading revisions
         // so a count cached for an older snapshot cannot be reused for new rows.
         tx.query_row("SELECT 1 FROM sqlite_schema LIMIT 1", [], |_| Ok(()))?;
         let value = read(self)?;
@@ -67,10 +69,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 6 {
+        if version < 7 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -100,7 +102,7 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2..=6 => {},
+                2..=7 => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             if version < 3 {
@@ -163,7 +165,10 @@ impl Store {
             if version < 6 {
                 geo::migrate(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 6)?;
+            if version < 7 {
+                revisions::migrate(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 7)?;
             tx.commit()?;
         }
         Ok(Self { conn })

@@ -7,7 +7,7 @@ use crate::{
     engine::{Engine, Status},
     model::{Filter, Recording, Station},
     process::Background,
-    store::Store,
+    store::{ListRevision, Store},
 };
 use anyhow::{Result, bail};
 use std::{
@@ -62,7 +62,7 @@ pub(super) struct View {
     pub map_request: Option<super::map::Request>,
     pub map_error: Option<String>,
     pub geo_revision: u64,
-    store_revision: Option<(u64, u64)>,
+    store_revision: Option<ListRevision>,
     refresh_requested: bool,
     page_retry_at: Option<Instant>,
     page_retry_attempt: u32,
@@ -368,7 +368,7 @@ pub(super) fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>)
 }
 
 fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
-    let store_revision = engine.store.revision()?;
+    let store_revision = engine.store.list_revision(filter)?;
     view.lock().unwrap().store_revision = Some(store_revision);
     let note = catalog_note(&engine.store, engine.config.settings.auto_sync_days)?;
     {
@@ -440,7 +440,7 @@ pub(super) fn refresh_if_needed(
     recording_ended: bool,
 ) -> Result<()> {
     // Probe revisions on every tick so external commits bypass page backoff.
-    let revision = match engine.store.revision() {
+    let revision = match engine.store.list_revision(filter) {
         Ok(revision) => revision,
         Err(error) => {
             let mut data = view.lock().unwrap();

@@ -922,6 +922,9 @@ mod tests {
                 country TEXT NOT NULL,languages TEXT NOT NULL,tags TEXT NOT NULL,bitrate INTEGER NOT NULL,
                 popularity INTEGER NOT NULL,custom INTEGER NOT NULL,active INTEGER NOT NULL,json TEXT NOT NULL);
             CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            CREATE TABLE favorites (uuid TEXT PRIMARY KEY REFERENCES stations(uuid),created_at TEXT NOT NULL);
+            CREATE TABLE history (id INTEGER PRIMARY KEY,uuid TEXT NOT NULL REFERENCES stations(uuid),played_at TEXT NOT NULL);
+            CREATE INDEX history_station ON history(uuid);
             PRAGMA user_version=1;").unwrap();
         conn.execute(
             "INSERT INTO recordings VALUES (?1,?2,?3)",
@@ -940,7 +943,7 @@ mod tests {
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
                 .unwrap(),
-            6
+            7
         );
     }
 
