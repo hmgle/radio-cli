@@ -177,8 +177,16 @@ fn history_catalog_performance() {
 fn unchanged_catalog_publication_cost() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let started = Instant::now();
     stage_catalog(&mut store, false);
-    store.finish_sync().unwrap();
+    let staged = started.elapsed();
+    let started = Instant::now();
+    assert_eq!(store.finish_sync().unwrap(), 200000);
+    println!(
+        "200,000 first publication: stage {:.2} ms; publish including maintenance {:.2} ms",
+        staged.as_secs_f64() * 1000.,
+        started.elapsed().as_secs_f64() * 1000.
+    );
     let revision = store.geo_revision().unwrap();
     for pass in 1..=3 {
         stage_catalog(&mut store, false);

@@ -9,7 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const LOCK_RETRY_BUDGET: Duration = Duration::from_secs(5);
+// Initial catalog publication can take several seconds. Leave room for slow
+// storage while still reporting locks that never clear during normal use.
+const LOCK_RETRY_BUDGET: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct Pending {
@@ -181,13 +183,16 @@ fn run(path: &std::path::Path, shared: &Shared, retry_budget: Duration) -> Resul
                     if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
             });
             if busy {
+                let mut pending = shared.pending.lock().unwrap();
                 // New updates must not extend continuous lock contention.
-                // A successful commit below starts a fresh retry budget.
-                let deadline = *retry_deadline.get_or_insert(attempted_at + retry_budget);
+                // Shutdown gets its own cleanup budget, even if the runtime
+                // budget was nearly exhausted when close() was called.
+                let deadline = pending
+                    .closing
+                    .unwrap_or_else(|| *retry_deadline.get_or_insert(attempted_at + retry_budget));
                 if Instant::now() >= deadline {
                     return Err(error);
                 }
-                let mut pending = shared.pending.lock().unwrap();
                 for (key, value) in preferences {
                     pending.preferences.entry(key).or_insert(value);
                 }
@@ -210,6 +215,73 @@ fn run(path: &std::path::Path, shared: &Shared, retry_budget: Duration) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_retry_budget_tolerates_slow_catalog_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        let uuid = uuid::Uuid::new_v4().to_string();
+        store
+            .upsert(&crate::model::Station {
+                stationuuid: uuid.clone(),
+                name: "Station".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let lock = Arc::new(MediaLock::acquire(dir.path()).unwrap());
+        let writer = Writer::start(path.clone(), lock).unwrap();
+        let connection = rusqlite::Connection::open(path).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        writer.preference("pref_volume", "50").unwrap();
+        writer.played(&uuid).unwrap();
+        // Reproduce the lock duration of a large first publication. The old
+        // five-second budget permanently disabled persistence during this wait.
+        thread::sleep(Duration::from_secs(8));
+        writer.poll().unwrap();
+        assert!(!writer.finished());
+        writer.preference("pref_volume", "40").unwrap();
+        connection.execute_batch("ROLLBACK").unwrap();
+        writer.close(Instant::now() + Duration::from_secs(2));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !writer.finished() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        writer.finish().unwrap();
+        assert_eq!(store.meta("pref_volume").unwrap().as_deref(), Some("40"));
+        assert_eq!(
+            store.meta("pref_last_station").unwrap().as_deref(),
+            Some(uuid.as_str())
+        );
+    }
+
+    #[test]
+    fn shutdown_uses_its_own_budget_after_runtime_contention() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        let lock = Arc::new(MediaLock::acquire(dir.path()).unwrap());
+        let writer =
+            Writer::start_with_retry_budget(path.clone(), lock, Duration::from_secs(1)).unwrap();
+        let connection = rusqlite::Connection::open(path).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        writer.preference("pref_volume", "50").unwrap();
+        // Let the first attempt hit the lock before requesting shutdown.
+        thread::sleep(Duration::from_millis(400));
+        writer.close(Instant::now() + Duration::from_secs(3));
+        thread::sleep(Duration::from_millis(1200));
+        writer.poll().unwrap();
+        assert!(!writer.finished());
+        connection.execute_batch("ROLLBACK").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !writer.finished() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        writer.finish().unwrap();
+        assert_eq!(store.meta("pref_volume").unwrap().as_deref(), Some("50"));
+    }
 
     #[test]
     fn sustained_lock_contention_fails_even_with_new_preferences() {

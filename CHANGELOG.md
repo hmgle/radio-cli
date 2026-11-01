@@ -6,8 +6,8 @@
   coalescing preference updates for up to 250 ms and flushing queued changes
   during normal shutdown. Report terminal writer failures and finish cleanup
   even when persistence fails; report continuous database lock contention after
-  five seconds and reject further queued updates. Stop flush retries at the
-  shutdown deadline if it arrives sooner.
+  thirty seconds and reject further queued updates. During shutdown, use the
+  separate cleanup deadline for flush retries.
 - Preserve the normal five-second lock wait for favorites, custom stations,
   refreshed stream metadata, and recording index writes. These operations may
   still wait briefly during catalog publication; background session writes
@@ -40,7 +40,7 @@
   `Store::revision()` remains connection activity for diagnostics only.
 - Abrupt termination can lose queued TUI preferences or recent playback-history
   entries. Sustained database lock contention also leaves queued changes unsaved
-  and reports a terminal writer failure after five seconds; session persistence
+  and reports a terminal writer failure after thirty seconds; session persistence
   stays unavailable until the TUI is restarted. Normal shutdown attempts to flush
   pending changes within its cleanup budget and reports failure if they cannot
   be saved.
