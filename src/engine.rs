@@ -96,8 +96,7 @@ pub(crate) struct Session {
 impl Session {
     pub(crate) fn save_preference(&self, key: &str, value: &str) -> Result<()> {
         if let Some(writer) = &self.persistence {
-            writer.preference(key, value);
-            Ok(())
+            writer.preference(key, value)
         } else {
             self.store.set_meta(key, value)
         }
@@ -105,8 +104,7 @@ impl Session {
 
     fn remember_play(&self, uuid: &str) -> Result<()> {
         if let Some(writer) = &self.persistence {
-            writer.played(uuid);
-            Ok(())
+            writer.played(uuid)
         } else {
             self.store.played(uuid)?;
             self.store.set_meta("pref_last_station", uuid)

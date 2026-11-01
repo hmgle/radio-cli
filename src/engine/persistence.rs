@@ -1,6 +1,6 @@
 //! Coalesced session writes never wait for SQLite on the media thread.
 use crate::{process::MediaLock, store::Store};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -52,18 +52,25 @@ impl Writer {
         })
     }
 
-    pub fn preference(&self, key: &str, value: &str) {
+    pub fn preference(&self, key: &str, value: &str) -> Result<()> {
         let mut pending = self.shared.pending.lock().unwrap();
+        if pending.closing || pending.finished {
+            bail!(crate::t!("session_save_failed"));
+        }
         pending.preferences.insert(key.into(), value.into());
         // Bound the delay from the first update, even under continuous input.
         pending
             .due
             .get_or_insert_with(|| Instant::now() + Duration::from_millis(250));
         self.shared.ready.notify_one();
+        Ok(())
     }
 
-    pub fn played(&self, uuid: &str) {
+    pub fn played(&self, uuid: &str) -> Result<()> {
         let mut pending = self.shared.pending.lock().unwrap();
+        if pending.closing || pending.finished {
+            bail!(crate::t!("session_save_failed"));
+        }
         pending
             .plays
             .push((uuid.into(), chrono::Utc::now().to_rfc3339()));
@@ -72,6 +79,7 @@ impl Writer {
         }
         pending.due = Some(Instant::now());
         self.shared.ready.notify_one();
+        Ok(())
     }
 
     pub fn close(&self) {
@@ -153,5 +161,32 @@ fn run(
                 let _ = errors.send(error);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_or_closed_writer_rejects_new_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = Arc::new(MediaLock::acquire(dir.path()).unwrap());
+        let writer = Writer::start(dir.path().join("missing/radio.db"), lock.clone()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !writer.finished() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(writer.poll().is_err());
+        // Consuming the original error must not make future updates succeed.
+        assert!(writer.preference("pref_volume", "50").is_err());
+        assert!(writer.played("station").is_err());
+
+        Store::open(&dir.path().join("radio.db")).unwrap();
+        let writer = Writer::start(dir.path().join("radio.db"), lock).unwrap();
+        writer.close();
+        assert!(writer.preference("pref_volume", "50").is_err());
+        assert!(writer.played("station").is_err());
     }
 }
