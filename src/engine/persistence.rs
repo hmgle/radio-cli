@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     thread,
     time::{Duration, Instant},
 };
@@ -30,6 +30,16 @@ struct Shared {
     ready: Condvar,
 }
 
+impl Shared {
+    fn pending(&self) -> MutexGuard<'_, Pending> {
+        // A worker panic may poison this mutex. Recover access so its terminal
+        // failure can still be published and observed by the session owner.
+        self.pending
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+}
+
 pub(super) struct Writer {
     shared: Arc<Shared>,
     handle: Option<thread::JoinHandle<()>>,
@@ -45,6 +55,13 @@ impl Writer {
         lock: Arc<MediaLock>,
         retry_budget: Duration,
     ) -> Result<Self> {
+        Self::start_worker(lock, move |state| run(&path, state, retry_budget))
+    }
+
+    fn start_worker(
+        lock: Arc<MediaLock>,
+        work: impl FnOnce(&Shared) -> Result<()> + std::panic::UnwindSafe + Send + 'static,
+    ) -> Result<Self> {
         let shared = Arc::new(Shared {
             pending: Mutex::new(Pending::default()),
             ready: Condvar::new(),
@@ -54,12 +71,14 @@ impl Writer {
             .name("radio-session-writer".into())
             .spawn(move || {
                 let _lock = lock;
-                let result = run(&path, &state, retry_budget);
-                let mut pending = state.pending.lock().unwrap();
+                let result = std::panic::catch_unwind(|| work(&state))
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!(crate::t!("session_save_failed"))));
+                let mut pending = state.pending();
                 // Publish the outcome and terminal state together. Neither an
                 // error consumer nor a new update can see a half-closed writer.
                 pending.failure = result.err().map(|error| format!("{error:#}"));
                 pending.finished = true;
+                state.pending.clear_poison();
                 state.ready.notify_all();
             })?;
         Ok(Self {
@@ -69,7 +88,7 @@ impl Writer {
     }
 
     pub fn preference(&self, key: &str, value: &str) -> Result<()> {
-        let mut pending = self.shared.pending.lock().unwrap();
+        let mut pending = self.shared.pending();
         if pending.closing.is_some() || pending.cancelled || pending.finished {
             bail!(crate::t!("session_save_failed"));
         }
@@ -83,7 +102,7 @@ impl Writer {
     }
 
     pub fn played(&self, uuid: &str) -> Result<()> {
-        let mut pending = self.shared.pending.lock().unwrap();
+        let mut pending = self.shared.pending();
         if pending.closing.is_some() || pending.cancelled || pending.finished {
             bail!(crate::t!("session_save_failed"));
         }
@@ -99,7 +118,7 @@ impl Writer {
     }
 
     pub fn close(&self, deadline: Instant) {
-        let mut pending = self.shared.pending.lock().unwrap();
+        let mut pending = self.shared.pending();
         pending.closing = Some(deadline);
         pending.due = Some(Instant::now());
         self.shared.ready.notify_one();
@@ -108,14 +127,14 @@ impl Writer {
     pub fn finish(mut self) -> Result<()> {
         // Settle any in-flight SQLite attempt before reporting its outcome.
         // The connection's 100 ms busy timeout bounds this final lock wait.
-        self.shared.pending.lock().unwrap().cancelled = true;
+        self.shared.pending().cancelled = true;
         self.shared.ready.notify_one();
         if let Some(handle) = self.handle.take()
             && handle.join().is_err()
         {
             bail!(crate::t!("session_save_failed"));
         }
-        let pending = self.shared.pending.lock().unwrap();
+        let pending = self.shared.pending();
         if let Some(error) = &pending.failure {
             bail!(error.clone());
         }
@@ -123,11 +142,11 @@ impl Writer {
     }
 
     pub fn finished(&self) -> bool {
-        self.shared.pending.lock().unwrap().finished
+        self.shared.pending().finished
     }
 
     pub fn poll(&self) -> Result<()> {
-        let mut pending = self.shared.pending.lock().unwrap();
+        let mut pending = self.shared.pending();
         if !pending.failure_reported
             && let Some(error) = pending.failure.clone()
         {
@@ -140,7 +159,7 @@ impl Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        self.shared.pending.lock().unwrap().cancelled = true;
+        self.shared.pending().cancelled = true;
         self.shared.ready.notify_one();
     }
 }
@@ -149,7 +168,7 @@ fn run(path: &std::path::Path, shared: &Shared, retry_budget: Duration) -> Resul
     let mut store = Store::open_writer(path)?;
     let mut retry_deadline = None;
     loop {
-        let mut pending = shared.pending.lock().unwrap();
+        let mut pending = shared.pending();
         loop {
             let empty = pending.preferences.is_empty() && pending.plays.is_empty();
             if empty && (pending.cancelled || pending.closing.is_some()) {
@@ -183,7 +202,7 @@ fn run(path: &std::path::Path, shared: &Shared, retry_budget: Duration) -> Resul
                     if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
             });
             if busy {
-                let mut pending = shared.pending.lock().unwrap();
+                let mut pending = shared.pending();
                 // New updates must not extend continuous lock contention.
                 // Shutdown gets its own cleanup budget, even if the runtime
                 // budget was nearly exhausted when close() was called.
@@ -215,6 +234,36 @@ fn run(path: &std::path::Path, shared: &Shared, retry_budget: Duration) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_panics_publish_terminal_failure_even_with_a_poisoned_mutex() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = Arc::new(MediaLock::acquire(dir.path()).unwrap());
+        for poison_pending in [false, true] {
+            let (release, wait) = std::sync::mpsc::channel();
+            let writer = Writer::start_worker(lock.clone(), move |shared| {
+                wait.recv().unwrap();
+                let _pending = poison_pending.then(|| shared.pending());
+                panic!("session writer panic fixture");
+            })
+            .unwrap();
+            writer.preference("pref_volume", "50").unwrap();
+            release.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                if writer.poll().is_err() {
+                    assert!(writer.finished());
+                    break;
+                }
+                assert!(Instant::now() < deadline, "worker panic was not reported");
+                thread::sleep(Duration::from_millis(10));
+            }
+            writer.poll().unwrap();
+            assert!(writer.preference("pref_volume", "40").is_err());
+            assert!(writer.played("station").is_err());
+            assert!(writer.finish().is_err());
+        }
+    }
 
     #[test]
     fn default_retry_budget_tolerates_slow_catalog_publication() {

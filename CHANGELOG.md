@@ -7,7 +7,8 @@
   during normal shutdown. Report terminal writer failures and finish cleanup
   even when persistence fails; report continuous database lock contention after
   thirty seconds and reject further queued updates. During shutdown, use the
-  separate cleanup deadline for flush retries.
+  separate cleanup deadline for flush retries. Report writer thread panics as
+  terminal failures without waiting for the cleanup deadline.
 - Preserve the normal five-second lock wait for favorites, custom stations,
   refreshed stream metadata, and recording index writes. These operations may
   still wait briefly during catalog publication; background session writes
