@@ -56,6 +56,73 @@ fn stage_catalog(store: &mut Store, diverse: bool) {
 
 #[test]
 #[ignore]
+fn recording_library_performance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("radio.db");
+    let store = Store::open(&path).unwrap();
+    let mut conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("PRAGMA cache_size=-4096").unwrap();
+    {
+        let tx = conn.transaction().unwrap();
+        let mut insert = tx
+            .prepare("INSERT INTO recordings(id,status,json) VALUES (?1,'complete',?2)")
+            .unwrap();
+        for i in 0..10000 {
+            let record = radio_cli::model::Recording {
+                id: format!("{i:05}"),
+                stationuuid: "station".into(),
+                station_name: "Station".into(),
+                track: None,
+                source_url_resolved: "http://localhost/live".into(),
+                started_at: format!("2026-01-{:02}T00:{:02}:00Z", 1 + i % 28, i % 60),
+                stopped_at: None,
+                media_duration_ms: Some(1000),
+                codec: "mp3".into(),
+                container: "mp3".into(),
+                path: "recording.mp3".into(),
+                final_path: None,
+                size_bytes: 1,
+                status: "complete".into(),
+                error: None,
+                reconnects: 0,
+                recovery_pending: false,
+            };
+            insert
+                .execute(rusqlite::params![
+                    record.id,
+                    serde_json::to_string(&record).unwrap()
+                ])
+                .unwrap();
+        }
+        drop(insert);
+        tx.commit().unwrap();
+    }
+    let baseline = measure(
+        || {
+            let mut query = conn.prepare("SELECT json,recovery_pending FROM recordings NOT INDEXED ORDER BY json_extract(json,'$.started_at') DESC,id DESC LIMIT 100").unwrap();
+            let rows: Vec<_> = query
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            std::hint::black_box(rows);
+        },
+        5,
+    );
+    let current = measure(
+        || {
+            std::hint::black_box(store.recordings_page(100, 0).unwrap());
+        },
+        5,
+    );
+    println!(
+        "10,000 recordings P50/P95: baseline {:.2}/{:.2} ms; current {:.2}/{:.2} ms",
+        baseline.0, baseline.1, current.0, current.1
+    );
+}
+
+#[test]
+#[ignore]
 fn history_catalog_performance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("radio.db");

@@ -11,6 +11,9 @@ use rusqlite::{
 };
 use std::path::Path;
 
+const RECORDING_ORDER: &str =
+    "CASE WHEN json_valid(json) THEN json_extract(json,'$.started_at') END DESC,id DESC";
+
 pub struct Store {
     conn: Connection,
 }
@@ -69,10 +72,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 7 {
+        if version > 8 {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 7 {
+        if version < 8 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -102,7 +105,7 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2..=7 => {},
+                2..=8 => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             if version < 3 {
@@ -168,7 +171,12 @@ impl Store {
             if version < 7 {
                 revisions::migrate(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 7)?;
+            if version < 8 {
+                tx.execute_batch(&format!(
+                    "CREATE INDEX IF NOT EXISTS recording_started ON recordings({RECORDING_ORDER});"
+                ))?;
+            }
+            tx.pragma_update(None, "user_version", 8)?;
             tx.commit()?;
         }
         Ok(Self { conn })
@@ -1122,7 +1130,7 @@ impl Store {
     }
 
     pub fn recordings_page(&self, limit: usize, offset: usize) -> Result<Vec<Recording>> {
-        let mut stmt = self.conn.prepare("SELECT json,recovery_pending FROM recordings ORDER BY json_extract(json,'$.started_at') DESC,id DESC LIMIT ?1 OFFSET ?2")?;
+        let mut stmt = self.conn.prepare_cached(&format!("SELECT json,recovery_pending FROM recordings ORDER BY {RECORDING_ORDER} LIMIT ?1 OFFSET ?2"))?;
         let rows = stmt.query_map(
             params![
                 limit.clamp(1, 1000) as i64,
@@ -1151,6 +1159,62 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_order_index_migrates_without_losing_old_or_malformed_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        for (id, at) in [
+            ("a", "2026-01-02"),
+            ("b", "2026-01-02"),
+            ("old", "2026-01-01"),
+        ] {
+            store
+                .save_recording(&Recording {
+                    id: id.into(),
+                    stationuuid: "station".into(),
+                    station_name: "Station".into(),
+                    track: None,
+                    source_url_resolved: "http://localhost/live".into(),
+                    started_at: at.into(),
+                    stopped_at: None,
+                    media_duration_ms: Some(1000),
+                    codec: "mp3".into(),
+                    container: "mp3".into(),
+                    path: id.into(),
+                    final_path: None,
+                    size_bytes: 1,
+                    status: "complete".into(),
+                    error: None,
+                    reconnects: 0,
+                    recovery_pending: false,
+                })
+                .unwrap();
+        }
+        store
+            .conn
+            .execute_batch(
+                "DROP INDEX recording_started; PRAGMA user_version=7;
+            INSERT INTO recordings(id,status,json) VALUES ('broken','complete','invalid');",
+            )
+            .unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.recordings_count().unwrap(), 4);
+        let page = store.recordings_page(2, 0).unwrap();
+        assert_eq!(
+            page.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+        assert_eq!(store.recordings_page(1, 2).unwrap()[0].id, "old");
+        assert!(store.recordings_page(1, 3).is_err());
+        let plan: Vec<String> = store.conn.prepare(&format!(
+            "EXPLAIN QUERY PLAN SELECT json,recovery_pending FROM recordings ORDER BY {RECORDING_ORDER} LIMIT 100"
+        )).unwrap().query_map([], |r| r.get(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert!(plan.iter().any(|line| line.contains("recording_started")));
+        assert!(!plan.iter().any(|line| line.contains("TEMP B-TREE")));
+    }
 
     #[test]
     fn territory_queries_union_indexed_country_and_trigram_candidates() {
