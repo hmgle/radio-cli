@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+- Keep TUI volume preferences and playback history off the media thread,
+  coalescing preference updates for up to 250 ms and flushing queued changes
+  during normal shutdown. Report terminal writer failures and finish cleanup
+  even when persistence fails; stop flush retries at the shutdown deadline.
+- Preserve the normal five-second lock wait for favorites, custom stations,
+  refreshed stream metadata, and recording index writes. These operations may
+  still wait briefly during catalog publication; background session writes
+  use a separate connection with a 100 ms lock wait and retries.
+- Interrupt superseded list, position, and facet queries while they run.
+  Invalidate list caches only for relevant content changes, keeping random
+  pages stable when preferences or unrelated library data change.
+- Publish catalog snapshots by updating changed stations and facet counts,
+  retaining indexes for unchanged data. Drive history queries from the bounded
+  playback log and use an index for recording-library date ordering.
+- Share typed station commands and diagnostics between CLI and TUI.
+
+### Compatibility
+
+- Existing databases migrate atomically to schema v8 on first open. Upgrading
+  from v6 adds `content_revisions`, twelve revision triggers across stations,
+  favorites, history, and recordings, and the `recording_started` expression
+  index. Binaries supporting schema v6 or earlier cannot open an upgraded
+  database; keep a pre-upgrade copy if downgrade support is needed.
+- Rust library API: `Engine` no longer dereferences to `Session`, and `Session`
+  is private. Replace field reads with `status()`, `config()`, `store()`,
+  `subtitles()`, and `playback_failed()`. These return read access; mutate
+  playback through `Engine` methods instead of changing session fields.
+- Replace mutable store access through `Engine` with `toggle_favorite()` and
+  `change_station(StationCommand::{Add, Edit, Remove, Backups})`. Directory
+  operations are available through `bootstrap()`, `sync()`,
+  `sync_with_policy()`, `refresh_station()`, and `report_click()`; directory
+  calls perform blocking I/O. `refresh_station()` fetches metadata without
+  persisting it. `Store::list_revision()` exposes an opaque list cache key;
+  `Store::revision()` remains connection activity for diagnostics only.
+- Abrupt termination can lose queued TUI preferences or recent playback-history
+  entries. Normal shutdown attempts to flush them within its cleanup budget
+  and reports failure if they cannot be saved.
+
 ## 0.10.0 — 2026-10-31
 
 - Add offline world-map exploration to the TUI. Open **Explore** in Sources or
