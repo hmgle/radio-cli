@@ -114,7 +114,7 @@ pub(super) enum Command {
         prefix: String,
     },
     Backups(String),
-    Station(crate::cli::StationAction),
+    Station(crate::service::StationCommand),
     Search(Filter),
     Play(String),
     PlayRecording(String),
@@ -136,11 +136,6 @@ pub(super) enum Command {
         uuid: Option<String>,
         duration: Option<Duration>,
         dir: Option<PathBuf>,
-    },
-    Add {
-        name: String,
-        url: String,
-        backups: Vec<String>,
     },
     Sync(bool),
     Cancel,
@@ -382,33 +377,23 @@ pub(super) fn parse(
             duration,
             dir: output_dir,
         }),
-        Some(Action::Station {
-            action:
-                crate::cli::StationAction::Add {
-                    name,
-                    url,
-                    backup_url,
-                },
-        }) => Parsed::Worker(Command::Add {
-            name,
-            url,
-            backups: backup_url,
-        }),
         Some(Action::Doctor) => Parsed::Worker(Command::Doctor),
-        Some(Action::Station {
-            action: crate::cli::StationAction::List(page),
-        }) => {
-            if page.all {
-                bail!(crate::t!("command_paging"));
+        Some(Action::Station { action }) => match action.into_request() {
+            crate::cli::StationRequest::List(page) => {
+                if page.all {
+                    bail!(crate::t!("command_paging"));
+                }
+                Parsed::Search(Filter {
+                    custom: true,
+                    limit: usize::from(page.limit),
+                    offset: page.offset,
+                    ..Filter::default()
+                })
             }
-            Parsed::Search(Filter {
-                custom: true,
-                limit: usize::from(page.limit),
-                offset: page.offset,
-                ..Filter::default()
-            })
-        }
-        Some(Action::Station { action }) => Parsed::Worker(Command::Station(action)),
+            crate::cli::StationRequest::Change(command) => {
+                Parsed::Worker(Command::Station(command))
+            }
+        },
         _ => bail!(crate::t!("command_unknown")),
     };
     if matches!(&parsed, Parsed::Source(_, page) if page.all) {

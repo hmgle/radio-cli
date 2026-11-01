@@ -1342,7 +1342,9 @@ fn station_removal_requires_a_second_confirmation_in_tui() {
         assert_eq!(
             matches!(
                 receiver.try_recv(),
-                Ok(Command::Station(crate::cli::StationAction::Remove { .. }))
+                Ok(Command::Station(
+                    crate::service::StationCommand::Remove { .. }
+                ))
             ),
             confirm
         );
@@ -1569,7 +1571,7 @@ fn commands_use_cli_arguments_and_context_without_shell_execution() {
         Parsed::Worker(Command::Sync(false))
     ));
     match command::parse("station add '中文 电台' 'https://example.com/live?a=1&b=2' --backup-url https://example.com/backup",selected,current,&filter).unwrap(){
-        Parsed::Worker(Command::Add{name,url,backups})=>{assert_eq!(name,"中文 电台");assert!(url.contains("&b=2"));assert_eq!(backups.len(),1);},_=>panic!()}
+        Parsed::Worker(Command::Station(crate::service::StationCommand::Add{name,url,backups}))=>{assert_eq!(name,"中文 电台");assert!(url.contains("&b=2"));assert_eq!(backups.len(),1);},_=>panic!()}
     match command::parse(
         "search 'public radio' --country FR --min-bitrate 192",
         selected,
@@ -1703,7 +1705,10 @@ fn modes_route_text_without_triggering_normal_actions_and_restore_search() {
     assert!(receiver.try_recv().is_err());
     app.key(key(KeyCode::Enter), &data, &sender);
     assert_eq!(app.mode, Mode::Normal);
-    assert!(matches!(receiver.try_recv().unwrap(), Command::Add { .. }));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::Station(crate::service::StationCommand::Add { .. })
+    ));
     app.key(key(KeyCode::Char(':')), &data, &sender);
     app.editor.set("volume 999");
     app.key(key(KeyCode::Enter), &data, &sender);
@@ -4464,7 +4469,10 @@ fn commands_with_url_credentials_stay_out_of_the_command_history() {
         run(&mut app, line);
         // The command itself still runs; only the history skips it.
         assert!(
-            matches!(receiver.try_recv(), Ok(Command::Add { .. })),
+            matches!(
+                receiver.try_recv(),
+                Ok(Command::Station(crate::service::StationCommand::Add { .. }))
+            ),
             "{line}"
         );
         assert_eq!(
@@ -4485,7 +4493,10 @@ fn commands_with_url_credentials_stay_out_of_the_command_history() {
         );
         app.key(key(KeyCode::Esc), &data, &sender);
     }
-    assert!(matches!(receiver.try_recv(), Ok(Command::Add { .. })));
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(Command::Station(crate::service::StationCommand::Add { .. }))
+    ));
     assert!(!String::from_utf8_lossy(&kept).contains("hunter2"));
 
     run(&mut app, "play https://user:hunter2@example.com/live");
@@ -5811,7 +5822,7 @@ fn deletion_confirmation_keeps_target_and_survives_queue_rejection() {
     data.rows = vec![station("replacement")].into();
     app.key(key(KeyCode::Char('y')), &data, &sender);
     assert!(
-        matches!(receiver.try_recv(), Ok(Command::Station(crate::cli::StationAction::Remove { uuid, .. })) if uuid == id)
+        matches!(receiver.try_recv(), Ok(Command::Station(crate::service::StationCommand::Remove { uuid, .. })) if uuid == id)
     );
     assert!(app.confirmation.is_none());
     for cancel in [

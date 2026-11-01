@@ -6,6 +6,74 @@ use crate::{
 };
 use anyhow::{Result, bail};
 
+mod diagnostics;
+pub(crate) use diagnostics::doctor_report;
+
+#[derive(Clone)]
+pub enum StationCommand {
+    Add {
+        name: String,
+        url: String,
+        backups: Vec<String>,
+    },
+    Edit {
+        uuid: String,
+        name: Option<String>,
+        url: Option<String>,
+        backups: Vec<String>,
+    },
+    Remove {
+        uuid: String,
+        keep_references: bool,
+    },
+    Backups {
+        uuid: String,
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
+}
+
+pub enum StationChange {
+    Added(Station),
+    Updated(Station),
+    Removed {
+        uuid: String,
+        placeholder_kept: bool,
+    },
+    Backups {
+        uuid: String,
+        urls: Vec<String>,
+    },
+}
+
+pub fn change_station(store: &mut Store, command: StationCommand) -> Result<StationChange> {
+    Ok(match command {
+        StationCommand::Add { name, url, backups } => {
+            StationChange::Added(add_station(store, name, url, &backups)?)
+        }
+        StationCommand::Edit {
+            uuid,
+            name,
+            url,
+            backups,
+        } => StationChange::Updated(edit_station(store, &uuid, name, url, &backups)?),
+        StationCommand::Remove {
+            uuid,
+            keep_references,
+        } => {
+            let placeholder_kept = store.remove_custom(&uuid, keep_references)?;
+            StationChange::Removed {
+                uuid,
+                placeholder_kept,
+            }
+        }
+        StationCommand::Backups { uuid, add, remove } => StationChange::Backups {
+            urls: store.update_backups(&uuid, &add, &remove)?,
+            uuid,
+        },
+    })
+}
+
 pub fn normalized_url(url: &str) -> Result<String> {
     validate_url(url)?;
     let mut parsed = reqwest::Url::parse(url)?;

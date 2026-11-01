@@ -6,12 +6,11 @@ use crate::{
     recorder,
     store::Store,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::{
     io::{self, IsTerminal},
     path::PathBuf,
-    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -263,6 +262,48 @@ pub enum StationAction {
         remove: Vec<String>,
     },
 }
+
+pub(crate) enum StationRequest {
+    List(Page),
+    Change(crate::service::StationCommand),
+}
+
+impl StationAction {
+    pub(crate) fn into_request(self) -> StationRequest {
+        use crate::service::StationCommand;
+        StationRequest::Change(match self {
+            Self::List(page) => return StationRequest::List(page),
+            Self::Add {
+                name,
+                url,
+                backup_url,
+            } => StationCommand::Add {
+                name,
+                url,
+                backups: backup_url,
+            },
+            Self::Edit {
+                uuid,
+                name,
+                url,
+                backup_url,
+            } => StationCommand::Edit {
+                uuid,
+                name,
+                url,
+                backups: backup_url,
+            },
+            Self::Remove {
+                uuid,
+                keep_references,
+            } => StationCommand::Remove {
+                uuid,
+                keep_references,
+            },
+            Self::Backups { uuid, add, remove } => StationCommand::Backups { uuid, add, remove },
+        })
+    }
+}
 #[derive(Subcommand)]
 pub enum RecordingAction {
     List(Page),
@@ -465,66 +506,37 @@ fn run_inner(mut cli: Cli) -> Result<()> {
                 }
             }
         },
-        Action::Station {
-            action:
-                StationAction::Add {
-                    name,
-                    url,
-                    backup_url,
+        Action::Station { action } => match action.into_request() {
+            StationRequest::List(page) => list_stations(
+                &store,
+                Filter {
+                    custom: true,
+                    ..Filter::default()
                 },
-        } => {
-            let station = crate::service::add_station(&mut store, name, url, &backup_url)?;
-            if cli.json {
-                emit(&station)?;
-            } else {
-                println!("{}", station.stationuuid);
+                &page,
+                cli.json,
+            )?,
+            StationRequest::Change(command) => {
+                use crate::service::StationChange;
+                match crate::service::change_station(&mut store, command)? {
+                    StationChange::Added(station) => {
+                        if cli.json {
+                            emit(&station)?;
+                        } else {
+                            println!("{}", station.stationuuid);
+                        }
+                    }
+                    StationChange::Updated(station) => emit(&station)?,
+                    StationChange::Removed {
+                        uuid,
+                        placeholder_kept,
+                    } => emit(
+                        &serde_json::json!({"stationuuid":uuid,"removed":true,"placeholder_kept":placeholder_kept}),
+                    )?,
+                    StationChange::Backups { urls, .. } => emit(&urls)?,
+                }
             }
-        }
-        Action::Station {
-            action: StationAction::List(page),
-        } => list_stations(
-            &store,
-            Filter {
-                custom: true,
-                ..Filter::default()
-            },
-            &page,
-            cli.json,
-        )?,
-        Action::Station {
-            action:
-                StationAction::Edit {
-                    uuid,
-                    name,
-                    url,
-                    backup_url,
-                },
-        } => {
-            emit(&crate::service::edit_station(
-                &mut store,
-                &uuid,
-                name,
-                url,
-                &backup_url,
-            )?)?;
-        }
-        Action::Station {
-            action:
-                StationAction::Remove {
-                    uuid,
-                    keep_references,
-                },
-        } => {
-            let placeholder_kept = store.remove_custom(&uuid, keep_references)?;
-            emit(
-                &serde_json::json!({"stationuuid":uuid,"removed":true,"placeholder_kept":placeholder_kept}),
-            )?;
-        }
-        Action::Station {
-            action: StationAction::Backups { uuid, add, remove },
-        } => {
-            emit(&store.update_backups(&uuid, &add, &remove)?)?;
-        }
+        },
         Action::Recordings {
             action: RecordingAction::Play { id },
         } => {
@@ -703,71 +715,8 @@ fn playback_loop(engine: &mut Engine, stop: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn doctor_report(
-    config: &Config,
-    stop: &Arc<AtomicBool>,
-) -> Result<(serde_json::Value, bool)> {
-    let mut checks = vec![];
-    let mut failed = false;
-    for (name, exe, flag) in [
-        ("mpv", &config.settings.mpv, "--version"),
-        ("ffmpeg", &config.settings.ffmpeg, "-version"),
-        ("ffprobe", &config.settings.ffprobe, "-version"),
-    ] {
-        let result =
-            crate::process::output(Command::new(exe).arg(flag), Duration::from_secs(5), stop);
-        let (ok, detail, code) = match result {
-            Ok(output) => (
-                true,
-                String::from_utf8_lossy(&output)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .to_owned(),
-                None,
-            ),
-            Err(e) => (
-                false,
-                e.to_string(),
-                e.downcast_ref::<crate::error::DomainError>()
-                    .map(|e| e.code.as_str()),
-            ),
-        };
-        failed |= !ok;
-        checks.push(serde_json::json!({"name":name,"ok":ok,"detail":detail,"code":code}));
-    }
-    std::fs::create_dir_all(&config.recording_dir)
-        .context(crate::t!("cli_recording_dir_unavailable"))?;
-    let test_path = config
-        .recording_dir
-        .join(format!(".doctor-{}", uuid::Uuid::new_v4()));
-    let writable = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&test_path);
-    let writable_ok = writable.is_ok();
-    failed |= !writable_ok;
-    drop(writable);
-    let _ = std::fs::remove_file(&test_path);
-    checks.push(
-        serde_json::json!({"name":"recording_dir","ok":writable_ok,"detail":config.recording_dir}),
-    );
-    let available = fs2::available_space(&config.recording_dir)?;
-    let minimum = config
-        .settings
-        .recording_min_free_mb
-        .saturating_mul(1024 * 1024);
-    let enough = available >= minimum;
-    failed |= !enough;
-    checks.push(serde_json::json!({"name":"recording_space","ok":enough,
-        "available_bytes":available,"minimum_bytes":minimum,
-        "detail":crate::t!("cli_recording_space", "available" => available, "minimum" => minimum)}));
-    let report = serde_json::json!({"checks":checks,"config":config.config_path,"database":config.data_dir.join("radio.db")});
-    Ok((report, failed))
-}
-
 fn doctor(config: &Config, json: bool, stop: &Arc<AtomicBool>) -> Result<()> {
-    let (report, failed) = doctor_report(config, stop)?;
+    let (report, failed) = crate::service::doctor_report(config, stop)?;
     if json {
         emit(&report)?;
     } else {

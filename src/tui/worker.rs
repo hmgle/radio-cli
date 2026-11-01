@@ -611,7 +611,7 @@ pub(super) fn execute(
         Command::OpenRecordings => engine.open_recordings()?,
         Command::Random(filter) => engine.random(filter)?,
         Command::ToggleFavorite(uuid) => {
-            let add = engine.catalog_mut().toggle_favorite(&uuid)?;
+            let add = engine.toggle_favorite(&uuid)?;
             favorite_changed(engine.store(), view, &uuid, add)?;
         }
         Command::AdjustVolume(delta) => engine.volume(delta)?,
@@ -651,43 +651,24 @@ pub(super) fn execute(
                 engine.record_current(duration, dir.as_deref())?;
             }
         }
-        Command::Add { name, url, backups } => {
-            let station = crate::service::add_station(engine.catalog_mut(), name, url, &backups)?;
-            view.lock().unwrap().log(
-                &crate::t!("station_added", "name" => station.name, "uuid" => station.stationuuid),
-            );
-            request_refresh(view);
-        }
-        Command::Station(action) => {
-            use crate::cli::StationAction;
-            let output = match action {
-                StationAction::Edit {
+        Command::Station(command) => {
+            use crate::service::StationChange;
+            let output = match engine.change_station(command)? {
+                StationChange::Added(station) => {
+                    crate::t!("station_added", "name" => station.name, "uuid" => station.stationuuid)
+                }
+                StationChange::Updated(station) => {
+                    crate::t!("station_updated", "name" => station.name, "uuid" => station.stationuuid)
+                }
+                StationChange::Removed {
                     uuid,
-                    name,
-                    url,
-                    backup_url,
+                    placeholder_kept,
                 } => {
-                    let station = crate::service::edit_station(
-                        engine.catalog_mut(),
-                        &uuid,
-                        name,
-                        url,
-                        &backup_url,
-                    )?;
-                    crate::t!("station_updated", "name" => station.name, "uuid" => uuid)
+                    crate::t!("station_removed", "uuid" => uuid, "references" => if placeholder_kept { crate::t!("station_references_kept") } else { "" })
                 }
-                StationAction::Remove {
-                    uuid,
-                    keep_references,
-                } => {
-                    let kept = engine.catalog_mut().remove_custom(&uuid, keep_references)?;
-                    crate::t!("station_removed", "uuid" => uuid, "references" => if kept { crate::t!("station_references_kept") } else { "" })
+                StationChange::Backups { uuid, urls } => {
+                    crate::t!("station_backups_updated", "uuid" => uuid, "urls" => urls.join(" · "))
                 }
-                StationAction::Backups { uuid, add, remove } => {
-                    let backups = engine.catalog_mut().update_backups(&uuid, &add, &remove)?;
-                    crate::t!("station_backups_updated", "uuid" => uuid, "urls" => backups.join(" · "))
-                }
-                _ => unreachable!("station list/add use their existing commands"),
             };
             view.lock().unwrap().log(&output);
             request_refresh(view);

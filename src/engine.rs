@@ -135,8 +135,15 @@ impl Engine {
         self.session.playback_failed
     }
 
-    pub(crate) fn catalog_mut(&mut self) -> &mut Store {
-        &mut self.session.store
+    pub(crate) fn change_station(
+        &mut self,
+        command: crate::service::StationCommand,
+    ) -> Result<crate::service::StationChange> {
+        crate::service::change_station(&mut self.session.store, command)
+    }
+
+    pub(crate) fn toggle_favorite(&mut self, uuid: &str) -> Result<bool> {
+        self.session.store.toggle_favorite(uuid)
     }
 
     pub(crate) fn save_preference(&self, key: &str, value: &str) -> Result<()> {
@@ -163,7 +170,7 @@ impl Engine {
         }
         let config = self.session.config.clone();
         self.session.diagnostics = Some(Background::start("radio-doctor", move |cancel| {
-            crate::cli::doctor_report(&config, &cancel)
+            crate::service::doctor_report(&config, &cancel)
         })?);
         Ok(())
     }

@@ -409,7 +409,7 @@ impl Confirmation {
                     crate::t!("confirm_recording_scope")
                 },
             ),
-            Command::Station(crate::cli::StationAction::Remove {
+            Command::Station(crate::service::StationCommand::Remove {
                 uuid,
                 keep_references,
             }) => (
@@ -1286,7 +1286,7 @@ impl App {
                     Parsed::Worker(mut command) => {
                         if matches!(
                             command,
-                            Command::Station(crate::cli::StationAction::Remove { .. })
+                            Command::Station(crate::service::StationCommand::Remove { .. })
                                 | Command::DeleteRecording { .. }
                         ) {
                             self.confirmation = Confirmation::new(command, view);
