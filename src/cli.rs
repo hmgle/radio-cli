@@ -618,7 +618,7 @@ fn run_inner(mut cli: Cli) -> Result<()> {
         Action::Random(search) => {
             drop(store);
             let mut engine = Engine::new(config, stop.clone())?;
-            if engine.store.count()? == 0 {
+            if engine.store().count()? == 0 {
                 eprintln!("{}", crate::t!("cli_bootstrap"));
                 engine.bootstrap()?;
             }
@@ -636,20 +636,21 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             engine.standalone_record(&uuid, duration, output_dir.as_deref())?;
             eprintln!(
                 "{} · Ctrl-C: {}",
-                engine.status.message, engine.status.recording_path
+                engine.status().message,
+                engine.status().recording_path
             );
-            while !stop.load(Ordering::Relaxed) && engine.status.recording() {
+            while !stop.load(Ordering::Relaxed) && engine.status().recording() {
                 engine.tick()?;
                 thread::sleep(Duration::from_millis(100));
             }
             engine.shutdown()?;
             if cli.json {
-                emit(&engine.store.recordings(1)?)?;
+                emit(&engine.store().recordings(1)?)?;
             } else {
-                println!("{}", crate::clean_text(&engine.status.message));
+                println!("{}", crate::clean_text(&engine.status().message));
             }
             if engine
-                .store
+                .store()
                 .recordings(1)?
                 .first()
                 .is_some_and(|r| r.status != "complete")
@@ -673,18 +674,18 @@ fn emit_generated(bytes: Vec<u8>, json: bool) -> Result<()> {
 
 fn playback_loop(engine: &mut Engine, stop: &AtomicBool) -> Result<()> {
     let mut previous = String::new();
-    while !stop.load(Ordering::Relaxed) && !engine.playback_failed && engine.playback_active() {
+    while !stop.load(Ordering::Relaxed) && !engine.playback_failed() && engine.playback_active() {
         engine.tick()?;
         let line = format!(
             "{} | {} | {}",
             engine
-                .status
+                .status()
                 .station
                 .as_ref()
                 .map(|s| crate::clean_text(&s.name))
                 .unwrap_or_default(),
-            engine.status.title,
-            engine.status.message
+            engine.status().title,
+            engine.status().message
         );
         if line != previous {
             eprintln!("{line}");
@@ -693,11 +694,11 @@ fn playback_loop(engine: &mut Engine, stop: &AtomicBool) -> Result<()> {
         thread::sleep(Duration::from_millis(100));
     }
     engine.shutdown()?;
-    if engine.playback_failed {
+    if engine.playback_failed() {
         if let Some(error) = engine.playback_error() {
             return Err(error.clone().into());
         }
-        bail!("{}", engine.status.message);
+        bail!("{}", engine.status().message);
     }
     Ok(())
 }

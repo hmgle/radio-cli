@@ -77,7 +77,7 @@ pub struct Engine {
 }
 
 /// Shared services and published session state owned by the engine.
-pub struct Session {
+pub(crate) struct Session {
     persistence: Option<persistence::Writer>,
     pub subtitles: crate::speech::Controller,
     pub(crate) artwork: artwork::Controller,
@@ -114,19 +114,77 @@ impl Session {
     }
 }
 
-impl std::ops::Deref for Engine {
-    type Target = Session;
-    fn deref(&self) -> &Session {
-        &self.session
+impl Engine {
+    pub fn status(&self) -> &Status {
+        &self.session.status
     }
-}
-impl std::ops::DerefMut for Engine {
-    fn deref_mut(&mut self) -> &mut Session {
+
+    pub fn config(&self) -> &Config {
+        &self.session.config
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.session.store
+    }
+
+    pub fn subtitles(&self) -> &crate::speech::Snapshot {
+        &self.session.subtitles.snapshot
+    }
+
+    pub fn playback_failed(&self) -> bool {
+        self.session.playback_failed
+    }
+
+    pub(crate) fn catalog_mut(&mut self) -> &mut Store {
+        &mut self.session.store
+    }
+
+    pub(crate) fn save_preference(&self, key: &str, value: &str) -> Result<()> {
+        self.session.save_preference(key, value)
+    }
+
+    pub(crate) fn set_language(&mut self, language: String) {
+        crate::messages::init(Some(&language), None);
+        self.session.config.settings.language = Some(language.clone());
+        self.session.status.message = crate::t!("language_set", "language" => language);
+    }
+
+    pub(crate) fn request_artwork(&mut self, station: Option<String>) {
+        self.session.artwork.demand = station;
+    }
+
+    pub(crate) fn track_artwork(&self) -> &Option<artwork::TrackArtwork> {
+        &self.session.artwork.cover
+    }
+
+    pub(crate) fn start_diagnostics(&mut self) -> Result<()> {
+        if self.session.diagnostics.is_some() {
+            bail!(crate::t!("diagnostics_busy"));
+        }
+        let config = self.session.config.clone();
+        self.session.diagnostics = Some(Background::start("radio-doctor", move |cancel| {
+            crate::cli::doctor_report(&config, &cancel)
+        })?);
+        Ok(())
+    }
+
+    pub(crate) fn poll_diagnostics(&mut self) -> Option<Result<(serde_json::Value, bool)>> {
+        let result = self.session.diagnostics.as_ref()?.poll()?;
+        self.session.diagnostics = None;
+        Some(result)
+    }
+
+    pub(crate) fn stop(&mut self) -> Result<()> {
+        self.stop_playback()?;
+        self.session.status.message = crate::t!("playback_stopped").into();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_session(&mut self) -> &mut Session {
         &mut self.session
     }
-}
 
-impl Engine {
     pub fn bootstrap(&mut self) -> Result<usize> {
         self.session.directory.bootstrap(&mut self.session.store)
     }
@@ -213,7 +271,7 @@ impl Engine {
         if let Err(error) = &result
             && !self.playback_active()
         {
-            self.status.playback_state = PlaybackState::Failed {
+            self.session.status.playback_state = PlaybackState::Failed {
                 reason: format!("{error:#}"),
             };
         }
@@ -232,7 +290,7 @@ impl Engine {
         if let Err(error) = &result
             && !self.playback_active()
         {
-            self.status.playback_state = PlaybackState::Failed {
+            self.session.status.playback_state = PlaybackState::Failed {
                 reason: format!("{error:#}"),
             };
         }
@@ -246,7 +304,7 @@ impl Engine {
         if let Err(error) = &result
             && !self.playback_active()
         {
-            self.status.playback_state = PlaybackState::Failed {
+            self.session.status.playback_state = PlaybackState::Failed {
                 reason: format!("{error:#}"),
             };
         }
@@ -264,15 +322,15 @@ impl Engine {
     }
 
     fn subtitle_tick(&mut self) {
-        if !self.background_media {
+        if !self.session.background_media {
             return;
         }
-        if self.subtitles.snapshot.enabled && !self.artwork.quiescent() {
-            self.artwork.cancel();
+        if self.session.subtitles.snapshot.enabled && !self.session.artwork.quiescent() {
+            self.session.artwork.cancel();
             return;
         }
-        let playing = self.status.playback_state == PlaybackState::Playing;
-        let paused = self.status.paused();
+        let playing = self.session.status.playback_state == PlaybackState::Playing;
+        let paused = self.session.status.paused();
         let local = self.playback.source_kind == playback::SourceKind::Local;
         let generation = self.playback.generation;
         let session = &mut self.session;
@@ -283,49 +341,50 @@ impl Engine {
     }
 
     pub fn set_subtitles(&mut self, enabled: bool) {
-        self.subtitles.enabled(enabled);
+        self.session.subtitles.enabled(enabled);
     }
     pub fn retry_subtitles(&mut self) {
-        self.subtitles.retry();
+        self.session.subtitles.retry();
     }
     pub fn clear_subtitles(&mut self) {
-        self.subtitles.clear();
+        self.session.subtitles.clear();
     }
     pub fn set_subtitle_model(&mut self, id: String) -> Result<()> {
         crate::speech::validate_model(&id)?;
-        let mut settings = self.config.settings.subtitles.clone();
+        let mut settings = self.session.config.settings.subtitles.clone();
         settings.model = id;
         settings.validate()?;
-        self.config.settings.subtitles = settings;
-        self.subtitles.retry();
-        self.subtitles.clear();
+        self.session.config.settings.subtitles = settings;
+        self.session.subtitles.retry();
+        self.session.subtitles.clear();
         Ok(())
     }
 
     fn artwork_tick(&mut self) {
-        let request = (self.background_media
-            && !self.subtitles.snapshot.enabled
-            && self.subtitles.quiescent()
-            && self.config.settings.artwork == crate::config::ArtworkMode::Track
-            && self.status.playback_state == PlaybackState::Playing
+        let request = (self.session.background_media
+            && !self.session.subtitles.snapshot.enabled
+            && self.session.subtitles.quiescent()
+            && self.session.config.settings.artwork == crate::config::ArtworkMode::Track
+            && self.session.status.playback_state == PlaybackState::Playing
             && !matches!(
-                self.status.recording_state,
+                self.session.status.recording_state,
                 RecordingState::Probing | RecordingState::Recording | RecordingState::Finalizing
             )
             && self.playback.source_kind != playback::SourceKind::Local
             && self.playback.retiring.is_empty()
             && self.recording.retiring_probes.is_empty()
-            && !self.status.title.is_empty())
-        .then(|| self.status.station.as_ref())
+            && !self.session.status.title.is_empty())
+        .then_some(self.session.status.station.as_ref())
         .flatten()
         .filter(|station| {
-            station.hls == 0 && self.artwork.demand.as_deref() == Some(station.stationuuid.as_str())
+            station.hls == 0
+                && self.session.artwork.demand.as_deref() == Some(station.stationuuid.as_str())
         })
-        .filter(|_| crate::config::validate_url(&self.status.source_url).is_ok())
+        .filter(|_| crate::config::validate_url(&self.session.status.source_url).is_ok())
         .map(|station| artwork::Request {
             stationuuid: station.stationuuid.clone(),
-            source_url: self.status.source_url.clone(),
-            title: self.status.title.clone(),
+            source_url: self.session.status.source_url.clone(),
+            title: self.session.status.title.clone(),
         });
         let session = &mut self.session;
         session.artwork.update(&session.config, request);
@@ -361,7 +420,7 @@ impl Engine {
             && self.recording.recording_probe.is_none()
             && self.recording.finalizing.is_none()
         {
-            self.status.recording_state = RecordingState::Failed {
+            self.session.status.recording_state = RecordingState::Failed {
                 reason: format!("{error:#}"),
             };
         }
@@ -381,7 +440,7 @@ impl Engine {
             && self.recording.recording_probe.is_none()
             && self.recording.finalizing.is_none()
         {
-            self.status.recording_state = RecordingState::Failed {
+            self.session.status.recording_state = RecordingState::Failed {
                 reason: format!("{error:#}"),
             };
         }
@@ -406,7 +465,7 @@ impl Engine {
             && self.recording.recording_probe.is_none()
             && self.recording.finalizing.is_none()
         {
-            self.status.recording_state = RecordingState::Failed {
+            self.session.status.recording_state = RecordingState::Failed {
                 reason: format!("{error:#}"),
             };
         }
@@ -419,29 +478,29 @@ impl Engine {
     }
 
     pub(crate) fn enable_background_media(&mut self) -> Result<()> {
-        if self.persistence.is_none() {
-            self.persistence = Some(persistence::Writer::start(
-                self.config.data_dir.join("radio.db"),
-                self._lock.clone(),
+        if self.session.persistence.is_none() {
+            self.session.persistence = Some(persistence::Writer::start(
+                self.session.config.data_dir.join("radio.db"),
+                self.session._lock.clone(),
             )?);
         }
-        self.store.fail_writes_fast()?;
-        self.background_media = true;
-        let enabled = self.config.settings.subtitles.enabled;
-        self.subtitles.enabled(enabled);
+        self.session.store.fail_writes_fast()?;
+        self.session.background_media = true;
+        let enabled = self.session.config.settings.subtitles.enabled;
+        self.session.subtitles.enabled(enabled);
         Ok(())
     }
 
     pub fn delete_recording(&mut self, id: String, index_only: bool) -> Result<()> {
-        if self.library_task.is_some() {
+        if self.session.library_task.is_some() {
             bail!(DomainError::new(ErrorCode::RecordingBusy));
         }
         if self.playback.local_recording_id.as_deref() == Some(&id) {
             self.stop_playback()?;
         }
-        let path = self.config.data_dir.join("radio.db");
-        let lock = self._lock.clone();
-        self.library_task = Some(Background::start(
+        let path = self.session.config.data_dir.join("radio.db");
+        let lock = self.session._lock.clone();
+        self.session.library_task = Some(Background::start(
             "radio-recording-delete",
             move |cancel| {
                 let _lock = lock;
@@ -456,14 +515,15 @@ impl Engine {
     }
 
     pub fn open_recordings(&mut self) -> Result<()> {
-        if self.library_task.is_some() {
+        if self.session.library_task.is_some() {
             bail!(DomainError::new(ErrorCode::RecordingBusy));
         }
-        let dir = self.config.recording_dir.clone();
-        self.library_task = Some(Background::start("radio-open-recordings", move |cancel| {
-            crate::service::open_recordings(&dir, &cancel)?;
-            Ok(crate::t!("recordings_opened", "path" => dir.display()))
-        })?);
+        let dir = self.session.config.recording_dir.clone();
+        self.session.library_task =
+            Some(Background::start("radio-open-recordings", move |cancel| {
+                crate::service::open_recordings(&dir, &cancel)?;
+                Ok(crate::t!("recordings_opened", "path" => dir.display()))
+            })?);
         Ok(())
     }
 
@@ -480,10 +540,10 @@ impl Engine {
 
     pub fn shutdown(&mut self) -> Result<()> {
         self.stop_playback()?;
-        self.subtitles.enabled(false);
+        self.session.subtitles.enabled(false);
         self.playback.click_task = None;
-        self.diagnostics = None;
-        if let Some(writer) = &self.persistence {
+        self.session.diagnostics = None;
+        if let Some(writer) = &self.session.persistence {
             writer.close();
         }
         // Allow normal finalization, then cancel verification if its budget
@@ -492,9 +552,10 @@ impl Engine {
         while (self.recording.finalizing.is_some()
             || !self.playback.retiring.is_empty()
             || !self.recording.retiring_probes.is_empty()
-            || !self.artwork.quiescent()
-            || !self.subtitles.quiescent()
+            || !self.session.artwork.quiescent()
+            || !self.session.subtitles.quiescent()
             || self
+                .session
                 .persistence
                 .as_ref()
                 .is_some_and(|writer| !writer.finished()))
@@ -504,7 +565,7 @@ impl Engine {
             std::thread::sleep(Duration::from_millis(10));
         }
         self.recording.finalizing = None;
-        if let Some(writer) = self.persistence.take() {
+        if let Some(writer) = self.session.persistence.take() {
             writer.poll().context(crate::t!("session_save_failed"))?;
             if !writer.finished() {
                 bail!(crate::t!("session_save_failed"));
@@ -514,13 +575,18 @@ impl Engine {
     }
 
     fn poll_background(&mut self) -> Result<()> {
-        if let Some(writer) = &self.persistence {
+        if let Some(writer) = &self.session.persistence {
             writer.poll().context(crate::t!("session_save_failed"))?;
         }
-        self.subtitles.poll_retiring();
-        if let Some(result) = self.library_task.as_ref().and_then(Background::poll) {
-            self.library_task = None;
-            self.status.message = match result {
+        self.session.subtitles.poll_retiring();
+        if let Some(result) = self
+            .session
+            .library_task
+            .as_ref()
+            .and_then(Background::poll)
+        {
+            self.session.library_task = None;
+            self.session.status.message = match result {
                 Ok(message) => message,
                 Err(error) => {
                     crate::t!("recording_operation_failed", "error" => format!("{error:#}"))
@@ -555,7 +621,7 @@ mod tests {
             active: true,
             ..Station::default()
         };
-        engine.store.upsert(&station).unwrap();
+        engine.session.store.upsert(&station).unwrap();
         engine.enable_background_media().unwrap();
         let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
         connection.execute_batch("BEGIN IMMEDIATE").unwrap();
@@ -564,11 +630,11 @@ mod tests {
             engine.volume(-1).unwrap();
         }
         engine.save_preference("pref_source", "favorites").unwrap();
-        engine.remember_play(&station.stationuuid).unwrap();
+        engine.session.remember_play(&station.stationuuid).unwrap();
         engine.stop_playback().unwrap();
         engine.tick().unwrap();
         assert!(started.elapsed() < Duration::from_millis(250));
-        assert_eq!(engine.status.volume, 70);
+        assert_eq!(engine.session.status.volume, 70);
         // Let the writer hit contention before sending the newer value.
         std::thread::sleep(Duration::from_millis(150));
         engine.volume(-5).unwrap();
@@ -576,19 +642,25 @@ mod tests {
         // Closing flushes the latest value even before the debounce expires.
         engine.shutdown().unwrap();
         assert_eq!(
-            engine.store.meta("pref_volume").unwrap().as_deref(),
+            engine.session.store.meta("pref_volume").unwrap().as_deref(),
             Some("65")
         );
         assert_eq!(
-            engine.store.meta("pref_source").unwrap().as_deref(),
+            engine.session.store.meta("pref_source").unwrap().as_deref(),
             Some("favorites")
         );
         assert_eq!(
-            engine.store.meta("pref_last_station").unwrap().as_deref(),
+            engine
+                .session
+                .store
+                .meta("pref_last_station")
+                .unwrap()
+                .as_deref(),
             Some(station.stationuuid.as_str())
         );
         assert_eq!(
             engine
+                .session
                 .store
                 .search_count(&Filter {
                     history: true,
@@ -605,6 +677,7 @@ mod tests {
         let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine
+            .session
             .store
             .test_connection()
             .execute_batch(
@@ -631,12 +704,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        let original = engine.config.settings.subtitles.model.clone();
+        let original = engine.session.config.settings.subtitles.model.clone();
         for id in ["unknown", "silero-vad", "../../model"] {
             let error = engine.set_subtitle_model(id.into()).unwrap_err();
             let error = error.downcast_ref::<DomainError>().unwrap();
             assert_eq!(error.code, ErrorCode::SubtitleModel);
-            assert_eq!(engine.config.settings.subtitles.model, original);
+            assert_eq!(engine.session.config.settings.subtitles.model, original);
         }
     }
 
@@ -665,8 +738,9 @@ mod tests {
                 active: true,
                 ..Station::default()
             };
-            engine.store.upsert(&station).unwrap();
+            engine.session.store.upsert(&station).unwrap();
             engine
+                .session
                 .store
                 .add_backup(&station.stationuuid, &format!("{}/backup", server.url))
                 .unwrap();
@@ -674,9 +748,13 @@ mod tests {
             engine.playback.random_filter = Some(Filter::default());
             engine.playback.session_started = true;
             let deadline = Instant::now() + Duration::from_secs(3);
-            while !engine.playback_failed {
+            while !engine.session.playback_failed {
                 engine.tick().unwrap();
-                assert!(Instant::now() < deadline, "{}", engine.status.message);
+                assert!(
+                    Instant::now() < deadline,
+                    "{}",
+                    engine.session.status.message
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             let error = engine.playback_error().unwrap();
@@ -712,7 +790,7 @@ mod tests {
         engine.enable_background_media().unwrap();
         engine.play("https://example.com/live").unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
-        while !engine.playback_failed {
+        while !engine.session.playback_failed {
             engine.tick().unwrap();
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
@@ -739,16 +817,16 @@ mod tests {
             custom: true,
             ..Station::default()
         };
-        engine.store.upsert(&station).unwrap();
-        engine.status.station = Some(station.clone());
-        engine.status.playback_state = PlaybackState::Playing;
+        engine.session.store.upsert(&station).unwrap();
+        engine.session.status.station = Some(station.clone());
+        engine.session.status.playback_state = PlaybackState::Playing;
         engine.playback.url = server.url.clone();
         engine.record_current(None, None).unwrap();
         let conn = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
         conn.execute_batch("CREATE TRIGGER reject_recording_update BEFORE UPDATE ON recordings BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
         assert!(engine.play("https://example.com/audition").is_err());
         assert_eq!(
-            engine.status.station.as_ref().unwrap().stationuuid,
+            engine.session.status.station.as_ref().unwrap().stationuuid,
             station.stationuuid
         );
         assert_eq!(engine.playback.source_kind, playback::SourceKind::Catalog);
@@ -783,22 +861,26 @@ mod tests {
                     active: true,
                     ..Station::default()
                 };
-                engine.store.upsert(&station).unwrap();
-                engine.status.station = Some(station);
-                engine.status.playback_state = PlaybackState::Playing;
-                engine.status.title = title.clone();
+                engine.session.store.upsert(&station).unwrap();
+                engine.session.status.station = Some(station);
+                engine.session.status.playback_state = PlaybackState::Playing;
+                engine.session.status.title = title.clone();
                 engine.playback.url = server.url.clone();
                 engine
                     .record_current(Some(Duration::from_secs(1)), None)
                     .unwrap();
-                engine.status.title = "Next track".into();
+                engine.session.status.title = "Next track".into();
                 let deadline = Instant::now() + Duration::from_secs(8);
-                while engine.status.recording_path.is_empty() {
+                while engine.session.status.recording_path.is_empty() {
                     engine.tick().unwrap();
-                    assert!(Instant::now() < deadline, "{}", engine.status.message);
+                    assert!(
+                        Instant::now() < deadline,
+                        "{}",
+                        engine.session.status.message
+                    );
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                let record = engine.store.recordings(1).unwrap().remove(0);
+                let record = engine.session.store.recordings(1).unwrap().remove(0);
                 let expected = crate::clean_text(&title).trim().to_owned();
                 assert_eq!(
                     record.track.as_deref(),
@@ -817,14 +899,18 @@ mod tests {
                 if title.is_empty() {
                     assert!(name.contains("-Station-"));
                 }
-                while engine.status.recording()
-                    || engine.status.recording_state == RecordingState::Finalizing
+                while engine.session.status.recording()
+                    || engine.session.status.recording_state == RecordingState::Finalizing
                 {
                     engine.tick().unwrap();
-                    assert!(Instant::now() < deadline, "{}", engine.status.message);
+                    assert!(
+                        Instant::now() < deadline,
+                        "{}",
+                        engine.session.status.message
+                    );
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                let saved = engine.store.recording(&record.id).unwrap();
+                let saved = engine.session.store.recording(&record.id).unwrap();
                 assert_eq!(saved.status, "complete", "{:?}", saved.error);
                 assert_eq!(saved.path, final_path);
                 assert_eq!(saved.track, record.track);
@@ -849,9 +935,9 @@ mod tests {
                 reason: "disk".into(),
             },
         ] {
-            engine.status.recording_state = state;
-            engine.status.recording_path = "old.mp3".into();
-            engine.status.recording_ms = 1000;
+            engine.session.status.recording_state = state;
+            engine.session.status.recording_path = "old.mp3".into();
+            engine.session.status.recording_ms = 1000;
             // No source reaches mpv; the new station still owns clean status.
             assert!(
                 engine
@@ -865,9 +951,9 @@ mod tests {
                     )
                     .is_err()
             );
-            assert_eq!(engine.status.recording_state, RecordingState::Idle);
-            assert!(engine.status.recording_path.is_empty());
-            assert_eq!(engine.status.recording_ms, 0);
+            assert_eq!(engine.session.status.recording_state, RecordingState::Idle);
+            assert!(engine.session.status.recording_path.is_empty());
+            assert_eq!(engine.session.status.recording_ms, 0);
         }
     }
 
@@ -876,7 +962,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.status.station = Some(Station {
+        engine.session.status.station = Some(Station {
             custom: true,
             ..Station::default()
         });
@@ -886,16 +972,16 @@ mod tests {
             .playback
             .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
             .unwrap();
-        assert!(engine.playback_failed);
-        assert!(!engine.status.muted);
+        assert!(engine.session.playback_failed);
+        assert!(!engine.session.status.muted);
         assert_eq!(engine.playback.reconnect_attempts, 0);
         assert!(engine.playback.reconnect_window.is_empty());
         assert!(engine.playback.reconnect_due.is_none());
-        let failed_state = engine.status.playback_state.clone();
+        let failed_state = engine.session.status.playback_state.clone();
         for _ in 0..3 {
             engine.tick().unwrap();
-            assert!(engine.playback_failed);
-            assert_eq!(engine.status.playback_state, failed_state);
+            assert!(engine.session.playback_failed);
+            assert_eq!(engine.session.status.playback_state, failed_state);
             assert!(!engine.playback_active());
         }
         engine.playback.reconnect_window =
@@ -913,12 +999,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        engine.status.station = Some(Station {
+        engine.session.status.station = Some(Station {
             custom: true,
             name: "Test".into(),
             ..Station::default()
         });
-        engine.status.muted = true;
+        engine.session.status.muted = true;
         engine.playback.session_started = true;
         for delay in [1, 3, 7] {
             engine
@@ -932,15 +1018,15 @@ mod tests {
                 .saturating_duration_since(Instant::now());
             assert!(remaining <= Duration::from_secs(delay));
             assert!(remaining > Duration::from_millis(delay * 1000 - 100));
-            assert!(!engine.playback_failed);
+            assert!(!engine.session.playback_failed);
         }
         engine.playback.reconnect_due = None;
         engine
             .playback
             .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
             .unwrap();
-        assert!(engine.playback_failed);
-        assert!(!engine.status.muted);
+        assert!(engine.session.playback_failed);
+        assert!(!engine.session.status.muted);
         assert_eq!(engine.playback.reconnect_attempts, 0);
         assert!(engine.playback.reconnect_window.is_empty());
         assert!(engine.playback.reconnect_due.is_none());
@@ -949,9 +1035,9 @@ mod tests {
             .playback
             .stream_failed(&mut engine.session, &mut engine.recording, "EOF")
             .unwrap();
-        engine.status.muted = true;
+        engine.session.status.muted = true;
         engine.stop_playback().unwrap();
-        assert!(!engine.status.muted);
+        assert!(!engine.session.status.muted);
         assert_eq!(engine.playback.reconnect_attempts, 0);
         assert!(engine.playback.reconnect_window.is_empty());
         assert!(engine.playback.reconnect_due.is_none());

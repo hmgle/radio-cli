@@ -80,8 +80,8 @@ pub fn run(config: Config, stop: Arc<AtomicBool>) -> Result<()> {
         crossterm::style::force_color_output(false);
     }
     let engine = Engine::new(config, stop.clone())?;
-    let mut app = App::restore(&engine.store, engine.config.settings.resume)?;
-    let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let mut app = App::restore(engine.store(), engine.config().settings.resume)?;
+    let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();

@@ -272,7 +272,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = test_support::config(dir.path());
         let engine = Engine::new(config.clone(), Arc::new(AtomicBool::new(false))).unwrap();
-        let mut view = View::new(engine.status.clone());
+        let mut view = View::new(engine.status().clone());
         view.rows = Arc::new(vec![Station {
             stationuuid: uuid::Uuid::new_v4().to_string(),
             name: "Logo station".into(),

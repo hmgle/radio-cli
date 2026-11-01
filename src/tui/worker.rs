@@ -6,7 +6,6 @@ use crate::{
     directory::Directory,
     engine::{Engine, Status},
     model::{Filter, Recording, Station},
-    process::Background,
     store::{ListRevision, Store},
 };
 use anyhow::{Result, bail};
@@ -368,9 +367,9 @@ pub(super) fn refresh(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>)
 }
 
 fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Result<()> {
-    let store_revision = engine.store.list_revision(filter)?;
+    let store_revision = engine.store().list_revision(filter)?;
     view.lock().unwrap().store_revision = Some(store_revision);
-    let note = catalog_note(&engine.store, engine.config.settings.auto_sync_days)?;
+    let note = catalog_note(engine.store(), engine.config().settings.auto_sync_days)?;
     {
         let mut data = view.lock().unwrap();
         if let Some(sender) = data.queries.clone() {
@@ -394,15 +393,17 @@ fn refresh_page(engine: &Engine, filter: &Filter, view: &Arc<Mutex<View>>) -> Re
         }
     }
     if filter.recordings {
-        let recordings = engine.store.recordings_page(filter.limit, filter.offset)?;
-        let total = engine.store.recordings_count()?;
+        let recordings = engine
+            .store()
+            .recordings_page(filter.limit, filter.offset)?;
+        let total = engine.store().recordings_count()?;
         let mut data = view.lock().unwrap();
         data.recordings = Arc::new(recordings);
         data.recordings_total = total;
         data.recordings_revision += 1;
     } else {
-        let rows = engine.store.search(filter)?;
-        let total = engine.store.search_count(filter)?;
+        let rows = engine.store().search(filter)?;
+        let total = engine.store().search_count(filter)?;
         let mut data = view.lock().unwrap();
         data.rows = Arc::new(rows);
         data.backups = Default::default();
@@ -440,7 +441,7 @@ pub(super) fn refresh_if_needed(
     recording_ended: bool,
 ) -> Result<()> {
     // Probe revisions on every tick so external commits bypass page backoff.
-    let revision = match engine.store.list_revision(filter) {
+    let revision = match engine.store().list_revision(filter) {
         Ok(revision) => revision,
         Err(error) => {
             let mut data = view.lock().unwrap();
@@ -459,7 +460,7 @@ pub(super) fn refresh_if_needed(
     // the Explore map compares every image against a stale zero and never
     // renders the density grid.
     if data.store_revision != Some(revision) || data.geo_revision == 0 {
-        let geo_revision = engine.store.geo_revision()?;
+        let geo_revision = engine.store().geo_revision()?;
         if data.geo_revision != geo_revision {
             data.geo_revision = geo_revision;
             data.revision += 1;
@@ -528,7 +529,7 @@ pub(super) fn execute(
         Command::Subtitles(action) => match action.as_str() {
             "on" => engine.set_subtitles(true),
             "off" => engine.set_subtitles(false),
-            "toggle" => engine.set_subtitles(!engine.subtitles.snapshot.enabled),
+            "toggle" => engine.set_subtitles(!engine.subtitles().enabled),
             "clear" => engine.clear_subtitles(),
             "retry" => engine.retry_subtitles(),
             _ => unreachable!(),
@@ -551,7 +552,7 @@ pub(super) fn execute(
                     ..Filter::default()
                 };
                 let position = engine
-                    .store
+                    .store()
                     .station_position(&uuid, &target)?
                     .ok_or_else(|| anyhow::anyhow!(crate::t!("jump_unavailable")))?;
                 target.offset = position / target.limit * target.limit;
@@ -583,7 +584,7 @@ pub(super) fn execute(
                 let kind = [FacetKind::Country, FacetKind::Language, FacetKind::Tag][selected];
                 let prefix = &data.facets_request.as_ref().unwrap().1;
                 Arc::make_mut(&mut data.facets)[selected] =
-                    engine.store.facets_limited(kind, prefix, 100)?;
+                    engine.store().facets_limited(kind, prefix, 100)?;
                 data.facets_loading = false;
             }
         }
@@ -610,27 +611,24 @@ pub(super) fn execute(
         Command::OpenRecordings => engine.open_recordings()?,
         Command::Random(filter) => engine.random(filter)?,
         Command::ToggleFavorite(uuid) => {
-            let add = engine.store.toggle_favorite(&uuid)?;
-            favorite_changed(&engine.store, view, &uuid, add)?;
+            let add = engine.catalog_mut().toggle_favorite(&uuid)?;
+            favorite_changed(engine.store(), view, &uuid, add)?;
         }
         Command::AdjustVolume(delta) => engine.volume(delta)?,
         Command::Favorite(uuid, add) => {
-            engine.store.favorite(&uuid, add)?;
-            favorite_changed(&engine.store, view, &uuid, add)?;
+            engine.store().favorite(&uuid, add)?;
+            favorite_changed(engine.store(), view, &uuid, add)?;
         }
         Command::Pause => engine.pause()?,
         Command::Mute => engine.mute()?,
         Command::SetLanguage(language) => {
-            crate::messages::init(Some(&language), None);
-            engine.config.settings.language = Some(language.clone());
-            engine.status.message = crate::t!("language_set", "language" => language);
+            engine.set_language(language);
         }
         Command::Stop => {
-            engine.stop_playback()?;
-            engine.status.message = crate::t!("playback_stopped").into();
+            engine.stop()?;
         }
         Command::Volume(value) => {
-            engine.volume(i32::from(value) - i32::from(engine.status.volume))?
+            engine.volume(i32::from(value) - i32::from(engine.status().volume))?
         }
         Command::RecordToggle => engine.toggle_recording()?,
         Command::RecordStop => engine.stop_recording(None)?,
@@ -641,7 +639,7 @@ pub(super) fn execute(
         } => {
             if let Some(uuid) = uuid {
                 if engine
-                    .status
+                    .status()
                     .station
                     .as_ref()
                     .is_none_or(|s| s.stationuuid != uuid)
@@ -654,7 +652,7 @@ pub(super) fn execute(
             }
         }
         Command::Add { name, url, backups } => {
-            let station = crate::service::add_station(&mut engine.store, name, url, &backups)?;
+            let station = crate::service::add_station(engine.catalog_mut(), name, url, &backups)?;
             view.lock().unwrap().log(
                 &crate::t!("station_added", "name" => station.name, "uuid" => station.stationuuid),
             );
@@ -670,7 +668,7 @@ pub(super) fn execute(
                     backup_url,
                 } => {
                     let station = crate::service::edit_station(
-                        &mut engine.store,
+                        engine.catalog_mut(),
                         &uuid,
                         name,
                         url,
@@ -682,11 +680,11 @@ pub(super) fn execute(
                     uuid,
                     keep_references,
                 } => {
-                    let kept = engine.store.remove_custom(&uuid, keep_references)?;
+                    let kept = engine.catalog_mut().remove_custom(&uuid, keep_references)?;
                     crate::t!("station_removed", "uuid" => uuid, "references" => if kept { crate::t!("station_references_kept") } else { "" })
                 }
                 StationAction::Backups { uuid, add, remove } => {
-                    let backups = engine.store.update_backups(&uuid, &add, &remove)?;
+                    let backups = engine.catalog_mut().update_backups(&uuid, &add, &remove)?;
                     crate::t!("station_backups_updated", "uuid" => uuid, "urls" => backups.join(" · "))
                 }
                 _ => unreachable!("station list/add use their existing commands"),
@@ -699,7 +697,7 @@ pub(super) fn execute(
                 bail!(crate::t!("catalog_task_busy"));
             }
             *job = Some(CatalogJob::start(
-                engine.config.clone(),
+                engine.config().clone(),
                 false,
                 accept_shrink,
             )?);
@@ -726,18 +724,18 @@ pub(super) fn execute(
             request_refresh(view);
         }
         Command::Refresh => request_refresh(view),
-        Command::Backups(uuid) => load_backups(&engine.store, &uuid, view),
+        Command::Backups(uuid) => load_backups(engine.store(), &uuid, view),
         Command::Info(uuid, request) => {
             let result = match engine
-                .status
+                .status()
                 .station
                 .as_ref()
                 .filter(|s| s.stationuuid == uuid)
             {
                 Some(station) => Ok(station.clone()),
-                None => engine.store.station(&uuid),
+                None => engine.store().station(&uuid),
             };
-            load_backups(&engine.store, &uuid, view);
+            load_backups(engine.store(), &uuid, view);
             let mut data = view.lock().unwrap();
             data.inspected_request = request;
             data.inspected = None;
@@ -752,13 +750,7 @@ pub(super) fn execute(
             data.revision += 1;
         }
         Command::Doctor => {
-            if engine.diagnostics.is_some() {
-                bail!(crate::t!("diagnostics_busy"));
-            }
-            let config = engine.config.clone();
-            engine.diagnostics = Some(Background::start("radio-doctor", move |cancel| {
-                crate::cli::doctor_report(&config, &cancel)
-            })?);
+            engine.start_diagnostics()?;
             view.lock().unwrap().log(crate::t!("diagnostics_started"));
         }
     }
@@ -773,7 +765,7 @@ pub(super) fn run(
     mut filter: Filter,
 ) -> Result<()> {
     engine.enable_background_media()?;
-    let queries = query::Worker::start(&engine.config.data_dir.join("radio.db"), &view)?;
+    let queries = query::Worker::start(&engine.config().data_dir.join("radio.db"), &view)?;
     view.lock().unwrap().queries = Some(queries.sender.clone());
     refresh(&engine, &filter, &view)?;
     if let Err(error) = engine.resume_last_station() {
@@ -781,8 +773,8 @@ pub(super) fn run(
             .unwrap()
             .log(&crate::t!("resume_playback_failed", "detail" => format!("{error:#}")));
     }
-    let empty = engine.store.count()? == 0;
-    let expired = auto_sync_due(&engine.store, engine.config.settings.auto_sync_days)?;
+    let empty = engine.store().count()? == 0;
+    let expired = auto_sync_due(engine.store(), engine.config().settings.auto_sync_days)?;
     let mut job = if empty || expired {
         let mut data = view.lock().unwrap();
         data.task_active = true;
@@ -794,7 +786,7 @@ pub(super) fn run(
         .into();
         let message = data.task.clone();
         data.log(&message);
-        Some(CatalogJob::start(engine.config.clone(), empty, false)?)
+        Some(CatalogJob::start(engine.config().clone(), empty, false)?)
     } else {
         None
     };
@@ -855,8 +847,7 @@ pub(super) fn run(
                 drop(active);
                 request_refresh(&view);
             }
-            if let Some(result) = engine.diagnostics.as_ref().and_then(Background::poll) {
-                engine.diagnostics = None;
+            if let Some(result) = engine.poll_diagnostics() {
                 let mut data = view.lock().unwrap();
                 match result {
                     Ok((report, _)) => {
@@ -874,7 +865,7 @@ pub(super) fn run(
                     }
                 }
             }
-            engine.artwork.demand = view.lock().unwrap().artwork_station.clone();
+            engine.request_artwork(view.lock().unwrap().artwork_station.clone());
             if let Err(error) = engine.tick() {
                 view.lock().unwrap().fail_operation(&format!("{error:#}"));
             }
@@ -892,24 +883,24 @@ pub(super) fn run(
                 &engine,
                 &filter,
                 &view,
-                was_recording && !engine.status.recording(),
+                was_recording && !engine.status().recording(),
             )?;
-            was_recording = engine.status.recording();
+            was_recording = engine.status().recording();
             let mut data = view.lock().unwrap();
-            data.update_subtitles(&engine.subtitles.snapshot);
-            if data.track_artwork != engine.artwork.cover {
-                data.track_artwork = engine.artwork.cover.clone();
+            data.update_subtitles(engine.subtitles());
+            if &data.track_artwork != engine.track_artwork() {
+                data.track_artwork = engine.track_artwork().clone();
                 data.revision += 1;
                 data.immediate_revision += 1;
             }
-            if !data.status.ui_eq(&engine.status) {
-                if !data.status.control_eq(&engine.status) {
+            if !data.status.ui_eq(engine.status()) {
+                if !data.status.control_eq(engine.status()) {
                     data.immediate_revision += 1;
                 }
-                data.status = engine.status.clone();
+                data.status = engine.status().clone();
                 data.revision += 1;
-                if engine.status.message != last_message {
-                    last_message = engine.status.message.clone();
+                if engine.status().message != last_message {
+                    last_message = engine.status().message.clone();
                     data.log(&last_message);
                 }
             }

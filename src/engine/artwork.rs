@@ -293,18 +293,18 @@ mod tests {
         config.settings.artwork = crate::config::ArtworkMode::Track;
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine.enable_background_media().unwrap();
-        engine.status.station = Some(Station {
+        engine.session.status.station = Some(Station {
             stationuuid: "playing".into(),
             ..Default::default()
         });
-        engine.status.source_url = "http://127.0.0.1:1/live".into();
-        engine.status.title = "Track".into();
-        engine.status.playback_state = PlaybackState::Playing;
-        engine.artwork.demand = Some("playing".into());
+        engine.session.status.source_url = "http://127.0.0.1:1/live".into();
+        engine.session.status.title = "Track".into();
+        engine.session.status.playback_state = PlaybackState::Playing;
+        engine.session.artwork.demand = Some("playing".into());
         engine.set_subtitles(true);
         for _ in 0..12 {
             engine.artwork_tick();
-            assert!(engine.artwork.task.is_none());
+            assert!(engine.session.artwork.task.is_none());
         }
     }
     fn run<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -676,12 +676,12 @@ mod tests {
         let config = test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine.enable_background_media().unwrap();
-        engine.status.station = Some(Station {
+        engine.session.status.station = Some(Station {
             stationuuid: uuid::Uuid::new_v4().to_string(),
             url: "http://localhost/live".into(),
             ..Station::default()
         });
-        engine.status.playback_state = PlaybackState::Playing;
+        engine.session.status.playback_state = PlaybackState::Playing;
         engine.playback.url = "http://localhost/live".into();
         let (entered, ready) = mpsc::channel();
         let (release, gate) = mpsc::channel();
@@ -692,7 +692,7 @@ mod tests {
         })
         .unwrap();
         ready.recv_timeout(Duration::from_secs(1)).unwrap();
-        engine.artwork.task = Some((
+        engine.session.artwork.task = Some((
             Key {
                 generation: 1,
                 request: request("http://localhost/live", "Track"),
@@ -708,12 +708,12 @@ mod tests {
             .artwork_deadline = Instant::now();
         engine.tick().unwrap();
         assert!(matches!(
-            engine.status.recording_state,
+            engine.session.status.recording_state,
             RecordingState::Failed { .. }
         ));
         assert!(engine.recording.recording_probe.is_none());
-        assert!(engine.store.recordings(1).unwrap().is_empty());
-        assert_eq!(engine.status.playback_state, PlaybackState::Playing);
+        assert!(engine.session.store.recordings(1).unwrap().is_empty());
+        assert_eq!(engine.session.status.playback_state, PlaybackState::Playing);
         assert!(
             wait_for_handoff(
                 Some(&AtomicBool::new(false)),
@@ -828,32 +828,37 @@ mod tests {
             active: true,
             ..Station::default()
         };
-        engine.store.upsert(&station).unwrap();
-        engine.status.station = Some(station.clone());
-        engine.status.title = "Requested track".into();
-        engine.status.source_url = format!("{}/icy", server.url);
-        engine.status.playback_state = PlaybackState::Playing;
+        engine.session.store.upsert(&station).unwrap();
+        engine.session.status.station = Some(station.clone());
+        engine.session.status.title = "Requested track".into();
+        engine.session.status.source_url = format!("{}/icy", server.url);
+        engine.session.status.playback_state = PlaybackState::Playing;
         engine.playback.url = station.url;
-        engine.artwork.demand = Some(station.stationuuid);
+        engine.session.artwork.demand = Some(station.stationuuid);
         engine.tick().unwrap();
         ready.recv_timeout(Duration::from_secs(2)).unwrap();
-        *completion.lock().unwrap() = engine.artwork.completion();
+        *completion.lock().unwrap() = engine.session.artwork.completion();
         engine
             .record_current(Some(Duration::from_secs(1)), None)
             .unwrap();
-        assert_eq!(engine.status.recording_state, RecordingState::Probing);
-        engine.status.title = "Later track".into();
+        assert_eq!(
+            engine.session.status.recording_state,
+            RecordingState::Probing
+        );
+        engine.session.status.title = "Later track".into();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while engine.store.recordings(1).unwrap().is_empty() {
+        while engine.session.store.recordings(1).unwrap().is_empty() {
             engine.tick().unwrap();
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(
-            engine.store.recordings(1).unwrap()[0].track.as_deref(),
+            engine.session.store.recordings(1).unwrap()[0]
+                .track
+                .as_deref(),
             Some("Requested track")
         );
-        assert!(engine.artwork.cover.is_none());
+        assert!(engine.session.artwork.cover.is_none());
         assert!(
             peak.load(Ordering::Relaxed) <= 2,
             "audio connection budget exceeded"
@@ -874,13 +879,13 @@ mod tests {
         config.settings.artwork = ArtworkMode::Track;
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine.enable_background_media().unwrap();
-        engine.status.station = Some(Station {
+        engine.session.status.station = Some(Station {
             stationuuid: "playing".into(),
             ..Station::default()
         });
-        engine.status.title = "Track".into();
-        engine.status.source_url = "http://localhost/live".into();
-        engine.artwork.demand = Some("playing".into());
+        engine.session.status.title = "Track".into();
+        engine.session.status.source_url = "http://localhost/live".into();
+        engine.session.artwork.demand = Some("playing".into());
         for state in [
             PlaybackState::Idle,
             PlaybackState::Paused,
@@ -890,36 +895,36 @@ mod tests {
                 reason: "failed".into(),
             },
         ] {
-            engine.status.playback_state = state;
+            engine.session.status.playback_state = state;
             engine.artwork_tick();
-            assert!(engine.artwork.task.is_none());
+            assert!(engine.session.artwork.task.is_none());
         }
-        engine.status.playback_state = PlaybackState::Playing;
+        engine.session.status.playback_state = PlaybackState::Playing;
         for state in [
             RecordingState::Probing,
             RecordingState::Recording,
             RecordingState::Finalizing,
         ] {
-            engine.status.recording_state = state;
+            engine.session.status.recording_state = state;
             engine.artwork_tick();
-            assert!(engine.artwork.task.is_none());
+            assert!(engine.session.artwork.task.is_none());
         }
-        engine.status.recording_state = RecordingState::Idle;
-        engine.status.station.as_mut().unwrap().hls = 1;
+        engine.session.status.recording_state = RecordingState::Idle;
+        engine.session.status.station.as_mut().unwrap().hls = 1;
         engine.artwork_tick();
-        assert!(engine.artwork.task.is_none());
-        engine.status.station.as_mut().unwrap().hls = 0;
-        engine.artwork.demand = Some("selected only".into());
+        assert!(engine.session.artwork.task.is_none());
+        engine.session.status.station.as_mut().unwrap().hls = 0;
+        engine.session.artwork.demand = Some("selected only".into());
         engine.artwork_tick();
-        assert!(engine.artwork.task.is_none());
-        engine.artwork.demand = Some("playing".into());
-        engine.config.settings.artwork = ArtworkMode::Station;
+        assert!(engine.session.artwork.task.is_none());
+        engine.session.artwork.demand = Some("playing".into());
+        engine.session.config.settings.artwork = ArtworkMode::Station;
         engine.artwork_tick();
-        assert!(engine.artwork.task.is_none());
-        engine.config.settings.artwork = ArtworkMode::Track;
+        assert!(engine.session.artwork.task.is_none());
+        engine.session.config.settings.artwork = ArtworkMode::Track;
         engine.playback.source_kind = super::super::playback::SourceKind::Local;
         engine.artwork_tick();
-        assert!(engine.artwork.task.is_none());
+        assert!(engine.session.artwork.task.is_none());
     }
 
     #[test]
@@ -938,9 +943,9 @@ mod tests {
             url: "http://localhost/live".into(),
             ..Station::default()
         };
-        engine.status.station = Some(station.clone());
-        engine.status.playback_state = PlaybackState::Playing;
-        engine.status.title = "Frozen title".into();
+        engine.session.status.station = Some(station.clone());
+        engine.session.status.playback_state = PlaybackState::Playing;
+        engine.session.status.title = "Frozen title".into();
         engine.playback.url = station.url;
         let (entered, ready) = mpsc::channel();
         let (release, gate) = mpsc::channel();
@@ -953,7 +958,7 @@ mod tests {
         })
         .unwrap();
         ready.recv_timeout(Duration::from_secs(2)).unwrap();
-        engine.artwork.task = Some((
+        engine.session.artwork.task = Some((
             Key {
                 generation: 1,
                 request: request("http://localhost/live", "Frozen title"),
@@ -961,13 +966,16 @@ mod tests {
             task,
         ));
         engine.record_current(None, None).unwrap();
-        assert_eq!(engine.status.recording_state, RecordingState::Probing);
+        assert_eq!(
+            engine.session.status.recording_state,
+            RecordingState::Probing
+        );
         assert!(engine.recording.recording_probe.is_some());
         engine.stop_playback().unwrap();
         assert!(engine.recording.recording_probe.is_none());
-        assert_eq!(engine.status.recording_state, RecordingState::Idle);
+        assert_eq!(engine.session.status.recording_state, RecordingState::Idle);
         release.send(()).unwrap();
         engine.shutdown().unwrap();
-        assert!(engine.store.recordings(1).unwrap().is_empty());
+        assert!(engine.session.store.recordings(1).unwrap().is_empty());
     }
 }

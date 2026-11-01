@@ -868,36 +868,36 @@ fn selection_resume_restores_source_and_page_once_without_playback() {
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-    engine.config.settings.resume = ResumeMode::Selection;
+    engine.test_session().config.settings.resume = ResumeMode::Selection;
     // Any attempted playback would fail to spawn this binary.
-    engine.config.settings.mpv = "/missing/mpv".into();
+    engine.test_session().config.settings.mpv = "/missing/mpv".into();
     for i in 0..105 {
         let mut row = station(&format!("Station {i}"));
         row.clickcount = i;
         row.url = "https://example.com/live".into();
-        engine.store.upsert(&row).unwrap();
-        engine.store.favorite(&row.stationuuid, true).unwrap();
+        engine.store().upsert(&row).unwrap();
+        engine.store().favorite(&row.stationuuid, true).unwrap();
         if i == 1 {
             engine
-                .store
+                .store()
                 .set_meta("pref_last_station", &row.stationuuid)
                 .unwrap();
         }
     }
-    engine.store.set_meta("pref_source", "favorites").unwrap();
+    engine.store().set_meta("pref_source", "favorites").unwrap();
     engine.resume_last_station().unwrap();
     assert_eq!(
-        engine.status.playback_state,
+        engine.status().playback_state,
         crate::engine::PlaybackState::Idle
     );
-    assert!(engine.status.station.is_none());
-    let mut app = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    assert!(engine.status().station.is_none());
+    let mut app = App::restore(engine.store(), ResumeMode::Selection).unwrap();
     assert_eq!(app.source, Source::Favorites);
     assert_eq!(app.filter.offset, 100);
-    let mut data = View::new(engine.status.clone());
+    let mut data = View::new(engine.status().clone());
     data.filter = app.filter.clone();
     app.reconcile(&data); // Wait for the first query to finish.
-    data.rows = engine.store.search(&app.filter).unwrap().into();
+    data.rows = engine.store().search(&app.filter).unwrap().into();
     data.rows_revision = 1;
     data.page = Some(worker::PageState {
         generation: 0,
@@ -908,7 +908,7 @@ fn selection_resume_restores_source_and_page_once_without_playback() {
     assert_eq!(app.selected(&data).unwrap().name, "Station 1");
     // The target can disappear between restoration and the first query.
     // A later revision must not unexpectedly select it when it returns.
-    let mut vanished = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    let mut vanished = App::restore(engine.store(), ResumeMode::Selection).unwrap();
     let mut absent = data.clone();
     absent.rows = data
         .rows
@@ -929,17 +929,17 @@ fn selection_resume_restores_source_and_page_once_without_playback() {
     assert_eq!(app.list.selected(), Some(0));
 
     engine
-        .store
+        .store()
         .set_meta("pref_last_station", "missing")
         .unwrap();
-    let mut missing = App::restore(&engine.store, ResumeMode::Selection).unwrap();
+    let mut missing = App::restore(engine.store(), ResumeMode::Selection).unwrap();
     assert_eq!(missing.source, Source::Favorites);
     assert_eq!(missing.filter.offset, 0);
     data.filter = missing.filter.clone();
-    data.rows = engine.store.search(&missing.filter).unwrap().into();
+    data.rows = engine.store().search(&missing.filter).unwrap().into();
     missing.reconcile(&data);
     assert_eq!(missing.list.selected(), Some(0));
-    let fresh = App::restore(&engine.store, ResumeMode::Disabled).unwrap();
+    let fresh = App::restore(engine.store(), ResumeMode::Disabled).unwrap();
     assert_eq!(fresh.source, Source::Stations);
     assert_eq!(fresh.filter.offset, 0);
 
@@ -947,11 +947,11 @@ fn selection_resume_restores_source_and_page_once_without_playback() {
     // between App restoration and worker startup.
     let initial_filter = app.filter.clone();
     let expected_filter = initial_filter.clone();
-    engine.config.settings.auto_sync_days = 0;
-    engine.store.set_meta("pref_source", "stations").unwrap();
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    engine.test_session().config.settings.auto_sync_days = 0;
+    engine.store().set_meta("pref_source", "stations").unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let output = shared.clone();
-    let stop = engine.stop.clone();
+    let stop = engine.test_session().stop.clone();
     let flag = stop.clone();
     let (_sender, receiver) = command::channel(8);
     let handle = thread::spawn(move || worker::run(engine, receiver, output, flag, initial_filter));
@@ -1354,7 +1354,7 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-    let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let data = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let mut filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -1376,11 +1376,11 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
         };
         worker::execute(command, &mut engine, &mut filter, &mut job, &data).unwrap();
         assert_eq!(
-            Source::restore(&engine.store, crate::config::ResumeMode::Playback).unwrap(),
+            Source::restore(engine.store(), crate::config::ResumeMode::Playback).unwrap(),
             source
         );
         assert_eq!(
-            Source::restore(&engine.store, crate::config::ResumeMode::Disabled).unwrap(),
+            Source::restore(engine.store(), crate::config::ResumeMode::Disabled).unwrap(),
             Source::Stations
         );
     }
@@ -1489,19 +1489,19 @@ fn expired_catalog_syncs_at_startup_and_can_be_disabled() {
     let config = crate::test_support::config_with_api(dir.path(), &api);
     let stop = Arc::new(AtomicBool::new(false));
     let engine = Engine::new(config, stop.clone()).unwrap();
-    assert!(!worker::auto_sync_due(&engine.store, 7).unwrap());
+    assert!(!worker::auto_sync_due(engine.store(), 7).unwrap());
     let old = station("Old");
-    engine.store.upsert(&old).unwrap();
+    engine.store().upsert(&old).unwrap();
     engine
-        .store
+        .store()
         .set_meta(
             "last_sync",
             &(chrono::Utc::now() - chrono::Duration::days(8)).to_rfc3339(),
         )
         .unwrap();
-    assert!(worker::auto_sync_due(&engine.store, 7).unwrap());
-    assert!(!worker::auto_sync_due(&engine.store, 0).unwrap());
-    assert!(!worker::auto_sync_due(&engine.store, 9).unwrap());
+    assert!(worker::auto_sync_due(engine.store(), 7).unwrap());
+    assert!(!worker::auto_sync_due(engine.store(), 0).unwrap());
+    assert!(!worker::auto_sync_due(engine.store(), 9).unwrap());
     let replacement = station("Automatically synced");
     let body = serde_json::to_vec(&vec![replacement]).unwrap();
     let server = thread::spawn(move || {
@@ -1529,11 +1529,11 @@ fn expired_catalog_syncs_at_startup_and_can_be_disabled() {
             thread::sleep(Duration::from_millis(10));
         }
     });
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let worker_view = shared.clone();
     let worker_stop = stop.clone();
     let (_sender, receiver) = command::channel(10);
-    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+    let initial_filter = App::restore(engine.store(), engine.config().settings.resume)
         .unwrap()
         .filter;
     let handle = thread::spawn(move || {
@@ -1908,11 +1908,11 @@ fn background_sync_keeps_commands_responsive_cancels_atomically_and_refreshes() 
     store.upsert(&old).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let engine = Engine::new(config, stop.clone()).unwrap();
-    let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let (sender, receiver) = command::channel(16);
     let worker_view = view.clone();
     let worker_stop = stop.clone();
-    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+    let initial_filter = App::restore(engine.store(), engine.config().settings.resume)
         .unwrap()
         .filter;
     let handle = thread::spawn(move || {
@@ -2043,9 +2043,9 @@ fn rapid_shortcuts_apply_against_owner_state() {
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-    engine.status.volume = 80;
+    engine.test_session().status.volume = 80;
     let frozen = view();
-    engine.store.upsert(&frozen.rows[0]).unwrap();
+    engine.store().upsert(&frozen.rows[0]).unwrap();
     let shared = Arc::new(Mutex::new(frozen.clone()));
     let (tx, rx) = command::channel(16);
     let mut app = App::default();
@@ -2057,10 +2057,10 @@ fn rapid_shortcuts_apply_against_owner_state() {
     for command in rx.try_iter() {
         worker::execute(command, &mut engine, &mut filter, &mut job, &shared).unwrap();
     }
-    assert_eq!(engine.status.volume, 95);
+    assert_eq!(engine.status().volume, 95);
     assert!(
         !engine
-            .store
+            .store()
             .station(&frozen.rows[0].stationuuid)
             .unwrap()
             .favorite
@@ -2112,8 +2112,8 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let row = station("old detail");
-    engine.store.upsert(&row).unwrap();
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    engine.store().upsert(&row).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let mut filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -2149,10 +2149,10 @@ fn failed_info_replaces_old_details_and_external_edits_refresh() {
     assert!(text(&terminal).contains("Details query failed"));
     assert_no_cjk(&text(&terminal));
     assert!(!text(&terminal).contains("old detail"));
-    let before = engine.store.revision().unwrap();
+    let before = engine.store().revision().unwrap();
     let external = Store::open(&dir.path().join("radio.db")).unwrap();
     external.favorite(&row.stationuuid, true).unwrap();
-    assert_ne!(engine.store.revision().unwrap(), before);
+    assert_ne!(engine.store().revision().unwrap(), before);
     worker::execute(
         Command::Refresh,
         &mut engine,
@@ -2172,9 +2172,9 @@ fn tui_recording_rejects_a_different_station() {
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let a = station("A");
     let b = station("B");
-    engine.status.station = Some(a);
-    engine.status.playback_state = crate::engine::PlaybackState::Playing;
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    engine.test_session().status.station = Some(a);
+    engine.test_session().status.playback_state = crate::engine::PlaybackState::Playing;
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let mut filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -2194,8 +2194,8 @@ fn tui_recording_rejects_a_different_station() {
     .unwrap_err();
     assert_eq!(error.to_string(), crate::t!("tui_record_current_only"));
     assert_no_cjk(&error.to_string());
-    assert!(!engine.status.recording());
-    engine.status.station = None;
+    assert!(!engine.status().recording());
+    engine.test_session().status.station = None;
     assert!(
         worker::execute(
             Command::Record {
@@ -2243,13 +2243,13 @@ fn slow_external_tasks_leave_controls_responsive_and_ignore_stale_results() {
     good.url = "https://example.com/good".into();
     let mut bad = station("bad");
     bad.url = "https://example.com/fail".into();
-    engine.store.upsert(&good).unwrap();
-    engine.store.upsert(&bad).unwrap();
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    engine.store().upsert(&good).unwrap();
+    engine.store().upsert(&bad).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let (sender, receiver) = command::channel(16);
     let output = shared.clone();
     let worker_stop = stop.clone();
-    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+    let initial_filter = App::restore(engine.store(), engine.config().settings.resume)
         .unwrap()
         .filter;
     let handle =
@@ -2362,12 +2362,12 @@ fn slow_recording_verification_does_not_hold_media_controls_or_shutdown() {
     let mut row = station("record target");
     row.url = server.url.clone();
     row.custom = true;
-    engine.store.upsert(&row).unwrap();
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    engine.store().upsert(&row).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let (sender, receiver) = command::channel(16);
     let output = shared.clone();
     let flag = stop.clone();
-    let initial_filter = App::restore(&engine.store, engine.config.settings.resume)
+    let initial_filter = App::restore(engine.store(), engine.config().settings.resume)
         .unwrap()
         .filter;
     let handle = thread::spawn(move || worker::run(engine, receiver, output, flag, initial_filter));
@@ -4326,10 +4326,10 @@ fn station_refresh_does_not_read_recordings_until_that_source_is_selected() {
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-    engine.store.upsert(&station("lazy")).unwrap();
+    engine.store().upsert(&station("lazy")).unwrap();
     rusqlite::Connection::open(dir.path().join("radio.db")).unwrap()
         .execute("INSERT INTO recordings(id,status,json,recovery_pending) VALUES ('broken','complete','not json',0)",[]).unwrap();
-    let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let data = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let mut filter = Filter {
         limit: 100,
         ..Default::default()
@@ -4604,8 +4604,8 @@ fn favorite_log_entries_name_the_station() {
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let row = station("Jazz FM");
-    engine.store.upsert(&row).unwrap();
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    engine.store().upsert(&row).unwrap();
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let mut filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -5064,13 +5064,13 @@ fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let rows = [station("A"), station("B")];
     for row in &rows {
-        engine.store.upsert(row).unwrap();
+        engine.store().upsert(row).unwrap();
         engine
-            .store
+            .store()
             .add_backup(&row.stationuuid, "https://example.com/backup")
             .unwrap();
     }
-    let data = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let data = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let mut filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -5091,9 +5091,9 @@ fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
     assert!(data.lock().unwrap().backups.is_empty());
     worker::refresh_if_needed(&engine, &filter, &data, false).unwrap();
     assert_eq!(data.lock().unwrap().rows_revision, 1);
-    let revision = engine.store.revision().unwrap();
-    engine.store.set_meta("pref_source", "stations").unwrap();
-    assert_eq!(engine.store.revision().unwrap(), revision);
+    let revision = engine.store().revision().unwrap();
+    engine.store().set_meta("pref_source", "stations").unwrap();
+    assert_eq!(engine.store().revision().unwrap(), revision);
     let snapshot = data.lock().unwrap().snapshot();
     let (tx, rx) = command::channel(10);
     let mut app = App::default();
@@ -5238,9 +5238,9 @@ fn failed_backup_query_retries_without_a_selection_or_row_change() {
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let row = station("Retry");
-    engine.store.upsert(&row).unwrap();
+    engine.store().upsert(&row).unwrap();
     engine
-        .store
+        .store()
         .add_backup(&row.stationuuid, "https://example.com/recovered")
         .unwrap();
     let shared = Arc::new(Mutex::new(view()));
@@ -5351,7 +5351,7 @@ fn facets_query_only_the_latest_field_and_bound_results() {
         .map(|i| format!("tag{i:03}"))
         .collect::<Vec<_>>()
         .join(",");
-    engine.store.upsert(&row).unwrap();
+    engine.store().upsert(&row).unwrap();
     let shared = Arc::new(Mutex::new(view()));
     let mut filter = Filter::default();
     let mut job = None;
@@ -5472,7 +5472,7 @@ fn jump_locates_a_filtered_out_station_on_another_page() {
     let mut rows = vec![];
     for i in 0..12 {
         let row = station(&format!("Station {i:02}"));
-        engine.store.upsert(&row).unwrap();
+        engine.store().upsert(&row).unwrap();
         rows.push(row);
     }
     let mut data = view();
@@ -6091,7 +6091,7 @@ fn source_preference_write_failure_does_not_block_list_queries() {
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-    engine.store.upsert(&station("needle")).unwrap();
+    engine.store().upsert(&station("needle")).unwrap();
     let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
     connection
         .execute_batch(
@@ -6099,7 +6099,7 @@ fn source_preference_write_failure_does_not_block_list_queries() {
         WHEN NEW.key = 'pref_source' BEGIN SELECT RAISE(ABORT, 'source preference denied'); END;",
         )
         .unwrap();
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let mut filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -6269,18 +6269,18 @@ fn explore_reads_its_revision_when_a_page_already_pinned_the_store_revision() {
     let dir = tempfile::tempdir().unwrap();
     let config = crate::test_support::config(dir.path());
     let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-    engine.store.upsert(&station("mapped")).unwrap();
-    engine.store.set_meta("pref_source", "stations").unwrap();
+    engine.store().upsert(&station("mapped")).unwrap();
+    engine.store().set_meta("pref_source", "stations").unwrap();
     drop(engine);
     let engine = Engine::new(
         crate::test_support::config(dir.path()),
         Arc::new(AtomicBool::new(false)),
     )
     .unwrap();
-    let store_revision = engine.store.revision().unwrap();
-    engine.store.set_meta("pref_source", "stations").unwrap();
-    assert_eq!(engine.store.revision().unwrap(), store_revision);
-    let shared = Arc::new(Mutex::new(View::new(engine.status.clone())));
+    let store_revision = engine.store().revision().unwrap();
+    engine.store().set_meta("pref_source", "stations").unwrap();
+    assert_eq!(engine.store().revision().unwrap(), store_revision);
+    let shared = Arc::new(Mutex::new(View::new(engine.status().clone())));
     let filter = Filter {
         limit: 100,
         ..Filter::default()
@@ -6293,12 +6293,12 @@ fn explore_reads_its_revision_when_a_page_already_pinned_the_store_revision() {
     assert_eq!(before.geo_revision, 0);
     worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
     let after = shared.lock().unwrap().snapshot();
-    assert_eq!(after.geo_revision, engine.store.geo_revision().unwrap());
+    assert_eq!(after.geo_revision, engine.store().geo_revision().unwrap());
     assert!(after.geo_revision > 0);
     assert!(!Arc::ptr_eq(&before, &after));
     worker::refresh_if_needed(&engine, &filter, &shared, false).unwrap();
     assert!(Arc::ptr_eq(&after, &shared.lock().unwrap().snapshot()));
-    assert_eq!(engine.store.revision().unwrap(), store_revision);
+    assert_eq!(engine.store().revision().unwrap(), store_revision);
 }
 
 #[test]

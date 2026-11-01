@@ -623,7 +623,7 @@ mod tests {
         let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         engine
-            .store
+            .store()
             .upsert(&Station {
                 stationuuid: uuid::Uuid::new_v4().to_string(),
                 name: "needle".into(),
@@ -631,8 +631,8 @@ mod tests {
                 ..Station::default()
             })
             .unwrap();
-        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
-        let worker = Worker::start(&engine.config.data_dir.join("radio.db"), &view).unwrap();
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
+        let worker = Worker::start(&engine.config().data_dir.join("radio.db"), &view).unwrap();
         view.lock().unwrap().queries = Some(worker.sender.clone());
         let (started, waiting) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
@@ -655,7 +655,7 @@ mod tests {
             &view,
         )
         .unwrap();
-        assert_eq!(engine.status.volume, 37);
+        assert_eq!(engine.status().volume, 37);
         worker::execute(
             Command::Search(Filter {
                 query: "missing".into(),
@@ -818,7 +818,7 @@ mod tests {
             .unwrap();
             for i in 0..10 {
                 engine
-                    .store
+                    .store()
                     .upsert(&Station {
                         stationuuid: uuid::Uuid::new_v4().to_string(),
                         name: format!("row {i}"),
@@ -827,7 +827,7 @@ mod tests {
                     })
                     .unwrap();
             }
-            let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+            let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
             let reader =
                 asynchronous.then(|| Worker::start(&dir.path().join("radio.db"), &view).unwrap());
             if let Some(reader) = &reader {
@@ -972,7 +972,7 @@ mod tests {
                     [],
                 )
                 .unwrap();
-            let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+            let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
             let worker = Worker::start(&path, &view).unwrap();
             view.lock().unwrap().queries = Some(worker.sender.clone());
             let (started, waiting) = mpsc::channel();
@@ -1001,7 +1001,7 @@ mod tests {
             )
             .unwrap();
             engine
-                .store
+                .store()
                 .test_connection()
                 .authorizer(Some(|context: AuthContext<'_>| {
                     if matches!(
@@ -1018,7 +1018,7 @@ mod tests {
                 }));
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             engine
-                .store
+                .store()
                 .test_connection()
                 .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
             let retry_at = view.lock().unwrap().page_retry_at;
@@ -1057,8 +1057,8 @@ mod tests {
                 active: true,
                 ..Station::default()
             };
-            engine.store.upsert(&row).unwrap();
-            let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+            engine.store().upsert(&row).unwrap();
+            let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
             let reader = asynchronous.then(|| Worker::start(&path, &view).unwrap());
             if let Some(reader) = &reader {
                 view.lock().unwrap().queries = Some(reader.sender.clone());
@@ -1070,7 +1070,7 @@ mod tests {
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             wait(&view, |v| v.page_ready(&filter));
             assert!(!view.lock().unwrap().rows[0].favorite);
-            let before = engine.store.list_revision(&filter).unwrap();
+            let before = engine.store().list_revision(&filter).unwrap();
             {
                 let mut data = view.lock().unwrap();
                 data.fail_page(&filter, "Transient query failure".into());
@@ -1078,7 +1078,7 @@ mod tests {
             }
             let external = Store::open(&path).unwrap();
             external.favorite(&row.stationuuid, true).unwrap();
-            assert_ne!(engine.store.list_revision(&filter).unwrap(), before);
+            assert_ne!(engine.store().list_revision(&filter).unwrap(), before);
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             assert!(
                 view.lock().unwrap().page_error(&filter).is_none(),
@@ -1103,7 +1103,7 @@ mod tests {
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
         for i in 0..40 {
             engine
-                .store
+                .store()
                 .upsert(&Station {
                     stationuuid: uuid::Uuid::new_v4().to_string(),
                     name: format!("Row {i:03}"),
@@ -1114,7 +1114,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
         let worker = Worker::start(&dir.path().join("radio.db"), &view).unwrap();
         view.lock().unwrap().queries = Some(worker.sender.clone());
         let mut filter = Filter {
@@ -1144,7 +1144,7 @@ mod tests {
             &view,
         )
         .unwrap();
-        assert_eq!(engine.status.playback_state, PlaybackState::Connecting);
+        assert_eq!(engine.status().playback_state, PlaybackState::Connecting);
         app.key(
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
             &initial,
@@ -1153,19 +1153,19 @@ mod tests {
         assert_eq!(app.list.selected(), Some(16));
 
         let deadline = Instant::now() + Duration::from_secs(3);
-        while engine.status.playback_state != PlaybackState::Playing {
+        while engine.status().playback_state != PlaybackState::Playing {
             assert!(Instant::now() < deadline, "playback was not confirmed");
             engine.tick().unwrap();
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(
-            engine.store.meta("pref_last_station").unwrap().as_deref(),
+            engine.store().meta("pref_last_station").unwrap().as_deref(),
             Some(playing.as_str())
         );
 
         // History alone no longer refreshes this catalog page. Changing a
         // favorite does affect its visible rows and requires revalidation.
-        engine.store.favorite(&playing, true).unwrap();
+        engine.store().favorite(&playing, true).unwrap();
         // Hold the real reader so the otherwise brief refresh is deterministic.
         let (started, waiting) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
@@ -1191,7 +1191,7 @@ mod tests {
         let selected = app.selected(&refreshing).unwrap().stationuuid.clone();
 
         // Another row mutation while the reader waits retains the visible page.
-        engine.store.favorite(&selected, true).unwrap();
+        engine.store().favorite(&selected, true).unwrap();
         worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
         {
             let data = view.lock().unwrap();
@@ -1216,7 +1216,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
         let mut filter = Filter {
             limit: 100,
             ..Filter::default()
@@ -1232,11 +1232,11 @@ mod tests {
             Command::Refresh,
         ] {
             worker::execute(command, &mut engine, &mut filter, &mut job, &view).unwrap();
-            let revision = engine.store.list_revision(&filter).unwrap();
+            let revision = engine.store().list_revision(&filter).unwrap();
             // Isolate retry intent from the preference write's revision change.
             view.lock().unwrap().store_revision = Some(revision);
             engine
-                .store
+                .store()
                 .test_connection()
                 .authorizer(Some(|context: AuthContext<'_>| {
                     if matches!(
@@ -1276,10 +1276,10 @@ mod tests {
                 );
             }
             engine
-                .store
+                .store()
                 .test_connection()
                 .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-            assert_eq!(engine.store.list_revision(&filter).unwrap(), revision);
+            assert_eq!(engine.store().list_revision(&filter).unwrap(), revision);
             let logs = view.lock().unwrap().logs.len();
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             assert_eq!(view.lock().unwrap().logs.len(), logs);
@@ -1304,7 +1304,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
         let worker = Worker::start(&path, &view).unwrap();
         view.lock().unwrap().queries = Some(worker.sender.clone());
         let filter = Filter {
@@ -1339,9 +1339,9 @@ mod tests {
         }
         // Acknowledge the repair's revision first, so only the retry deadline
         // can trigger recovery rather than detection of an external commit.
-        let before = engine.store.list_revision(&filter).unwrap();
+        let before = engine.store().list_revision(&filter).unwrap();
         conn.execute("DELETE FROM recordings", []).unwrap();
-        let after = engine.store.list_revision(&filter).unwrap();
+        let after = engine.store().list_revision(&filter).unwrap();
         view.lock().unwrap().store_revision = Some(after);
         assert_ne!(before, after);
         view.lock().unwrap().page_retry_at = Some(Instant::now());
@@ -1512,7 +1512,7 @@ mod map_tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
         let worker = Worker::start(&path, &view).unwrap();
         view.lock().unwrap().queries = Some(worker.sender.clone());
         let (started, waiting) = mpsc::channel();
@@ -1579,7 +1579,7 @@ mod map_tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-        let view = Arc::new(Mutex::new(View::new(engine.status.clone())));
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
         let worker = Worker::start(&path, &view).unwrap();
         view.lock().unwrap().queries = Some(worker.sender.clone());
         let request = super::super::super::map::Request {

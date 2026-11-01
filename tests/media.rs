@@ -36,26 +36,26 @@ fn direct_url_playback_is_ephemeral_and_failures_leave_no_playing_state() {
     config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into_owned();
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine
-        .store
+        .store()
         .set_meta("pref_last_station", "remembered")
         .unwrap();
     engine.play("https://example.com/live").unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
-    while !engine.status.playing() {
+    while !engine.status().playing() {
         engine.tick().unwrap();
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(
-        engine.status.station.as_ref().unwrap().name,
+        engine.status().station.as_ref().unwrap().name,
         "example.com/live"
     );
-    assert_eq!(engine.store.count().unwrap(), 0);
+    assert_eq!(engine.store().count().unwrap(), 0);
     assert_eq!(
-        engine.store.meta("pref_last_station").unwrap().as_deref(),
+        engine.store().meta("pref_last_station").unwrap().as_deref(),
         Some("remembered")
     );
-    let conn = rusqlite::Connection::open(engine.config.data_dir.join("radio.db")).unwrap();
+    let conn = rusqlite::Connection::open(engine.config().data_dir.join("radio.db")).unwrap();
     assert_eq!(
         conn.query_row("SELECT count(*) FROM history", [], |r| r.get::<_, usize>(0))
             .unwrap(),
@@ -73,18 +73,18 @@ fn direct_url_playback_is_ephemeral_and_failures_leave_no_playing_state() {
     engine
         .play(&format!("https://example.com/{}", "long-path-".repeat(20)))
         .unwrap();
-    let label = &engine.status.station.as_ref().unwrap().name;
+    let label = &engine.status().station.as_ref().unwrap().name;
     assert!(label.starts_with("example.com/"));
     assert_eq!(label.chars().count(), 60);
     engine.play("https://example.com/fail").unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
-    while !engine.playback_failed {
+    while !engine.playback_failed() {
         engine.tick().unwrap();
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(!engine.status.playing());
-    assert_eq!(engine.store.count().unwrap(), 0);
+    assert!(!engine.status().playing());
+    assert_eq!(engine.store().count().unwrap(), 0);
     let error = engine.play("file:///etc/passwd").unwrap_err();
     assert_eq!(
         error
@@ -788,16 +788,16 @@ fn asiafm_metadata_patch_scopes_real_playback_and_recording_titles() {
             stationuuid: stationuuid.into(),
             ..sample(&server.url)
         };
-        engine.store.upsert(&station).unwrap();
+        engine.store().upsert(&station).unwrap();
         engine.play(stationuuid).unwrap();
         let deadline = Instant::now() + Duration::from_secs(8);
-        while engine.status.title != expected || !engine.status.playing() {
+        while engine.status().title != expected || !engine.status().playing() {
             engine.tick().unwrap();
             assert!(
                 Instant::now() < deadline,
                 "expected {expected:?}, got {:?}: {}",
-                engine.status.title,
-                engine.status.message
+                engine.status().title,
+                engine.status().message
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -805,15 +805,15 @@ fn asiafm_metadata_patch_scopes_real_playback_and_recording_titles() {
             engine
                 .record_current(Some(Duration::from_secs(1)), None)
                 .unwrap();
-            while engine.status.recording_path.is_empty()
-                || engine.status.recording()
-                || engine.status.recording_state == radio_cli::engine::RecordingState::Finalizing
+            while engine.status().recording_path.is_empty()
+                || engine.status().recording()
+                || engine.status().recording_state == radio_cli::engine::RecordingState::Finalizing
             {
                 engine.tick().unwrap();
-                assert!(Instant::now() < deadline, "{}", engine.status.message);
+                assert!(Instant::now() < deadline, "{}", engine.status().message);
                 thread::sleep(Duration::from_millis(10));
             }
-            let saved = engine.store.recordings(1).unwrap().remove(0);
+            let saved = engine.store().recordings(1).unwrap().remove(0);
             assert_eq!(saved.status, "complete", "{:?}", saved.error);
             assert_eq!(saved.track.as_deref(), Some(expected));
             assert!(saved.path.contains("张国荣"));
@@ -915,17 +915,20 @@ fn invalid_audio_device_names_the_device_and_device_listing_command() {
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine.play(&server.url).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !engine.playback_failed {
+    while !engine.playback_failed() {
         engine.tick().unwrap();
-        assert!(Instant::now() < deadline, "{}", engine.status.message);
+        assert!(Instant::now() < deadline, "{}", engine.status().message);
         thread::sleep(Duration::from_millis(10));
     }
     assert!(
-        engine.status.message.contains("radio-test-missing/device"),
+        engine
+            .status()
+            .message
+            .contains("radio-test-missing/device"),
         "{}",
-        engine.status.message
+        engine.status().message
     );
-    assert!(engine.status.message.contains("radio devices"));
+    assert!(engine.status().message.contains("radio devices"));
 }
 
 #[test]
@@ -1064,12 +1067,12 @@ fn edited_custom_station_plays_the_new_url() {
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     engine.play(&station.stationuuid).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !engine.status.playing() {
+    while !engine.status().playing() {
         engine.tick().unwrap();
-        assert!(Instant::now() < deadline, "{}", engine.status.message);
+        assert!(Instant::now() < deadline, "{}", engine.status().message);
         thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(engine.status.source_url, server.url);
+    assert_eq!(engine.status().source_url, server.url);
     engine.shutdown().unwrap();
 }
 
@@ -1103,7 +1106,7 @@ fn live_stream_reconnects_across_outages_without_duplicate_history() {
     });
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let station = sample(&server.url);
-    engine.store.upsert(&station).unwrap();
+    engine.store().upsert(&station).unwrap();
     engine.play(&station.stationuuid).unwrap();
     // Two recoveries span the four-second fixture, the ten-second refusal
     // window and the 1/3/7-second reconnect backoff, so the fast-machine
@@ -1115,12 +1118,12 @@ fn live_stream_reconnects_across_outages_without_duplicate_history() {
     let mut recoveries = 0;
     loop {
         engine.tick().unwrap();
-        first_played |= engine.status.playing();
+        first_played |= engine.status().playing();
         reconnecting |= matches!(
-            engine.status.playback_state,
+            engine.status().playback_state,
             radio_cli::engine::PlaybackState::Reconnecting { .. }
         );
-        if first_played && reconnecting && engine.status.playing() {
+        if first_played && reconnecting && engine.status().playing() {
             recoveries += 1;
             reconnecting = false;
             if recoveries == 2 {
@@ -1128,18 +1131,18 @@ fn live_stream_reconnects_across_outages_without_duplicate_history() {
             }
         }
         if recoveries == 1 {
-            assert!(!matches!(engine.status.playback_state,
+            assert!(!matches!(engine.status().playback_state,
                 radio_cli::engine::PlaybackState::Reconnecting { attempt } if attempt != 1));
         }
-        assert!(!engine.playback_failed, "{}", engine.status.message);
-        assert!(Instant::now() < deadline, "{}", engine.status.message);
+        assert!(!engine.playback_failed(), "{}", engine.status().message);
+        assert!(Instant::now() < deadline, "{}", engine.status().message);
         thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(
-        engine.status.station.as_ref().unwrap().stationuuid,
+        engine.status().station.as_ref().unwrap().stationuuid,
         station.stationuuid
     );
-    let conn = rusqlite::Connection::open(engine.config.data_dir.join("radio.db")).unwrap();
+    let conn = rusqlite::Connection::open(engine.config().data_dir.join("radio.db")).unwrap();
     assert_eq!(
         conn.query_row("SELECT count(*) FROM history", [], |r| r.get::<_, usize>(0))
             .unwrap(),
@@ -1173,7 +1176,7 @@ fn runtime_preferences_survive_sessions_without_rewriting_config() {
     {
         let mut engine = Engine::new(config.clone(), stop.clone()).unwrap();
         let station = radio_cli::service::add_station(
-            &mut engine.store,
+            &mut radio_cli::store::Store::open(&dir.path().join("radio.db")).unwrap(),
             "Remembered".into(),
             "https://example.com/live".into(),
             &[],
@@ -1182,7 +1185,7 @@ fn runtime_preferences_survive_sessions_without_rewriting_config() {
         id = station.stationuuid;
         engine.play(&id).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !engine.status.playing() {
+        while !engine.status().playing() {
             engine.tick().unwrap();
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(10));
@@ -1191,15 +1194,15 @@ fn runtime_preferences_survive_sessions_without_rewriting_config() {
         engine.shutdown().unwrap();
     }
     let mut resumed = Engine::new(config.clone(), stop.clone()).unwrap();
-    assert_eq!(resumed.status.volume, 65);
-    assert_eq!(resumed.config.settings.volume, 65);
+    assert_eq!(resumed.status().volume, 65);
+    assert_eq!(resumed.config().settings.volume, 65);
     resumed.resume_last_station().unwrap();
-    assert_eq!(resumed.status.station.as_ref().unwrap().stationuuid, id);
+    assert_eq!(resumed.status().station.as_ref().unwrap().stationuuid, id);
     resumed.shutdown().unwrap();
-    resumed.store.set_meta("pref_volume", "999").unwrap();
+    resumed.store().set_meta("pref_volume", "999").unwrap();
     drop(resumed);
     let fresh = Engine::new(config, stop).unwrap();
-    assert_eq!(fresh.status.volume, 80);
+    assert_eq!(fresh.status().volume, 80);
     assert_eq!(fs::read_to_string(config_path).unwrap(), original);
 }
 
@@ -1214,9 +1217,9 @@ fn engine_uses_explicit_backup_without_merging_names() {
     let stop = Arc::new(AtomicBool::new(false));
     let mut engine = Engine::new(config, stop).unwrap();
     let station = sample("http://127.0.0.1:1/unreachable");
-    engine.store.upsert(&station).unwrap();
+    engine.store().upsert(&station).unwrap();
     engine
-        .store
+        .store()
         .add_backup(&station.stationuuid, &server.url)
         .unwrap();
     engine.play(&station.stationuuid).unwrap();
@@ -1224,23 +1227,23 @@ fn engine_uses_explicit_backup_without_merging_names() {
     // real mpv startups share the media suite's parallelism, and the slowest
     // CI runner needs far more than the fast-machine baseline of two seconds.
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !engine.status.playing() && Instant::now() < deadline {
+    while !engine.status().playing() && Instant::now() < deadline {
         engine.tick().unwrap();
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(engine.status.playing(), "{}", engine.status.message);
-    assert!(!engine.playback_failed);
+    assert!(engine.status().playing(), "{}", engine.status().message);
+    assert!(!engine.playback_failed());
     engine.toggle_recording().unwrap();
-    assert!(engine.status.recording());
+    assert!(engine.status().recording());
     // Finalizing before FFmpeg captured any audio would correctly be
     // reported as a failed recording; wait until the partial file holds a
     // real audio track so the stop always finalizes a verifiable file. The
     // capture shares the suite's parallelism on the slowest CI runner.
-    let partial = PathBuf::from(&engine.status.recording_path);
+    let partial = PathBuf::from(&engine.status().recording_path);
     let wait_stop = Arc::new(AtomicBool::new(false));
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let captured = recorder::probe(&engine.config, &partial.to_string_lossy(), &wait_stop)
+        let captured = recorder::probe(engine.config(), &partial.to_string_lossy(), &wait_stop)
             .ok()
             .and_then(|info| info["streams"].as_array().map(|s| !s.is_empty()))
             .unwrap_or(false);
@@ -1254,10 +1257,13 @@ fn engine_uses_explicit_backup_without_merging_names() {
         thread::sleep(Duration::from_millis(50));
     }
     engine.pause().unwrap();
-    assert!(engine.status.recording(), "pause should not end recording");
+    assert!(
+        engine.status().recording(),
+        "pause should not end recording"
+    );
     engine.shutdown().unwrap();
-    assert!(!engine.status.recording());
-    let record = engine.store.recordings(1).unwrap().remove(0);
+    assert!(!engine.status().recording());
+    let record = engine.store().recordings(1).unwrap().remove(0);
     assert_eq!(record.status, "complete", "{record:?}");
 }
 
@@ -1271,20 +1277,20 @@ fn stalled_explicit_station_times_out_without_selecting_another() {
     let server = Server::new(move |_, _| thread::sleep(Duration::from_secs(2)));
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let selected = sample(&server.url);
-    engine.store.upsert(&selected).unwrap();
+    engine.store().upsert(&selected).unwrap();
     engine
-        .store
+        .store()
         .upsert(&sample("http://127.0.0.1:1/other"))
         .unwrap();
     engine.play(&selected.stationuuid).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !engine.playback_failed && Instant::now() < deadline {
+    while !engine.playback_failed() && Instant::now() < deadline {
         engine.tick().unwrap();
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(engine.playback_failed, "stalled input must time out");
+    assert!(engine.playback_failed(), "stalled input must time out");
     assert_eq!(
-        engine.status.station.as_ref().unwrap().stationuuid,
+        engine.status().station.as_ref().unwrap().stationuuid,
         selected.stationuuid
     );
 }
@@ -1342,9 +1348,9 @@ fn inaccessible_old_recordings_do_not_block_media_startup() {
     }
     drop(store);
     let engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
-    assert!(engine.status.message.contains("old-0"));
-    assert!(engine.status.message.contains("old-1"));
-    for r in engine.store.recordings(10).unwrap() {
+    assert!(engine.status().message.contains("old-0"));
+    assert!(engine.status().message.contains("old-1"));
+    for r in engine.store().recordings(10).unwrap() {
         assert_eq!(r.status, "interrupted");
         assert!(r.error.unwrap().contains(&r.path));
     }
@@ -1361,14 +1367,14 @@ fn invalid_resolved_url_uses_original_for_playback_and_recording() {
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let mut station = sample(&server.url);
     station.url_resolved = "invalid resolved URL".into();
-    engine.store.upsert(&station).unwrap();
+    engine.store().upsert(&station).unwrap();
     engine.play(&station.stationuuid).unwrap();
-    assert_eq!(engine.status.source_url, server.url);
+    assert_eq!(engine.status().source_url, server.url);
     engine
         .standalone_record(&station.stationuuid, Some(Duration::from_secs(1)), None)
         .unwrap();
     assert_eq!(
-        engine.store.recordings(1).unwrap()[0].source_url_resolved,
+        engine.store().recordings(1).unwrap()[0].source_url_resolved,
         server.url
     );
     engine.shutdown().unwrap();
@@ -1382,20 +1388,24 @@ fn recording_resolves_backup_and_missing_backend_fails_fast() {
     let server = Server::new(move |_, s| response(s, 200, "audio/mpeg", &bytes));
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let station = sample("http://127.0.0.1:1/unavailable");
-    engine.store.upsert(&station).unwrap();
+    engine.store().upsert(&station).unwrap();
     engine
-        .store
+        .store()
         .add_backup(&station.stationuuid, &server.url)
         .unwrap();
     engine
         .standalone_record(&station.stationuuid, Some(Duration::from_secs(1)), None)
         .unwrap();
     assert_eq!(
-        engine.store.recordings(1).unwrap()[0].source_url_resolved,
+        engine.store().recordings(1).unwrap()[0].source_url_resolved,
         server.url
     );
     engine.stop_recording(None).unwrap();
-    engine.config.settings.ffprobe = dir.path().join("missing-ffprobe").to_string_lossy().into();
+    let mut config = engine.config().clone();
+    engine.shutdown().unwrap();
+    drop(engine);
+    config.settings.ffprobe = dir.path().join("missing-ffprobe").to_string_lossy().into();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let error = engine
         .standalone_record(&station.stationuuid, None, None)
         .unwrap_err();
@@ -1417,7 +1427,7 @@ fn repeated_adjustments_reach_the_player_ipc() {
     config.settings.volume = 80;
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let row = sample("https://example.com/live");
-    engine.store.upsert(&row).unwrap();
+    engine.store().upsert(&row).unwrap();
     engine.play(&row.stationuuid).unwrap();
     for _ in 0..3 {
         engine.volume(5).unwrap();
@@ -1431,7 +1441,7 @@ fn repeated_adjustments_reach_the_player_ipc() {
         }
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(engine.status.volume, 95);
+    assert_eq!(engine.status().volume, 95);
     engine.shutdown().unwrap();
     assert_eq!(
         fs::read_to_string(fake.with_extension("commands"))
@@ -1479,14 +1489,17 @@ fn recording_skips_a_source_without_an_audio_track() {
     let config = support::config(dir.path());
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let row = sample(&format!("{}/video", server.url));
-    engine.store.upsert(&row).unwrap();
+    engine.store().upsert(&row).unwrap();
     let backup = format!("{}/audio", server.url);
-    engine.store.add_backup(&row.stationuuid, &backup).unwrap();
+    engine
+        .store()
+        .add_backup(&row.stationuuid, &backup)
+        .unwrap();
     engine
         .standalone_record(&row.stationuuid, Some(Duration::from_secs(1)), None)
         .unwrap();
     assert_eq!(
-        engine.store.recordings(1).unwrap()[0].source_url_resolved,
+        engine.store().recordings(1).unwrap()[0].source_url_resolved,
         backup
     );
     engine.shutdown().unwrap();
@@ -1580,7 +1593,7 @@ fn local_recording_playback_rejects_active_or_pending_entries() {
     ] {
         record.status = status.into();
         record.recovery_pending = pending;
-        engine.store.save_recording(&record).unwrap();
+        engine.store().save_recording(&record).unwrap();
         let error = engine.play_recording(&record.id).unwrap_err();
         assert_eq!(
             error
@@ -1630,21 +1643,21 @@ fn local_recording_plays_to_eof_without_history_or_reconnect() {
     fs::write(&path, support::fixture("libmp3lame", "mp3")).unwrap();
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let record = library_record(&path);
-    engine.store.save_recording(&record).unwrap();
+    engine.store().save_recording(&record).unwrap();
     engine.play_recording(&record.id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut played = false;
     while engine.playback_active() {
         engine.tick().unwrap();
-        played |= engine.status.playing();
-        assert!(Instant::now() < deadline, "{:?}", engine.status);
+        played |= engine.status().playing();
+        assert!(Instant::now() < deadline, "{:?}", engine.status());
         thread::sleep(Duration::from_millis(20));
     }
     assert!(played);
-    assert!(!engine.playback_failed);
+    assert!(!engine.playback_failed());
     assert_eq!(
         engine
-            .store
+            .store()
             .search_count(&radio_cli::model::Filter {
                 history: true,
                 ..Default::default()
