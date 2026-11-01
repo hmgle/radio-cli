@@ -4,6 +4,102 @@ use std::sync::{Arc, atomic::AtomicBool};
 use support::{Server, response};
 
 #[test]
+fn engine_exposes_directory_operations_without_mutable_session_access() {
+    use radio_cli::engine::Engine;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let station = Station {
+        stationuuid: uuid::Uuid::new_v4().to_string(),
+        name: "Directory station".into(),
+        ..Station::default()
+    };
+    let rows = serde_json::to_vec(std::slice::from_ref(&station)).unwrap();
+    let clicks = Arc::new(AtomicUsize::new(0));
+    let observed = clicks.clone();
+    let server = Server::new(move |request, stream| {
+        if request.starts_with("POST /json/url/") {
+            observed.fetch_add(1, Ordering::Relaxed);
+            response(stream, 200, "application/json", b"{}");
+        } else {
+            response(stream, 200, "application/json", &rows);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config_with_api(dir.path(), &server.url);
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    assert_eq!(engine.bootstrap().unwrap(), 1);
+    assert_eq!(engine.sync(|_| {}).unwrap(), 1);
+    assert_eq!(engine.sync_with_policy(|_| {}, true).unwrap(), 1);
+    assert_eq!(
+        engine
+            .refresh_station(&station.stationuuid)
+            .unwrap()
+            .unwrap()
+            .name,
+        station.name,
+    );
+    engine.report_click(&station.stationuuid).unwrap();
+    assert_eq!(clicks.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn engine_exposes_custom_station_mutations_without_mutable_session_access() {
+    use radio_cli::{
+        engine::Engine,
+        service::{StationChange, StationCommand},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let StationChange::Added(station) = engine
+        .change_station(StationCommand::Add {
+            name: "Custom".into(),
+            url: "https://example.test/live".into(),
+            backups: vec![],
+        })
+        .unwrap()
+    else {
+        panic!("expected the added station")
+    };
+    let uuid = station.stationuuid;
+    assert!(engine.toggle_favorite(&uuid).unwrap());
+    let StationChange::Backups { urls, .. } = engine
+        .change_station(StationCommand::Backups {
+            uuid: uuid.clone(),
+            add: vec!["https://example.test/backup".into()],
+            remove: vec![],
+        })
+        .unwrap()
+    else {
+        panic!("expected backup URLs")
+    };
+    assert_eq!(urls, ["https://example.test/backup"]);
+    engine
+        .change_station(StationCommand::Edit {
+            uuid: uuid.clone(),
+            name: Some("Renamed".into()),
+            url: None,
+            backups: vec![],
+        })
+        .unwrap();
+    assert_eq!(engine.store().station(&uuid).unwrap().name, "Renamed");
+    let StationChange::Removed {
+        placeholder_kept, ..
+    } = engine
+        .change_station(StationCommand::Remove {
+            uuid: uuid.clone(),
+            keep_references: true,
+        })
+        .unwrap()
+    else {
+        panic!("expected removal details")
+    };
+    assert!(placeholder_kept);
+    assert!(!engine.store().station(&uuid).unwrap().active);
+}
+
+#[test]
 fn server_pagination_failure_preserves_previous_snapshot() {
     let station = Station {
         stationuuid: uuid::Uuid::new_v4().to_string(),

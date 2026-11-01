@@ -133,14 +133,16 @@ impl Engine {
         self.session.playback_failed
     }
 
-    pub(crate) fn change_station(
+    /// Add, edit, remove, or change backup URLs without exposing session state.
+    pub fn change_station(
         &mut self,
         command: crate::service::StationCommand,
     ) -> Result<crate::service::StationChange> {
         crate::service::change_station(&mut self.session.store, command)
     }
 
-    pub(crate) fn toggle_favorite(&mut self, uuid: &str) -> Result<bool> {
+    /// Atomically toggle a favorite and return its new state.
+    pub fn toggle_favorite(&mut self, uuid: &str) -> Result<bool> {
         self.session.store.toggle_favorite(uuid)
     }
 
@@ -192,6 +194,33 @@ impl Engine {
 
     pub fn bootstrap(&mut self) -> Result<usize> {
         self.session.directory.bootstrap(&mut self.session.store)
+    }
+
+    /// Fetch and publish a full catalog. This call performs blocking I/O.
+    pub fn sync(&mut self, progress: impl FnMut(usize)) -> Result<usize> {
+        self.sync_with_policy(progress, false)
+    }
+
+    /// Sync with explicit permission to accept a catalog shrink over 25%.
+    /// This call performs blocking I/O.
+    pub fn sync_with_policy(
+        &mut self,
+        progress: impl FnMut(usize),
+        accept_shrink: bool,
+    ) -> Result<usize> {
+        self.session
+            .directory
+            .sync_with_policy(&mut self.session.store, progress, accept_shrink)
+    }
+
+    /// Fetch current directory metadata without persisting it. Performs I/O.
+    pub fn refresh_station(&mut self, uuid: &str) -> Result<Option<Station>> {
+        self.session.directory.refresh(uuid)
+    }
+
+    /// Report a confirmed play to the directory. This call performs blocking I/O.
+    pub fn report_click(&mut self, uuid: &str) -> Result<()> {
+        self.session.directory.click(uuid)
     }
     pub fn new(mut config: Config, stop: Arc<AtomicBool>) -> Result<Self> {
         let lock = MediaLock::acquire(&config.runtime_dir)?;
