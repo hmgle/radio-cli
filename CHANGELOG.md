@@ -5,7 +5,9 @@
 - Keep TUI volume preferences and playback history off the media thread,
   coalescing preference updates for up to 250 ms and flushing queued changes
   during normal shutdown. Report terminal writer failures and finish cleanup
-  even when persistence fails; stop flush retries at the shutdown deadline.
+  even when persistence fails; report continuous database lock contention after
+  five seconds and reject further queued updates. Stop flush retries at the
+  shutdown deadline if it arrives sooner.
 - Preserve the normal five-second lock wait for favorites, custom stations,
   refreshed stream metadata, and recording index writes. These operations may
   still wait briefly during catalog publication; background session writes
@@ -37,8 +39,11 @@
   persisting it. `Store::list_revision()` exposes an opaque list cache key;
   `Store::revision()` remains connection activity for diagnostics only.
 - Abrupt termination can lose queued TUI preferences or recent playback-history
-  entries. Normal shutdown attempts to flush them within its cleanup budget
-  and reports failure if they cannot be saved.
+  entries. Sustained database lock contention also leaves queued changes unsaved
+  and reports a terminal writer failure after five seconds; session persistence
+  stays unavailable until the TUI is restarted. Normal shutdown attempts to flush
+  pending changes within its cleanup budget and reports failure if they cannot
+  be saved.
 
 ## 0.10.0 — 2026-10-31
 
