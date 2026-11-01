@@ -56,6 +56,57 @@ fn stage_catalog(store: &mut Store, diverse: bool) {
 
 #[test]
 #[ignore]
+fn history_catalog_performance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("radio.db");
+    let mut store = Store::open(&path).unwrap();
+    stage_catalog(&mut store, false);
+    store.finish_sync().unwrap();
+    for i in 1..=1000 {
+        store.played(&uuid::Uuid::from_u128(i).to_string()).unwrap();
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("PRAGMA cache_size=-4096").unwrap();
+    let baseline = measure(
+        || {
+            let mut query = conn
+                .prepare(
+                    "SELECT s.json FROM stations s
+            WHERE EXISTS(SELECT 1 FROM history WHERE uuid=s.uuid)
+            ORDER BY (SELECT max(id) FROM history WHERE uuid=s.uuid) DESC LIMIT 100",
+                )
+                .unwrap();
+            let rows: Vec<_> = query
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            std::hint::black_box(rows);
+        },
+        5,
+    );
+    let current = measure(
+        || {
+            let rows = store
+                .search(&Filter {
+                    history: true,
+                    limit: 100,
+                    ..Filter::default()
+                })
+                .unwrap();
+            assert_eq!(rows.len(), 100);
+            std::hint::black_box(rows);
+        },
+        5,
+    );
+    println!(
+        "200,000 stations / 1,000 history entries P50/P95: baseline {:.2}/{:.2} ms; current {:.2}/{:.2} ms",
+        baseline.0, baseline.1, current.0, current.1
+    );
+}
+
+#[test]
+#[ignore]
 fn unchanged_catalog_publication_cost() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(&dir.path().join("radio.db")).unwrap();

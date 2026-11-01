@@ -487,7 +487,7 @@ impl Store {
             clauses.push("s.custom=1".into());
         }
         if filter.history {
-            clauses[0] = "EXISTS(SELECT 1 FROM history h WHERE h.uuid=s.uuid)".into();
+            clauses[0] = "1".into();
         }
         let mut text_candidates = false;
         let query = filter.query.trim();
@@ -497,7 +497,9 @@ impl Store {
             let codes: Vec<_> = crate::territories::matching_codes(query).collect();
             let normalized = query.to_lowercase();
             source = "stations s NOT INDEXED";
-            if let Some(candidate) = self.trigram_candidate(&normalized) {
+            if !filter.history
+                && let Some(candidate) = self.trigram_candidate(&normalized)
+            {
                 text_candidates = true;
                 // A literal trigram narrows candidates; instr below checks
                 // the complete query without decoding positional postings.
@@ -549,9 +551,6 @@ impl Store {
             args.push((filter.min_bitrate as i64).into());
         }
         if let Some(geo) = filter.geo {
-            if filter.history {
-                clauses.push("EXISTS(SELECT 1 FROM history h WHERE h.uuid=s.uuid)".into());
-            }
             clauses[0] = "s.active=1".into();
             match geo {
                 crate::geo::GeoFilter::Missing => clauses.push("s.geo_x IS NULL".into()),
@@ -582,6 +581,13 @@ impl Store {
                 }
                 crate::geo::GeoFilter::Cell(_) => {}
             }
+        }
+        if filter.history {
+            // History retains at most 1000 entries. Drive the query from its
+            // distinct stations rather than probing history for every catalog
+            // row. CROSS JOIN preserves this bounded outer loop.
+            source = "(SELECT uuid,max(id) AS last_id FROM history GROUP BY uuid) recent
+                      CROSS JOIN stations s ON s.uuid=recent.uuid";
         }
         (clauses.join(" AND "), args, source)
     }
@@ -665,7 +671,7 @@ impl Store {
 
     fn search_order(filter: &Filter) -> &'static str {
         if filter.history {
-            "(SELECT max(id) FROM history WHERE uuid=s.uuid) DESC"
+            "recent.last_id DESC"
         } else {
             match filter.sort {
                 crate::model::Sort::Name => "s.name COLLATE NOCASE,s.uuid",
@@ -825,15 +831,22 @@ impl Store {
         let order = Self::search_order(filter);
         // The random page has already been shuffled. Other sorts still need
         // their outer order, including history which overrides filter.sort.
-        let page_order = if !filter.history && filter.sort == crate::model::Sort::Random {
+        let page_order = if filter.history {
+            " ORDER BY page.last_id DESC".to_owned()
+        } else if filter.sort == crate::model::Sort::Random {
             String::new()
         } else {
             format!(" ORDER BY {order}")
         };
+        let history_column = if filter.history {
+            ",recent.last_id"
+        } else {
+            ""
+        };
         // Sort compact row references, fetching JSON only for the selected page.
         let sql = format!(
             "WITH page AS MATERIALIZED (
-            SELECT s.rowid AS id FROM {source}
+            SELECT s.rowid AS id{history_column} FROM {source}
             WHERE {conditions} ORDER BY {order} LIMIT ? OFFSET ?)
             SELECT s.json,s.active,EXISTS(SELECT 1 FROM favorites f WHERE f.uuid=s.uuid)
             FROM page JOIN stations s ON s.rowid=page.id{page_order}"

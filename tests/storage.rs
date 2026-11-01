@@ -318,6 +318,88 @@ fn random_uses_entire_matching_catalog_and_excludes_candidates() {
 }
 
 #[test]
+fn history_pages_rank_distinct_stations_before_applying_filters() {
+    use radio_cli::{
+        geo::{GeoBounds, GeoFilter},
+        model::Sort,
+    };
+    let (_dir, store) = db();
+    let mut rows: Vec<_> = ["jazz old", "jazz other", "other", "jazz custom"]
+        .into_iter()
+        .map(station)
+        .collect();
+    for (i, s) in rows.iter_mut().enumerate() {
+        s.countrycode = if i == 1 { "US" } else { "FR" }.into();
+        s.active = i != 0;
+        s.custom = i == 3;
+        if i == 2 {
+            s.tags = "rock".into();
+        }
+        s.geo_lat = Some(48.0);
+        s.geo_long = Some(2.0);
+        store.upsert(s).unwrap();
+    }
+    for i in [0, 1, 2, 0, 3, 1] {
+        store.played(&rows[i].stationuuid).unwrap();
+    }
+    let filter = Filter {
+        history: true,
+        query: "jazz".into(),
+        country: Some("FR".into()),
+        sort: Sort::Random,
+        limit: 1,
+        ..Filter::default()
+    };
+    assert_eq!(store.search_count(&filter).unwrap(), 2);
+    assert_eq!(
+        store.search(&filter).unwrap()[0].stationuuid,
+        rows[3].stationuuid
+    );
+    let second = Filter {
+        offset: 1,
+        ..filter.clone()
+    };
+    assert_eq!(
+        store.search(&second).unwrap()[0].stationuuid,
+        rows[0].stationuuid
+    );
+    assert_eq!(
+        store
+            .station_position(&rows[0].stationuuid, &filter)
+            .unwrap(),
+        Some(1)
+    );
+    store.favorite(&rows[0].stationuuid, true).unwrap();
+    assert_eq!(
+        store
+            .search_count(&Filter {
+                favorites: true,
+                ..filter.clone()
+            })
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .search_count(&Filter {
+                custom: true,
+                ..filter.clone()
+            })
+            .unwrap(),
+        1
+    );
+    let mapped = Filter {
+        geo: Some(GeoFilter::Cell(GeoBounds::default())),
+        ..filter
+    };
+    assert_eq!(store.search_count(&mapped).unwrap(), 1);
+    assert_eq!(
+        store.search(&mapped).unwrap()[0].stationuuid,
+        rows[3].stationuuid
+    );
+}
+
+#[test]
 fn random_pages_preserve_filters_limits_and_history_order() {
     use radio_cli::model::Sort;
 
