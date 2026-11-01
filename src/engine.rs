@@ -543,16 +543,21 @@ impl Engine {
     }
 
     pub fn shutdown(&mut self) -> Result<()> {
-        self.stop_playback()?;
+        self.shutdown_with_budget(Duration::from_secs(6))
+    }
+
+    fn shutdown_with_budget(&mut self, budget: Duration) -> Result<()> {
+        let mut failure = self.stop_playback().err();
         self.session.subtitles.enabled(false);
         self.playback.click_task = None;
         self.session.diagnostics = None;
+        self.session.library_task = None;
+        let deadline = Instant::now() + budget;
         if let Some(writer) = &self.session.persistence {
-            writer.close();
+            writer.close(deadline);
         }
         // Allow normal finalization, then cancel verification if its budget
         // expires. Outstanding HTTP results never need joining.
-        let deadline = Instant::now() + Duration::from_secs(6);
         while (self.recording.finalizing.is_some()
             || !self.playback.retiring.is_empty()
             || !self.recording.retiring_probes.is_empty()
@@ -565,17 +570,18 @@ impl Engine {
                 .is_some_and(|writer| !writer.finished()))
             && Instant::now() < deadline
         {
-            self.poll_background()?;
+            if let Err(error) = self.poll_background() {
+                failure.get_or_insert(error);
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
         self.recording.finalizing = None;
-        if let Some(writer) = self.session.persistence.take() {
-            writer.poll().context(crate::t!("session_save_failed"))?;
-            if !writer.finished() {
-                bail!(crate::t!("session_save_failed"));
-            }
+        if let Some(writer) = self.session.persistence.take()
+            && let Err(error) = writer.finish().context(crate::t!("session_save_failed"))
+        {
+            failure.get_or_insert(error);
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     fn poll_background(&mut self) -> Result<()> {
@@ -755,6 +761,81 @@ mod tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(engine.shutdown().is_err());
+        assert!(engine.session.persistence.is_none());
+        engine.shutdown().unwrap();
+    }
+
+    #[test]
+    fn shutdown_drains_finalization_after_a_session_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine
+            .store()
+            .test_connection()
+            .execute_batch(
+                "CREATE TRIGGER deny_preferences BEFORE INSERT ON meta
+             BEGIN SELECT RAISE(ABORT,'preference denied'); END;",
+            )
+            .unwrap();
+        engine.enable_background_media().unwrap();
+        engine.volume(-1).unwrap();
+        let (completed, receive) = std::sync::mpsc::channel();
+        engine.recording.finalizing = Some(
+            Background::start("test-finalization", move |_| {
+                std::thread::sleep(Duration::from_millis(150));
+                completed.send(()).unwrap();
+                bail!("finalization fixture");
+            })
+            .unwrap(),
+        );
+        let error = engine.shutdown().unwrap_err();
+        assert!(format!("{error:#}").contains("preference denied"));
+        receive
+            .try_recv()
+            .expect("finalization must finish before shutdown returns");
+        assert!(engine.recording.finalizing.is_none());
+        assert!(engine.session.persistence.is_none());
+        assert!(matches!(
+            engine.status().recording_state,
+            RecordingState::Failed { .. }
+        ));
+        engine.shutdown().unwrap();
+    }
+
+    #[test]
+    fn shutdown_stops_pending_writes_before_reporting_a_flush_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine.enable_background_media().unwrap();
+        let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        engine.volume(-1).unwrap();
+        let (cancelled, receive) = std::sync::mpsc::channel();
+        engine.recording.finalizing = Some(
+            Background::start("test-finalization", move |cancel| {
+                while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                cancelled.send(()).unwrap();
+                bail!("cancelled finalization fixture");
+            })
+            .unwrap(),
+        );
+        assert!(
+            engine
+                .shutdown_with_budget(Duration::from_millis(150))
+                .is_err()
+        );
+        assert!(engine.session.persistence.is_none());
+        assert!(engine.recording.finalizing.is_none());
+        receive.recv_timeout(Duration::from_secs(1)).unwrap();
+        connection.execute_batch("ROLLBACK").unwrap();
+        // The writer has settled, so releasing the lock cannot produce a late
+        // successful write after the caller was told that flushing failed.
+        assert!(engine.store().meta("pref_volume").unwrap().is_none());
         engine.shutdown().unwrap();
     }
 

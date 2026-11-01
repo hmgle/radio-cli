@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex, mpsc},
+    sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -14,9 +14,11 @@ struct Pending {
     preferences: BTreeMap<String, String>,
     plays: Vec<(String, String)>,
     due: Option<Instant>,
-    closing: bool,
+    closing: Option<Instant>,
     cancelled: bool,
     finished: bool,
+    failure: Option<String>,
+    failure_reported: bool,
 }
 
 struct Shared {
@@ -26,7 +28,7 @@ struct Shared {
 
 pub(super) struct Writer {
     shared: Arc<Shared>,
-    errors: mpsc::Receiver<anyhow::Error>,
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 impl Writer {
@@ -35,26 +37,28 @@ impl Writer {
             pending: Mutex::new(Pending::default()),
             ready: Condvar::new(),
         });
-        let (errors, receiver) = mpsc::channel();
         let state = shared.clone();
-        thread::Builder::new()
+        let handle = thread::Builder::new()
             .name("radio-session-writer".into())
             .spawn(move || {
                 let _lock = lock;
-                if let Err(error) = run(&path, &state, &errors) {
-                    let _ = errors.send(error);
-                }
-                state.pending.lock().unwrap().finished = true;
+                let result = run(&path, &state);
+                let mut pending = state.pending.lock().unwrap();
+                // Publish the outcome and terminal state together. Neither an
+                // error consumer nor a new update can see a half-closed writer.
+                pending.failure = result.err().map(|error| format!("{error:#}"));
+                pending.finished = true;
+                state.ready.notify_all();
             })?;
         Ok(Self {
             shared,
-            errors: receiver,
+            handle: Some(handle),
         })
     }
 
     pub fn preference(&self, key: &str, value: &str) -> Result<()> {
         let mut pending = self.shared.pending.lock().unwrap();
-        if pending.closing || pending.finished {
+        if pending.closing.is_some() || pending.cancelled || pending.finished {
             bail!(crate::t!("session_save_failed"));
         }
         pending.preferences.insert(key.into(), value.into());
@@ -68,7 +72,7 @@ impl Writer {
 
     pub fn played(&self, uuid: &str) -> Result<()> {
         let mut pending = self.shared.pending.lock().unwrap();
-        if pending.closing || pending.finished {
+        if pending.closing.is_some() || pending.cancelled || pending.finished {
             bail!(crate::t!("session_save_failed"));
         }
         pending
@@ -82,9 +86,28 @@ impl Writer {
         Ok(())
     }
 
-    pub fn close(&self) {
-        self.shared.pending.lock().unwrap().closing = true;
+    pub fn close(&self, deadline: Instant) {
+        let mut pending = self.shared.pending.lock().unwrap();
+        pending.closing = Some(deadline);
+        pending.due = Some(Instant::now());
         self.shared.ready.notify_one();
+    }
+
+    pub fn finish(mut self) -> Result<()> {
+        // Settle any in-flight SQLite attempt before reporting its outcome.
+        // The connection's 100 ms busy timeout bounds this final lock wait.
+        self.shared.pending.lock().unwrap().cancelled = true;
+        self.shared.ready.notify_one();
+        if let Some(handle) = self.handle.take()
+            && handle.join().is_err()
+        {
+            bail!(crate::t!("session_save_failed"));
+        }
+        let pending = self.shared.pending.lock().unwrap();
+        if let Some(error) = &pending.failure {
+            bail!(error.clone());
+        }
+        Ok(())
     }
 
     pub fn finished(&self) -> bool {
@@ -92,8 +115,12 @@ impl Writer {
     }
 
     pub fn poll(&self) -> Result<()> {
-        if let Ok(error) = self.errors.try_recv() {
-            return Err(error);
+        let mut pending = self.shared.pending.lock().unwrap();
+        if !pending.failure_reported
+            && let Some(error) = pending.failure.clone()
+        {
+            pending.failure_reported = true;
+            bail!(error);
         }
         Ok(())
     }
@@ -106,26 +133,23 @@ impl Drop for Writer {
     }
 }
 
-fn run(
-    path: &std::path::Path,
-    shared: &Shared,
-    errors: &mpsc::Sender<anyhow::Error>,
-) -> Result<()> {
+fn run(path: &std::path::Path, shared: &Shared) -> Result<()> {
     let mut store = Store::open_writer(path)?;
     loop {
         let mut pending = shared.pending.lock().unwrap();
         loop {
-            if pending.cancelled {
-                return Ok(());
-            }
             let empty = pending.preferences.is_empty() && pending.plays.is_empty();
-            if empty && pending.closing {
+            if empty && (pending.cancelled || pending.closing.is_some()) {
                 return Ok(());
             }
-            if !empty && (pending.closing || pending.due.is_some_and(|at| Instant::now() >= at)) {
+            if pending.cancelled || pending.closing.is_some_and(|at| Instant::now() >= at) {
+                bail!(crate::t!("session_save_failed"));
+            }
+            if !empty && pending.due.is_some_and(|at| Instant::now() >= at) {
                 break;
             }
             pending = if let Some(at) = pending.due.filter(|_| !empty) {
+                let at = pending.closing.map_or(at, |deadline| at.min(deadline));
                 shared
                     .ready
                     .wait_timeout(pending, at.saturating_duration_since(Instant::now()))
@@ -156,9 +180,8 @@ fn run(
                 }
                 pending.plays = retained;
                 pending.due = Some(Instant::now() + Duration::from_millis(50));
-                // Closing still retries through SQLite's bounded busy timeout.
             } else {
-                let _ = errors.send(error);
+                return Err(error);
             }
         }
     }
@@ -174,19 +197,25 @@ mod tests {
         let lock = Arc::new(MediaLock::acquire(dir.path()).unwrap());
         let writer = Writer::start(dir.path().join("missing/radio.db"), lock.clone()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
-        while !writer.finished() {
+        loop {
+            if writer.poll().is_err() {
+                // Observing a terminal error also observes the closed state.
+                assert!(writer.finished());
+                break;
+            }
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(writer.poll().is_err());
         // Consuming the original error must not make future updates succeed.
         assert!(writer.preference("pref_volume", "50").is_err());
         assert!(writer.played("station").is_err());
+        assert!(writer.finish().is_err());
 
         Store::open(&dir.path().join("radio.db")).unwrap();
         let writer = Writer::start(dir.path().join("radio.db"), lock).unwrap();
-        writer.close();
+        writer.close(Instant::now() + Duration::from_secs(1));
         assert!(writer.preference("pref_volume", "50").is_err());
         assert!(writer.played("station").is_err());
+        writer.finish().unwrap();
     }
 }
