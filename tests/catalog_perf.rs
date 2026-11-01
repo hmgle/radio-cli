@@ -56,6 +56,26 @@ fn stage_catalog(store: &mut Store, diverse: bool) {
 
 #[test]
 #[ignore]
+fn unchanged_catalog_publication_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+    stage_catalog(&mut store, false);
+    store.finish_sync().unwrap();
+    let revision = store.geo_revision().unwrap();
+    for pass in 1..=3 {
+        stage_catalog(&mut store, false);
+        let started = Instant::now();
+        assert_eq!(store.finish_sync().unwrap(), 200000);
+        assert_eq!(store.geo_revision().unwrap(), revision);
+        println!(
+            "200,000 unchanged stations pass {pass}: publish {:.2} ms",
+            started.elapsed().as_secs_f64() * 1000.
+        );
+    }
+}
+
+#[test]
+#[ignore]
 fn catalog_statistics_scan_cost() {
     for diverse in [false, true] {
         let dir = tempfile::tempdir().unwrap();

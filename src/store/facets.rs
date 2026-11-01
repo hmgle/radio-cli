@@ -47,6 +47,54 @@ pub(super) fn update(conn: &Connection, before: &Values, after: &Values) -> Resu
     Ok(())
 }
 
+/// Compare only changed facet memberships before replacing directory rows.
+/// Custom stations win UUID collisions and retain their existing memberships.
+pub(super) fn publication_delta(conn: &Connection) -> Result<BTreeMap<(u8, String), i64>> {
+    let mut delta = BTreeMap::new();
+    for (sql, sign) in [
+        (
+            "SELECT s.country,s.languages,s.tags FROM stations s
+          LEFT JOIN incoming i ON i.uuid=s.uuid
+          WHERE s.custom=0 AND s.active=1 AND (i.uuid IS NULL OR
+            s.country IS NOT i.country OR s.languages IS NOT i.languages OR s.tags IS NOT i.tags)",
+            -1,
+        ),
+        (
+            "SELECT i.country,i.languages,i.tags FROM incoming i
+          LEFT JOIN stations s ON s.uuid=i.uuid
+          WHERE s.uuid IS NULL OR (s.custom=0 AND (s.active<>1 OR
+            s.country IS NOT i.country OR s.languages IS NOT i.languages OR s.tags IS NOT i.tags))",
+            1,
+        ),
+    ] {
+        let mut stmt = conn.prepare(sql)?;
+        for row in stmt.query_map([], |r| Ok(values(r.get(0)?, r.get(1)?, r.get(2)?)))? {
+            for value in row? {
+                *delta.entry(value).or_default() += sign;
+            }
+        }
+    }
+    Ok(delta)
+}
+
+pub(super) fn apply_delta(conn: &Connection, delta: BTreeMap<(u8, String), i64>) -> Result<()> {
+    for ((kind, value), n) in delta {
+        if n > 0 {
+            conn.prepare_cached(
+                "INSERT INTO facets_cache(kind,value,n) VALUES (?1,?2,?3)
+                 ON CONFLICT(kind,value) DO UPDATE SET n=n+excluded.n",
+            )?
+            .execute(params![kind, value, n])?;
+        } else if n < 0 {
+            conn.prepare_cached("UPDATE facets_cache SET n=n+?3 WHERE kind=?1 AND value=?2")?
+                .execute(params![kind, value, n])?;
+            conn.prepare_cached("DELETE FROM facets_cache WHERE kind=?1 AND value=?2 AND n=0")?
+                .execute(params![kind, value])?;
+        }
+    }
+    Ok(())
+}
+
 /// Called inside the publication transaction, never for the staging table.
 pub(super) fn rebuild(conn: &Connection) -> Result<()> {
     let mut counts = BTreeMap::new();

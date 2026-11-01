@@ -350,33 +350,61 @@ impl Store {
         &mut self,
         mut cancelled: impl FnMut() -> bool,
     ) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let count: usize = tx.query_row("SELECT count(*) FROM incoming", [], |r| r.get(0))?;
         if count == 0 {
             bail!(DomainError::new(ErrorCode::EmptyCatalog));
         }
-        tx.execute("UPDATE stations SET active=0 WHERE custom=0", [])?;
-        tx.execute_batch(
+        let search_changed: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM incoming i LEFT JOIN stations s ON s.uuid=i.uuid
+             WHERE s.uuid IS NULL OR (s.custom=0 AND s.search IS NOT i.search))",
+            [],
+            |r| r.get(0),
+        )?;
+        let facet_delta = facets::publication_delta(&tx)?;
+        if cancelled() {
+            bail!(DomainError::new(ErrorCode::Cancelled));
+        }
+        let removed = tx.execute(
+            "UPDATE stations SET active=0 WHERE custom=0 AND active=1
+             AND NOT EXISTS(SELECT 1 FROM incoming i WHERE i.uuid=stations.uuid)",
+            [],
+        )?;
+        let updated = tx.execute(
             "INSERT INTO stations (uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url,geo_x,geo_y) SELECT uuid,name,search,country,languages,tags,bitrate,popularity,custom,active,json,normalized_url,geo_x,geo_y FROM incoming WHERE true
             ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,search=excluded.search,
             country=excluded.country,languages=excluded.languages,tags=excluded.tags,
             bitrate=excluded.bitrate,popularity=excluded.popularity,active=1,json=excluded.json,normalized_url=excluded.normalized_url,geo_x=excluded.geo_x,geo_y=excluded.geo_y
-            WHERE stations.custom=0;",
+            WHERE stations.custom=0 AND (
+                stations.active<>1 OR stations.json IS NOT excluded.json OR
+                stations.name IS NOT excluded.name OR stations.search IS NOT excluded.search OR
+                stations.country IS NOT excluded.country OR stations.languages IS NOT excluded.languages OR
+                stations.tags IS NOT excluded.tags OR stations.bitrate IS NOT excluded.bitrate OR
+                stations.popularity IS NOT excluded.popularity OR stations.normalized_url IS NOT excluded.normalized_url OR
+                stations.geo_x IS NOT excluded.geo_x OR stations.geo_y IS NOT excluded.geo_y)", [],
         )?;
         tx.execute(
             "INSERT OR REPLACE INTO meta(key,value) VALUES ('last_sync',?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
-        facets::rebuild(&tx)?;
+        facets::apply_delta(&tx, facet_delta)?;
         if cancelled() {
             bail!(DomainError::new(ErrorCode::Cancelled));
         }
-        geo::changed(&tx)?;
+        if removed + updated > 0 {
+            geo::changed(&tx)?;
+        }
         tx.commit()?;
         // Planner maintenance cannot turn a successful publication into a
         // reported failure after its transaction has already committed.
-        let _ = self.refresh_search_stats();
-        let _ = self.conn.execute_batch("PRAGMA optimize;");
+        if search_changed {
+            let _ = self.refresh_search_stats();
+        }
+        if removed + updated > 0 {
+            let _ = self.conn.execute_batch("PRAGMA optimize;");
+        }
         Ok(count)
     }
 
@@ -1348,5 +1376,92 @@ mod tests {
             "originaltag"
         );
         assert!(store.meta("last_sync").unwrap().is_none());
+    }
+
+    #[test]
+    fn sync_writes_only_changed_stations_and_facet_memberships() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let row = |name: &str| Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: name.into(),
+            tags: "jazz,jazz".into(),
+            language: "english,en".into(),
+            countrycode: "US".into(),
+            active: true,
+            ..Station::default()
+        };
+        let unchanged = row("unchanged");
+        let mut changed = row("changed");
+        let removed = row("removed");
+        let mut revived = row("revived");
+        revived.active = false;
+        let mut custom = row("custom");
+        custom.custom = true;
+        for station in [&unchanged, &changed, &removed, &revived, &custom] {
+            store.upsert(station).unwrap();
+        }
+        store
+            .conn
+            .execute_batch(
+                "CREATE TABLE station_writes(uuid TEXT);
+             CREATE TRIGGER audit_station_writes AFTER UPDATE ON stations
+             BEGIN INSERT INTO station_writes VALUES(new.uuid); END;",
+            )
+            .unwrap();
+        changed.tags = "rock,rock".into();
+        changed.countrycode = "FR".into();
+        revived.active = true;
+        let mut collision = custom.clone();
+        collision.custom = false;
+        collision.tags = "wrong".into();
+        let incoming = [unchanged.clone(), changed, revived, collision, row("new")];
+        store.begin_sync().unwrap();
+        store.stage(&incoming).unwrap();
+        store.finish_sync().unwrap();
+        let writes: Vec<String> = store
+            .conn
+            .prepare("SELECT uuid FROM station_writes")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(writes.len(), 3);
+        assert!(!writes.contains(&unchanged.stationuuid));
+        assert!(!writes.contains(&custom.stationuuid));
+        assert!(!store.station(&removed.stationuuid).unwrap().active);
+        assert_eq!(
+            store.station(&custom.stationuuid).unwrap().tags,
+            "jazz,jazz"
+        );
+        let facets = || {
+            store
+                .conn
+                .prepare("SELECT kind,value,n FROM facets_cache ORDER BY kind,value")
+                .unwrap()
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, u8>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let delta_counts = facets();
+        facets::rebuild(&store.conn).unwrap();
+        assert_eq!(facets(), delta_counts);
+        let geo_revision = store.geo_revision().unwrap();
+        store.begin_sync().unwrap();
+        store.stage(&incoming).unwrap();
+        let before = store.conn.total_changes();
+        store.finish_sync().unwrap();
+        // Only last_sync changes: stations, indexes, facets, geographic and
+        // search statistics remain untouched for an identical snapshot.
+        assert_eq!(store.conn.total_changes() - before, 1);
+        assert_eq!(store.geo_revision().unwrap(), geo_revision);
     }
 }
