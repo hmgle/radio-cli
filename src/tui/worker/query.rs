@@ -160,6 +160,42 @@ enum Request {
     Facets(u64, usize, String),
 }
 
+enum Generation {
+    Map(u64),
+    Page(u64),
+    Locate(u64),
+    Facets(u64),
+}
+
+impl Request {
+    fn cancellation(&self, shared: Weak<Shared>) -> impl FnMut() -> bool + Send + 'static {
+        let generation = match self {
+            Self::Map(g, _) => Generation::Map(*g),
+            Self::Page(g, _) => Generation::Page(*g),
+            Self::Locate(g, ..) => Generation::Locate(*g),
+            Self::Facets(g, ..) => Generation::Facets(*g),
+        };
+        move || {
+            let Some(shared) = shared.upgrade() else {
+                return true;
+            };
+            if let Generation::Map(g) = generation {
+                return map_cancelled(&shared, g);
+            }
+            if shared.stop.load(Ordering::Acquire) {
+                return true;
+            }
+            let pending = shared.pending.lock().unwrap();
+            match generation {
+                Generation::Page(g) => g != pending.page_generation,
+                Generation::Locate(g) => g != pending.locate_generation,
+                Generation::Facets(g) => g != pending.facets_generation,
+                Generation::Map(_) => unreachable!(),
+            }
+        }
+    }
+}
+
 struct Rows {
     filter: Filter,
     stations: Vec<Station>,
@@ -325,14 +361,9 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
         if shared.stop.load(Ordering::Acquire) {
             return;
         }
+        store.cancel_queries_when(request.cancellation(Arc::downgrade(&shared)));
         match request {
             Request::Map(generation, request) => {
-                let cancellation = Arc::downgrade(&shared);
-                store.cancel_queries_when(move || {
-                    cancellation
-                        .upgrade()
-                        .is_none_or(|s| map_cancelled(&s, generation))
-                });
                 let cached_land = view.upgrade().and_then(|v| {
                     v.lock()
                         .unwrap()
@@ -347,12 +378,6 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                 });
                 let result = reader.map(&store, &request, cached_land, || {
                     map_cancelled(&shared, generation)
-                });
-                let cancellation = Arc::downgrade(&shared);
-                store.cancel_queries_when(move || {
-                    cancellation
-                        .upgrade()
-                        .is_none_or(|s| s.stop.load(Ordering::Acquire))
                 });
                 let Some(view) = view.upgrade() else {
                     return;
@@ -537,6 +562,60 @@ mod tests {
             phase: PagePhase::Loading,
         });
         generation
+    }
+
+    #[test]
+    fn a_new_page_interrupts_obsolete_sql_without_publishing_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        store
+            .upsert(&Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: "Latest".into(),
+                active: true,
+                ..Station::default()
+            })
+            .unwrap();
+        // Sorting this view cannot complete without cancellation. Replacing
+        // the request with a station page must release the single reader.
+        store
+            .test_connection()
+            .execute_batch(
+                "DROP TABLE recordings; CREATE VIEW recordings AS
+             WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000000)
+             SELECT x AS id,'complete' AS status,0 AS recovery_pending,
+             json_object('started_at',x) AS json FROM n;",
+            )
+            .unwrap();
+        let revision = store.revision().unwrap();
+        let view = Arc::new(Mutex::new(View::new(status())));
+        let worker = Worker::start(&path, &view).unwrap();
+        let (started, waiting) = mpsc::channel();
+        *worker.sender.0.before_read.lock().unwrap() = Some(Box::new(move || {
+            started.send(()).unwrap();
+        }));
+        request_page(
+            &worker,
+            &view,
+            Filter {
+                recordings: true,
+                limit: 100,
+                ..Filter::default()
+            },
+            revision,
+        );
+        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        let latest = Filter {
+            limit: 100,
+            ..Filter::default()
+        };
+        request_page(&worker, &view, latest.clone(), revision);
+        wait(&view, |data| data.page_ready(&latest));
+        let data = view.lock().unwrap();
+        assert_eq!(data.rows[0].name, "Latest");
+        assert!(data.page_failure.is_none());
+        assert!(data.logs.is_empty());
     }
 
     #[test]
