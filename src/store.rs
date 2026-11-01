@@ -28,12 +28,6 @@ impl Store {
         Ok(Self { conn })
     }
 
-    pub(crate) fn fail_writes_fast(&self) -> Result<()> {
-        self.conn
-            .busy_timeout(std::time::Duration::from_millis(20))?;
-        Ok(())
-    }
-
     #[cfg(test)]
     pub(crate) fn test_connection(&self) -> &Connection {
         &self.conn

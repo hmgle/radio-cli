@@ -489,7 +489,6 @@ impl Engine {
                 self.session._lock.clone(),
             )?);
         }
-        self.session.store.fail_writes_fast()?;
         self.session.background_media = true;
         let enabled = self.session.config.settings.subtitles.enabled;
         self.session.subtitles.enabled(enabled);
@@ -614,6 +613,61 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_media_preserves_the_lock_budget_for_catalog_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let station = crate::service::add_station(
+            &mut engine.session.store,
+            "Custom".into(),
+            "https://example.test/live".into(),
+            &[],
+        )
+        .unwrap();
+        engine.enable_background_media().unwrap();
+        // Every operation waits through a short publication transaction. The
+        // former 20 ms owner budget failed each one while the lock was held.
+        for operation in 0..5 {
+            let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+            connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+            let release = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                connection.execute_batch("ROLLBACK").unwrap();
+            });
+            let result = match operation {
+                0 => engine.toggle_favorite(&station.stationuuid).map(|_| ()),
+                1 => engine
+                    .change_station(crate::service::StationCommand::Backups {
+                        uuid: station.stationuuid.clone(),
+                        add: vec!["https://example.test/backup".into()],
+                        remove: vec![],
+                    })
+                    .map(|_| ()),
+                2 => engine.store().upsert(&station),
+                3 => engine.store().save_recording(
+                    &serde_json::from_value(serde_json::json!({
+                        "id":"record", "stationuuid":station.stationuuid,
+                        "station_name":station.name, "source_url_resolved":station.url,
+                        "started_at":"2026-11-01T00:00:00Z", "codec":"mp3", "container":"mp3",
+                        "path":"record.mp3", "size_bytes":0, "status":"recording"
+                    }))
+                    .unwrap(),
+                ),
+                4 => engine
+                    .change_station(crate::service::StationCommand::Remove {
+                        uuid: station.stationuuid.clone(),
+                        keep_references: true,
+                    })
+                    .map(|_| ()),
+                _ => unreachable!(),
+            };
+            release.join().unwrap();
+            result.unwrap();
+        }
+        engine.shutdown().unwrap();
+    }
 
     #[test]
     fn background_session_writes_keep_controls_responsive_under_a_write_lock() {
