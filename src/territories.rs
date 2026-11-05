@@ -55,3 +55,13 @@ pub(crate) fn matching_codes(query: &str) -> impl Iterator<Item = &'static str> 
         .filter(move |(_, name)| eligible && name.contains(query))
         .map(|(code, _)| code.as_str())
 }
+
+/// Facet completion accepts single characters and matches only name prefixes.
+/// Empty prefixes already match all catalog codes without name expansion.
+pub(crate) fn matching_prefix_codes(prefix: &str) -> impl Iterator<Item = &'static str> + '_ {
+    let prefix = prefix.trim();
+    names()
+        .iter()
+        .filter(move |(_, name)| !prefix.is_empty() && name.starts_with(prefix))
+        .map(|(code, _)| code.as_str())
+}

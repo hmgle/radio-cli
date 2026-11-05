@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Match country filter candidates by code or Chinese-name prefix, including
+  single characters, in the TUI and `countries --prefix`. Keep country codes
+  and station counts in the results and apply limits after matching.
+
 ## 0.11.0 — 2026-11-01
 
 - Keep TUI volume preferences and playback history off the media thread,

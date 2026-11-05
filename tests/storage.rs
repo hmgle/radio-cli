@@ -646,6 +646,67 @@ fn custom_station_mutations_are_atomic_and_preserve_references() {
 }
 
 #[test]
+fn country_facets_match_chinese_name_prefixes_before_limiting() {
+    use radio_cli::model::{Facet, FacetKind};
+    let (_dir, store) = db();
+    // Matching countries must remain reachable beyond the first 100 values.
+    for code in (0..110)
+        .map(|i| format!("A{i:03}"))
+        .chain(["CF", "CN", "CN", "HK", "MO", "TW", "US", "QZ"].map(String::from))
+    {
+        let mut row = station("Country fixture");
+        row.countrycode = code;
+        store.upsert(&row).unwrap();
+    }
+    let expected = |codes: &[&str]| {
+        codes
+            .iter()
+            .map(|code| Facet {
+                value: (*code).into(),
+                count: if *code == "CN" { 2 } else { 1 },
+            })
+            .collect::<Vec<_>>()
+    };
+    for (prefix, codes) in [
+        ("中", vec!["CF", "CN", "HK", "MO"]),
+        (" 中国　", vec!["CN", "HK", "MO"]),
+        ("中国香", vec!["HK"]),
+        ("台", vec!["TW"]),
+        (" c ", vec!["CF", "CN"]),
+        ("cn", vec!["CN"]),
+        ("qz", vec!["QZ"]),
+        ("香港", vec![]),
+        ("国", vec![]),
+        ("日本", vec![]),
+        ("%", vec![]),
+        ("_", vec![]),
+        ("' OR 1=1 --", vec![]),
+    ] {
+        assert_eq!(
+            store.facets(FacetKind::Country, prefix).unwrap(),
+            expected(&codes),
+            "prefix {prefix:?}"
+        );
+    }
+    for (prefix, codes) in [("中", vec!["CF", "CN"]), ("中国", vec!["CN", "HK"])] {
+        assert_eq!(
+            store.facets_limited(FacetKind::Country, prefix, 2).unwrap(),
+            expected(&codes)
+        );
+    }
+    assert!(
+        store
+            .facets_limited(FacetKind::Country, "中", 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.facets(FacetKind::Country, "").unwrap().len(), 117);
+    for kind in [FacetKind::Language, FacetKind::Tag] {
+        assert!(store.facets(kind, "中").unwrap().is_empty());
+    }
+}
+
+#[test]
 fn facets_count_distinct_stations_and_sort_combines_with_filters() {
     use radio_cli::model::{FacetKind, Sort};
     let (_dir, store) = db();

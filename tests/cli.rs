@@ -531,6 +531,8 @@ fn facet_cli_reports_real_local_values() {
         .unwrap();
     for (command, prefix, expected) in [
         ("countries", "c", "CN"),
+        ("countries", "中", "CN"),
+        ("countries", "中国", "CN"),
         ("languages", "zh", "zh"),
         ("tags", "ja", "jazz"),
     ] {

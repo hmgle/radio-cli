@@ -914,18 +914,38 @@ impl Store {
             FacetKind::Language => (1, prefix.trim().to_lowercase()),
             FacetKind::Tag => (2, prefix.trim().to_lowercase()),
         };
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT value,n FROM facets_cache WHERE kind=?1 AND substr(value,1,length(?2))=?2 ORDER BY value LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            params![kind, prefix, limit.min(i64::MAX as usize) as i64],
-            |r| {
-                Ok(Facet {
-                    value: r.get(0)?,
-                    count: r.get(1)?,
-                })
-            },
-        )?;
+        let codes = if kind == 0 {
+            crate::territories::matching_prefix_codes(&prefix).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        // Match localized names before LIMIT, so countries beyond the first
+        // candidate page remain reachable. Values and counts stay catalog data.
+        let localized = if codes.is_empty() {
+            String::new()
+        } else {
+            let placeholders = (4..4 + codes.len())
+                .map(|index| format!("?{index}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(" OR value IN ({placeholders})")
+        };
+        let mut args: Vec<Value> = vec![
+            kind.into(),
+            prefix.into(),
+            (limit.min(i64::MAX as usize) as i64).into(),
+        ];
+        args.extend(codes.into_iter().map(|code| Value::from(code.to_owned())));
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT value,n FROM facets_cache WHERE kind=?1
+             AND (substr(value,1,length(?2))=?2{localized}) ORDER BY value LIMIT ?3",
+        ))?;
+        let rows = stmt.query_map(params_from_iter(args), |r| {
+            Ok(Facet {
+                value: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

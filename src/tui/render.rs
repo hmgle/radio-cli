@@ -1026,6 +1026,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 .min(candidates.len().saturating_sub(count));
             text.push(Line::from(if view.facets_loading {
                 crate::t!("facets_loading")
+            } else if *selected == 0 {
+                crate::t!("country_facets_hint")
             } else {
                 crate::t!("facets_hint")
             }));

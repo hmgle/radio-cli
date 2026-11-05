@@ -711,9 +711,10 @@ impl App {
             && *selected < 3
             && self.facet_index.is_some()
         {
-            self.facet_index = matching_facets(&view.facets[*selected], &self.facet_prefix)
-                .iter()
-                .position(|facet| facet.value == values[*selected]);
+            self.facet_index =
+                matching_facets(&view.facets[*selected], &self.facet_prefix, *selected == 0)
+                    .iter()
+                    .position(|facet| facet.value == values[*selected]);
         }
 
         if let Some((request, _)) = &self.pending_jump
@@ -836,7 +837,7 @@ impl App {
         view: &'a View,
         selected: usize,
     ) -> Vec<&'a crate::model::Facet> {
-        matching_facets(&view.facets[selected], &self.facet_prefix)
+        matching_facets(&view.facets[selected], &self.facet_prefix, selected == 0)
     }
     pub fn request_facets(&mut self, sender: &CommandSender) {
         if self.too_small {
@@ -1630,7 +1631,11 @@ impl App {
             }
             match key.code {
                 KeyCode::Down | KeyCode::Up if *selected < 3 => {
-                    let candidates = matching_facets(&view.facets[*selected], &self.facet_prefix);
+                    let candidates = matching_facets(
+                        &view.facets[*selected],
+                        &self.facet_prefix,
+                        *selected == 0,
+                    );
                     if !candidates.is_empty() {
                         let index = match self.facet_index {
                             Some(index) if key.code == KeyCode::Down => {
@@ -2160,11 +2165,22 @@ fn nonempty(text: &str) -> Option<String> {
 fn matching_facets<'a>(
     facets: &'a [crate::model::Facet],
     prefix: &str,
+    country: bool,
 ) -> Vec<&'a crate::model::Facet> {
     let prefix = prefix.trim().to_lowercase();
+    let codes = if country {
+        crate::territories::matching_prefix_codes(&prefix).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     facets
         .iter()
-        .filter(|facet| facet.value.to_lowercase().starts_with(&prefix))
+        .filter(|facet| {
+            facet.value.to_lowercase().starts_with(&prefix)
+                || codes
+                    .iter()
+                    .any(|code| facet.value.eq_ignore_ascii_case(code))
+        })
         .collect()
 }
 

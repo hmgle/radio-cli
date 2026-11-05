@@ -267,6 +267,12 @@ tag filters use their full catalog values; languages also accept catalog codes
 such as `zh`. `--min-bitrate` excludes stations whose bitrate is unknown.
 `random` samples from the entire filtered set, not just the current page.
 
+In the `F` filter popup, country candidates match code or Chinese-name prefixes,
+including a single character: `中` finds locally available entries such as China
+and the Central African Republic. Use ↑/↓ to select a candidate, then Enter to
+apply its country code. `radio countries --prefix 中` uses the same matching and
+returns codes and counts. Language and tag candidates match catalog prefixes.
+
 Direct URLs are temporary: they are not added to the catalog or history and do
 not replace the last saved station. Save a station before recording it.
 

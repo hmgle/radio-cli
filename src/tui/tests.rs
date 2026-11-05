@@ -5130,6 +5130,57 @@ fn owner_coalesces_refreshes_and_loads_only_selected_backups() {
 }
 
 #[test]
+fn chinese_country_prefix_candidates_render_and_select_codes() {
+    let mut data = view();
+    Arc::make_mut(&mut data.facets)[0] = ["AU", "CF", "CN", "HK", "MO", "TW"]
+        .into_iter()
+        .map(|value| crate::model::Facet {
+            value: value.into(),
+            count: 3,
+        })
+        .collect();
+    let (sender, receiver) = command::channel(10);
+    let mut app = App::default();
+    app.key(key(KeyCode::Char('F')), &data, &sender);
+    app.paste("中");
+    let codes = |app: &App, data: &View| {
+        app.facet_candidates(data, 0)
+            .iter()
+            .map(|facet| facet.value.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(codes(&app, &data), ["CF", "CN", "HK", "MO"]);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let rendered = text(&terminal);
+    for code in ["CF", "CN", "HK", "MO"] {
+        assert!(rendered.contains(&format!("{code} (3)")), "{rendered}");
+    }
+    assert!(!rendered.contains("AU (3)"));
+    assert!(!rendered.contains("TW (3)"));
+
+    app.key(key(KeyCode::Char('国')), &data, &sender);
+    assert_eq!(codes(&app, &data), ["CN", "HK", "MO"]);
+    app.key(key(KeyCode::Backspace), &data, &sender);
+    assert_eq!(codes(&app, &data), ["CF", "CN", "HK", "MO"]);
+    app.key(key(KeyCode::Up), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "MO");
+    app.key(key(KeyCode::Down), &data, &sender);
+    app.key(key(KeyCode::Down), &data, &sender);
+    assert_eq!(app.filter_edit.as_ref().unwrap().1[0], "CN");
+    assert_eq!(app.facet_prefix, "中");
+
+    // A newly loaded candidate page must preserve the selection by code.
+    Arc::make_mut(&mut data.facets)[0].drain(..2);
+    app.reconcile(&data);
+    assert_eq!(app.facet_index, Some(0));
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert_eq!(app.filter.country.as_deref(), Some("CN"));
+    assert!(matches!(receiver.try_recv(), Ok(Command::Search(filter))
+        if filter.country.as_deref() == Some("CN")));
+}
+
+#[test]
 fn facet_candidates_follow_the_typed_prefix_without_losing_it() {
     let mut data = view();
     Arc::make_mut(&mut data.facets)[0] = ["AU", "CA", "CN", "FR"]
