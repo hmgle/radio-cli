@@ -652,7 +652,7 @@ fn country_facets_match_chinese_name_prefixes_before_limiting() {
     // Matching countries must remain reachable beyond the first 100 values.
     for code in (0..110)
         .map(|i| format!("A{i:03}"))
-        .chain(["CF", "CN", "CN", "HK", "MO", "TW", "US", "QZ"].map(String::from))
+        .chain(["AU", "CF", "CN", "CN", "HK", "MO", "TW", "US", "QZ"].map(String::from))
     {
         let mut row = station("Country fixture");
         row.countrycode = code;
@@ -675,7 +675,11 @@ fn country_facets_match_chinese_name_prefixes_before_limiting() {
         (" c ", vec!["CF", "CN"]),
         ("cn", vec!["CN"]),
         ("qz", vec!["QZ"]),
-        ("香港", vec![]),
+        ("香", vec!["HK"]),
+        ("香港", vec!["HK"]),
+        (" 香港　", vec!["HK"]),
+        ("澳", vec!["AU", "MO"]),
+        ("澳门", vec!["MO"]),
         ("国", vec![]),
         ("日本", vec![]),
         ("%", vec![]),
@@ -688,9 +692,17 @@ fn country_facets_match_chinese_name_prefixes_before_limiting() {
             "prefix {prefix:?}"
         );
     }
-    for (prefix, codes) in [("中", vec!["CF", "CN"]), ("中国", vec!["CN", "HK"])] {
+    for (prefix, limit, codes) in [
+        ("中", 2, vec!["CF", "CN"]),
+        ("中国", 2, vec!["CN", "HK"]),
+        ("香", 1, vec!["HK"]),
+        ("澳门", 1, vec!["MO"]),
+        ("澳", 1, vec!["AU"]),
+    ] {
         assert_eq!(
-            store.facets_limited(FacetKind::Country, prefix, 2).unwrap(),
+            store
+                .facets_limited(FacetKind::Country, prefix, limit)
+                .unwrap(),
             expected(&codes)
         );
     }
@@ -700,7 +712,7 @@ fn country_facets_match_chinese_name_prefixes_before_limiting() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(store.facets(FacetKind::Country, "").unwrap().len(), 117);
+    assert_eq!(store.facets(FacetKind::Country, "").unwrap().len(), 118);
     for kind in [FacetKind::Language, FacetKind::Tag] {
         assert!(store.facets(kind, "中").unwrap().is_empty());
     }

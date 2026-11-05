@@ -549,6 +549,59 @@ fn facet_cli_reports_real_local_values() {
 }
 
 #[test]
+fn country_facet_cli_accepts_chinese_alias_prefixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    for code in ["AU", "HK", "HK", "MO"] {
+        store
+            .upsert(&Station {
+                stationuuid: uuid::Uuid::new_v4().to_string(),
+                name: "Country fixture".into(),
+                countrycode: code.into(),
+                active: true,
+                ..Station::default()
+            })
+            .unwrap();
+    }
+    for language in ["en", "zh-CN"] {
+        for json in ["--json", "--json-v2"] {
+            for (prefix, codes) in [
+                ("香", vec!["HK"]),
+                (" 香港　", vec!["HK"]),
+                ("澳", vec!["AU", "MO"]),
+                ("澳门", vec!["MO"]),
+            ] {
+                let output = radio(dir.path())
+                    .args(["--lang", language, json, "countries", "--prefix", prefix])
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+                let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                let rows = if json == "--json" {
+                    &result
+                } else {
+                    &result["data"]
+                };
+                let expected: Vec<_> = codes
+                    .iter()
+                    .map(|code| {
+                        serde_json::json!({
+                            "value": code,
+                            "count": if *code == "HK" { 2 } else { 1 },
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    rows.as_array().unwrap(),
+                    &expected,
+                    "{language} {json} {prefix}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn media_lock_blocks_only_competing_media_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let config = support::config(dir.path());

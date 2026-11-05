@@ -56,12 +56,21 @@ pub(crate) fn matching_codes(query: &str) -> impl Iterator<Item = &'static str> 
         .map(|(code, _)| code.as_str())
 }
 
-/// Facet completion accepts single characters and matches only name prefixes.
+/// Facet completion accepts single characters and matches name or alias prefixes.
 /// Empty prefixes already match all catalog codes without name expansion.
 pub(crate) fn matching_prefix_codes(prefix: &str) -> impl Iterator<Item = &'static str> + '_ {
     let prefix = prefix.trim();
     names()
         .iter()
-        .filter(move |(_, name)| !prefix.is_empty() && name.starts_with(prefix))
+        .filter(move |(code, name)| {
+            // Search-only aliases keep the full CLDR display names intact.
+            let alias = match code.as_str() {
+                "HK" => Some("香港"),
+                "MO" => Some("澳门"),
+                _ => None,
+            };
+            !prefix.is_empty()
+                && (name.starts_with(prefix) || alias.is_some_and(|name| name.starts_with(prefix)))
+        })
         .map(|(code, _)| code.as_str())
 }

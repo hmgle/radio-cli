@@ -5181,6 +5181,47 @@ fn chinese_country_prefix_candidates_render_and_select_codes() {
 }
 
 #[test]
+fn country_alias_prefix_candidates_render_and_select_original_codes() {
+    let mut data = view();
+    Arc::make_mut(&mut data.facets)[0] = ["AU", "HK", "MO"]
+        .into_iter()
+        .map(|value| crate::model::Facet {
+            value: value.into(),
+            count: 3,
+        })
+        .collect();
+    for (prefix, codes, selected) in [
+        ("香", vec!["HK"], "HK"),
+        ("香港", vec!["HK"], "HK"),
+        ("澳", vec!["AU", "MO"], "MO"),
+        ("澳门", vec!["MO"], "MO"),
+    ] {
+        let (sender, receiver) = command::channel(10);
+        let mut app = App::default();
+        app.key(key(KeyCode::Char('F')), &data, &sender);
+        app.paste(prefix);
+        let actual: Vec<_> = app
+            .facet_candidates(&data, 0)
+            .into_iter()
+            .map(|facet| facet.value.as_str())
+            .collect();
+        assert_eq!(actual, codes, "prefix {prefix:?}");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let rendered = text(&terminal);
+        for code in codes {
+            assert!(rendered.contains(&format!("{code} (3)")), "{rendered}");
+        }
+        app.key(key(KeyCode::Up), &data, &sender);
+        assert_eq!(app.facet_prefix, prefix);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert_eq!(app.filter.country.as_deref(), Some(selected));
+        assert!(matches!(receiver.try_recv(), Ok(Command::Search(filter))
+            if filter.country.as_deref() == Some(selected)));
+    }
+}
+
+#[test]
 fn facet_candidates_follow_the_typed_prefix_without_losing_it() {
     let mut data = view();
     Arc::make_mut(&mut data.facets)[0] = ["AU", "CA", "CN", "FR"]

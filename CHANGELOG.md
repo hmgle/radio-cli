@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept Hong Kong and Macao short-name prefixes (`香港`, `澳门`, `香`, `澳`)
+  in country filter candidates and `countries --prefix`, keeping full Chinese
+  display names, country codes, and station counts.
 - Match country filter candidates by code or Chinese-name prefix, including
   single characters, in the TUI and `countries --prefix`. Keep country codes
   and station counts in the results and apply limits after matching.

@@ -269,9 +269,12 @@ such as `zh`. `--min-bitrate` excludes stations whose bitrate is unknown.
 
 In the `F` filter popup, country candidates match code or Chinese-name prefixes,
 including a single character: `中` finds locally available entries such as China
-and the Central African Republic. Use ↑/↓ to select a candidate, then Enter to
-apply its country code. `radio countries --prefix 中` uses the same matching and
-returns codes and counts. Language and tag candidates match catalog prefixes.
+and the Central African Republic. Common short names `香港` and `澳门`, including
+their single-character prefixes `香` and `澳`, also match Hong Kong and Macao.
+The Chinese interface keeps the full region names. Use ↑/↓ to select a
+candidate, then Enter to apply its country code. `radio countries --prefix 中`
+uses the same matching and returns codes and counts. Language and tag candidates
+match catalog prefixes.
 
 Direct URLs are temporary: they are not added to the catalog or history and do
 not replace the last saved station. Save a station before recording it.
