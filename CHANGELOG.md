@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.1 — 2026-11-06
+
 - Accept Hong Kong and Macao short-name prefixes (`香港`, `澳门`, `香`, `澳`)
   in country filter candidates and `countries --prefix`, keeping full Chinese
   display names, country codes, and station counts.
