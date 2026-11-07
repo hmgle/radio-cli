@@ -6638,9 +6638,13 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
     let mut app = App::default();
     app.source = Source::Podcasts;
     app.focus = Focus::List;
+    app.filter.query = "节目".into();
+    app.filter.offset = 100;
     let (sender, receiver) = command::channel(8);
     app.key(key(KeyCode::Enter), &data, &sender);
     assert_eq!(app.podcast_feed.as_deref(), Some("feed-id"));
+    assert!(app.filter.query.is_empty());
+    assert_eq!(app.filter.offset, 0);
     assert!(
         matches!(receiver.try_recv(),Ok(Command::Podcast(crate::podcast::Action::Episodes{id,..})) if id=="feed-id")
     );
@@ -6655,8 +6659,12 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
     assert!(
         matches!(receiver.try_recv(),Ok(Command::Podcast(crate::podcast::Action::Play{id,..})) if id=="episode-id")
     );
+    app.filter.query = "单集".into();
+    app.filter.offset = 100;
     app.key(key(KeyCode::Esc), &data, &sender);
     assert!(app.podcast_feed.is_none());
+    assert!(app.filter.query.is_empty());
+    assert_eq!(app.filter.offset, 0);
     assert!(matches!(
         receiver.try_recv(),
         Ok(Command::Podcast(crate::podcast::Action::List(_)))

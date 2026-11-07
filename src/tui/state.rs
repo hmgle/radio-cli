@@ -1836,6 +1836,8 @@ impl App {
                 return;
             }
             if key.code == KeyCode::Esc && self.podcast_feed.take().is_some() {
+                self.filter.query.clear();
+                self.filter.offset = 0;
                 self.reset_selection();
                 self.flush_search(sender);
                 return;
@@ -1848,6 +1850,8 @@ impl App {
                     let action = match item.kind.as_str() {
                         "feed" => {
                             self.podcast_feed = Some(item.id.clone());
+                            self.filter.query.clear();
+                            self.filter.offset = 0;
                             self.reset_selection();
                             self.flush_search(sender);
                             return;
