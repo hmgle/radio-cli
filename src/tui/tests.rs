@@ -6810,6 +6810,7 @@ fn podcast_keyboard_and_wheel_navigation_do_not_depend_on_radio_pages() {
         let mut app = App::default();
         app.source = source;
         app.focus = Focus::List;
+        data.podcast_page = Some(super::podcast::browse(source, &None, "", 0, 100));
         app.rects[Focus::List.index()] = ratatui::layout::Rect::new(0, 0, 40, 5);
         let (sender, _receiver) = command::channel(8);
         app.key(key(KeyCode::Down), &data, &sender);
@@ -6835,6 +6836,14 @@ fn podcast_keyboard_and_wheel_navigation_do_not_depend_on_radio_pages() {
             &sender,
         );
         assert_eq!(app.list.offset(), 1);
+        let wrong_source = if source == Source::PodcastDownloads {
+            Source::PodcastQueue
+        } else {
+            Source::PodcastDownloads
+        };
+        data.podcast_page = Some(super::podcast::browse(wrong_source, &None, "", 0, 100));
+        app.key(key(KeyCode::Down), &data, &sender);
+        assert_eq!(app.list.selected(), Some(3));
         data.podcast_items = vec![].into();
         data.podcast_browse = true;
         app.key(key(KeyCode::Down), &data, &sender);

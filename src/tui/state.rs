@@ -769,8 +769,25 @@ impl App {
     fn list_ready(&self, view: &View) -> bool {
         if self.source.is_podcast() {
             view.podcast_page.as_ref().is_none_or(|action| {
-                self.source == Source::Podcasts
-                    && super::podcast::page_matches(action, &self.podcast_feed, &self.filter)
+                use crate::podcast::{Action, DownloadAction, QueueAction};
+                match (self.source, action) {
+                    (Source::Podcasts, action) => {
+                        super::podcast::page_matches(action, &self.podcast_feed, &self.filter)
+                    }
+                    (
+                        Source::PodcastDownloads,
+                        Action::Downloads {
+                            action: DownloadAction::List,
+                        },
+                    )
+                    | (
+                        Source::PodcastQueue,
+                        Action::Queue {
+                            action: QueueAction::List,
+                        },
+                    ) => true,
+                    _ => false,
+                }
             }) && (!view.podcast_browse || !view.podcast_items.is_empty())
         } else {
             view.page_ready(&self.filter)
