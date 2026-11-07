@@ -103,6 +103,10 @@ impl CommandReceiver {
 #[derive(Clone)]
 pub(super) enum Command {
     Podcast(crate::podcast::Action),
+    PodcastRequest {
+        action: crate::podcast::Action,
+        request: u64,
+    },
     Subtitles(String),
     SubtitleModel(String),
     LocatePlaying {

@@ -483,6 +483,8 @@ struct SourcePosition {
 
 pub(super) struct App {
     pub podcast_feed: Option<String>,
+    // Updated at submission so queued commands already invalidate old rows.
+    podcast_request: Option<u64>,
     pub map: super::map::State,
     last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
@@ -568,6 +570,7 @@ impl Default for App {
             recording_error_expanded: false,
             focus: Focus::List,
             podcast_feed: None,
+            podcast_request: None,
             source: Source::Stations,
             mode: Mode::Normal,
             filter: Filter {
@@ -768,9 +771,22 @@ impl App {
     }
     fn list_ready(&self, view: &View) -> bool {
         if self.source.is_podcast() {
-            view.podcast_page.as_ref().is_none_or(|action| {
+            if self
+                .podcast_request
+                .is_some_and(|request| view.podcast_request != Some(request))
+            {
+                return false;
+            }
+            view.podcast_page.as_ref().is_some_and(|action| {
                 use crate::podcast::{Action, DownloadAction, QueueAction};
                 match (self.source, action) {
+                    (
+                        Source::Podcasts,
+                        Action::Search { .. }
+                        | Action::Discover { .. }
+                        | Action::Preview { .. }
+                        | Action::Add { .. },
+                    ) => self.podcast_feed.is_none(),
                     (Source::Podcasts, action) => {
                         super::podcast::page_matches(action, &self.podcast_feed, &self.filter)
                     }
@@ -992,8 +1008,22 @@ impl App {
         self.details_scroll = 0;
     }
     fn send(&mut self, sender: &CommandSender, command: Command) -> bool {
+        let mut podcast_request = None;
+        let command = match command {
+            Command::Podcast(action) if super::podcast::is_browse(&action) => {
+                let request = self.podcast_request.unwrap_or(0).wrapping_add(1);
+                podcast_request = Some(request);
+                Command::PodcastRequest { action, request }
+            }
+            command => command,
+        };
         match sender.try_send(command) {
-            Ok(()) => true,
+            Ok(()) => {
+                if let Some(request) = podcast_request {
+                    self.podcast_request = Some(request);
+                }
+                true
+            }
             Err(error) => {
                 self.message = crate::t!("command_submit_failed", "detail" => error);
                 false

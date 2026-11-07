@@ -56,6 +56,9 @@ pub(super) struct View {
     pub podcast_total: usize,
     pub podcast_browse: bool,
     pub podcast_page: Option<crate::podcast::Action>,
+    pub podcast_request: Option<u64>,
+    // Every browse has an identity, including results that are not polled.
+    podcast_pending: Option<(Option<u64>, crate::podcast::Action)>,
     pub podcast_task: String,
     podcast_poll: Option<(crate::podcast::Action, Instant)>,
     pub subtitles: crate::speech::Snapshot,
@@ -142,6 +145,8 @@ impl View {
             podcast_total: 0,
             podcast_browse: false,
             podcast_page: None,
+            podcast_request: None,
+            podcast_pending: None,
             podcast_task: String::new(),
             podcast_poll: None,
             recordings_revision: 0,
@@ -275,6 +280,28 @@ impl View {
             self.subtitles = snapshot.clone();
             self.revision += 1;
             self.immediate_revision += 1;
+        }
+    }
+    fn publish_podcast(&mut self, result: Result<serde_json::Value>) {
+        match result {
+            Ok(value) => {
+                if let Some((request, action)) = self.podcast_pending.take() {
+                    self.podcast_request = request;
+                    self.podcast_page = Some(action);
+                    self.podcast_items = Arc::new(super::podcast::items(&value));
+                    self.podcast_total = value["total"]
+                        .as_u64()
+                        .map_or(self.podcast_items.len(), |v| v as usize);
+                    self.podcast_browse = false;
+                }
+                self.log(crate::t!("podcast_operation_done"));
+                self.revision += 1;
+            }
+            Err(error) => {
+                self.podcast_pending = None;
+                self.podcast_browse = false;
+                self.fail_operation(&error.to_string());
+            }
         }
     }
     fn log(&mut self, message: &str) {
@@ -537,24 +564,14 @@ pub(super) fn execute(
     job: &mut Option<CatalogJob>,
     view: &Arc<Mutex<View>>,
 ) -> Result<()> {
+    let podcast_request = match &command {
+        Command::PodcastRequest { request, .. } => Some(*request),
+        _ => None,
+    };
     match command {
-        Command::Podcast(action) => {
+        Command::Podcast(action) | Command::PodcastRequest { action, .. } => {
             use crate::podcast::{Action, DownloadAction, QueueAction};
-            let browse = matches!(
-                &action,
-                Action::List { .. }
-                    | Action::Add { .. }
-                    | Action::Episodes { .. }
-                    | Action::Search { .. }
-                    | Action::Discover { .. }
-                    | Action::Preview { .. }
-                    | Action::Downloads {
-                        action: DownloadAction::List
-                    }
-                    | Action::Queue {
-                        action: QueueAction::List
-                    }
-            );
+            let browse = super::podcast::is_browse(&action);
             if browse {
                 let periodic = matches!(
                     &action,
@@ -577,12 +594,20 @@ pub(super) fn execute(
                 engine.save_preference("pref_source", source)?;
                 let mut data = view.lock().unwrap();
                 data.podcast_browse = true;
+                data.podcast_pending = Some((podcast_request, action.clone()));
                 data.podcast_page = None;
                 data.podcast_items = Arc::new(vec![]);
                 data.revision += 1;
                 engine.cancel_podcast();
             }
-            engine.podcast_action(action)?;
+            if let Err(error) = engine.podcast_action(action) {
+                if browse {
+                    let mut data = view.lock().unwrap();
+                    data.podcast_pending = None;
+                    data.podcast_browse = false;
+                }
+                return Err(error);
+            }
         }
         Command::Subtitles(action) => match action.as_str() {
             "on" => engine.set_subtitles(true),
@@ -752,6 +777,7 @@ pub(super) fn execute(
             let podcast = podcast || data.podcast_browse;
             if podcast {
                 data.podcast_browse = false;
+                data.podcast_pending = None;
                 data.podcast_poll = None;
                 if data.podcast_items.is_empty() {
                     data.podcast_total = 0;
@@ -917,31 +943,14 @@ pub(super) fn run(
                 }
             };
             if let Some(action) = repeat
-                && engine.podcast_action(action).is_ok()
+                && engine.podcast_action(action.clone()).is_ok()
             {
-                view.lock().unwrap().podcast_browse = true;
+                let mut data = view.lock().unwrap();
+                data.podcast_pending = Some((data.podcast_request, action));
+                data.podcast_browse = true;
             }
             if let Some(result) = engine.poll_podcast() {
-                let mut data = view.lock().unwrap();
-                match result {
-                    Ok(value) => {
-                        if data.podcast_browse {
-                            data.podcast_page =
-                                data.podcast_poll.as_ref().map(|(action, _)| action.clone());
-                            data.podcast_items = Arc::new(super::podcast::items(&value));
-                            data.podcast_total = value["total"]
-                                .as_u64()
-                                .map_or(data.podcast_items.len(), |v| v as usize);
-                            data.podcast_browse = false;
-                        }
-                        data.log(crate::t!("podcast_operation_done"));
-                        data.revision += 1;
-                    }
-                    Err(e) => {
-                        data.podcast_browse = false;
-                        data.fail_operation(&e.to_string());
-                    }
-                }
+                view.lock().unwrap().publish_podcast(result);
             }
             if let Some(result) = engine.poll_diagnostics() {
                 let mut data = view.lock().unwrap();
@@ -1033,6 +1042,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn podcast_preview_confirmation_waits_for_the_latest_request() {
+        use super::super::{
+            command,
+            state::{App, Mode},
+        };
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let server = crate::test_support::Server::new(|_, stream| {
+            crate::test_support::response(stream, 200, "application/rss+xml",
+                b"<rss><channel><title>Preview</title><item><title>Episode</title><enclosure url='https://example.test/audio.mp3'/></item></channel></rss>");
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
+        let mut app = App::default();
+        let (sender, receiver) = command::channel(8);
+        let mut filter = Filter::default();
+        let mut job = None;
+        let finish = |engine: &mut Engine| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let result = loop {
+                if let Some(result) = engine.poll_podcast() {
+                    break result;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            assert!(result.is_ok(), "{result:?}");
+            view.lock().unwrap().publish_podcast(result);
+        };
+        let old_url = format!("{}/old", server.url);
+        app.mode = Mode::Command;
+        app.editor.begin(&format!("podcast add {old_url}"));
+        app.key(enter, &view.lock().unwrap(), &sender);
+        execute(
+            receiver.try_recv().unwrap(),
+            &mut engine,
+            &mut filter,
+            &mut job,
+            &view,
+        )
+        .unwrap();
+        finish(&mut engine);
+        let old = view.lock().unwrap().clone();
+        assert!(
+            matches!(&old.podcast_page, Some(crate::podcast::Action::Preview { url }) if url == &old_url)
+        );
+        assert_eq!(old.podcast_items[0].url, old_url);
+
+        let new_url = format!("{}/new", server.url);
+        let mut requests = vec![];
+        for _ in 0..2 {
+            app.mode = Mode::Command;
+            app.editor.begin(&format!("podcast add {new_url}"));
+            app.key(enter, &old, &sender);
+            requests.push(receiver.try_recv().unwrap());
+            // The worker has not seen the new command yet.
+            app.key(enter, &old, &sender);
+            assert!(receiver.try_recv().is_err());
+        }
+        let second = requests.pop().unwrap();
+        let first = requests.pop().unwrap();
+        execute(first, &mut engine, &mut filter, &mut job, &view).unwrap();
+        finish(&mut engine);
+        // Even the same URL needs a result from the latest submission.
+        app.key(enter, &view.lock().unwrap(), &sender);
+        assert!(receiver.try_recv().is_err());
+        execute(second, &mut engine, &mut filter, &mut job, &view).unwrap();
+        app.key(enter, &view.lock().unwrap(), &sender);
+        assert!(receiver.try_recv().is_err());
+        finish(&mut engine);
+        assert!(engine.store().podcast_feeds().unwrap().is_empty());
+        app.key(enter, &view.lock().unwrap(), &sender);
+        let add = receiver.try_recv().unwrap();
+        assert!(
+            matches!(&add, Command::PodcastRequest { action: crate::podcast::Action::Add { url }, .. } if url == &new_url)
+        );
+        execute(add, &mut engine, &mut filter, &mut job, &view).unwrap();
+        finish(&mut engine);
+        let feeds = engine.store().podcast_feeds().unwrap();
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0].url, new_url);
+    }
+
+    #[test]
     fn cancelling_podcast_commands_clears_loading_and_periodic_refresh() {
         for (with_catalog, browse) in [(false, false), (false, true), (true, false), (true, true)] {
             let dir = tempfile::tempdir().unwrap();
@@ -1069,6 +1164,7 @@ mod tests {
             execute(Command::Cancel, &mut engine, &mut filter, &mut job, &view).unwrap();
             let data = view.lock().unwrap();
             assert!(!data.podcast_browse);
+            assert!(data.podcast_pending.is_none());
             assert!(data.podcast_poll.is_none());
             assert!(data.revision > before);
             assert!(engine.poll_podcast().is_none());

@@ -6640,14 +6640,18 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
     app.focus = Focus::List;
     app.filter.query = "节目".into();
     app.filter.offset = 100;
+    data.podcast_page = Some(super::podcast::browse(app.source, &None, "节目", 100, 100));
     let (sender, receiver) = command::channel(8);
     app.key(key(KeyCode::Enter), &data, &sender);
     assert_eq!(app.podcast_feed.as_deref(), Some("feed-id"));
     assert!(app.filter.query.is_empty());
     assert_eq!(app.filter.offset, 0);
-    assert!(
-        matches!(receiver.try_recv(),Ok(Command::Podcast(crate::podcast::Action::Episodes{id,..})) if id=="feed-id")
-    );
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+        panic!("expected episode request");
+    };
+    assert!(matches!(&action, crate::podcast::Action::Episodes { id, .. } if id == "feed-id"));
+    data.podcast_page = Some(action);
+    data.podcast_request = Some(request);
     data.podcast_items = vec![super::podcast::Item {
         id: "episode-id".into(),
         title: "单集".into(),
@@ -6667,7 +6671,10 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
     assert_eq!(app.filter.offset, 0);
     assert!(matches!(
         receiver.try_recv(),
-        Ok(Command::Podcast(crate::podcast::Action::List { .. }))
+        Ok(Command::PodcastRequest {
+            action: crate::podcast::Action::List { .. },
+            ..
+        })
     ));
     assert!(matches!(
         command::parse(
@@ -6686,10 +6693,21 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
         ..Default::default()
     }]
     .into();
+    app.mode = Mode::Command;
+    app.editor.begin("podcast add https://example.test/feed");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+        panic!("expected preview request");
+    };
+    data.podcast_page = Some(action);
+    data.podcast_request = Some(request);
     app.key(key(KeyCode::Enter), &data, &sender);
     assert!(matches!(
         receiver.try_recv(),
-        Ok(Command::Podcast(crate::podcast::Action::Add { .. }))
+        Ok(Command::PodcastRequest {
+            action: crate::podcast::Action::Add { .. },
+            ..
+        })
     ));
 }
 
@@ -6735,7 +6753,7 @@ fn podcast_selection_resume_restores_the_episode_page_once_without_playback() {
     assert_eq!(app.list.selected(), None);
     let (sender, receiver) = command::channel(8);
     app.flush_search(&sender);
-    let Command::Podcast(action) = receiver.try_recv().unwrap() else {
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
         panic!("expected browse")
     };
     let value = crate::podcast::manage(
@@ -6747,6 +6765,7 @@ fn podcast_selection_resume_restores_the_episode_page_once_without_playback() {
     .unwrap();
     data.podcast_items = super::podcast::items(&value).into();
     data.podcast_total = 205;
+    data.podcast_request = Some(request);
     // Rows for a different page must not consume the pending target.
     data.podcast_page = Some(crate::podcast::Action::Episodes {
         id: feed.id.clone(),
@@ -6873,6 +6892,7 @@ fn podcast_enter_waits_for_the_requested_page() {
             0,
             app.filter.limit,
         ));
+        let mut published_request = None;
         match mismatch {
             "query" => {
                 let (sender, receiver) = command::channel(8);
@@ -6881,10 +6901,14 @@ fn podcast_enter_waits_for_the_requested_page() {
                     app.key(key(KeyCode::Char(c)), &data, &sender);
                 }
                 app.key(key(KeyCode::Enter), &data, &sender);
-                app.flush_search(&sender);
-                assert!(matches!(receiver.try_recv(), Ok(Command::Podcast(
-                    crate::podcast::Action::Episodes { query, .. }
-                )) if query == "new query"));
+                let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap()
+                else {
+                    panic!("expected search request");
+                };
+                assert!(
+                    matches!(action, crate::podcast::Action::Episodes { query, .. } if query == "new query")
+                );
+                published_request = Some(request);
             }
             "feed" => app.podcast_feed = Some("other-feed".into()),
             "offset" => app.filter.offset = 100,
@@ -6904,6 +6928,7 @@ fn podcast_enter_waits_for_the_requested_page() {
         ));
         Arc::make_mut(&mut data.podcast_items)[0].title = "new query result".into();
         data.podcast_browse = false;
+        data.podcast_request = published_request;
         app.key(key(KeyCode::Enter), &data, &sender);
         assert!(
             matches!(receiver.try_recv(), Ok(Command::Podcast(
@@ -6911,6 +6936,41 @@ fn podcast_enter_waits_for_the_requested_page() {
         )) if id == "episode-id"),
             "{mismatch}"
         );
+    }
+}
+
+#[test]
+fn podcast_nonpage_requests_block_old_preview_before_worker_execution() {
+    for line in [
+        "podcast add https://example.test/new",
+        "podcast discover https://example.test/new",
+        "podcast search new",
+    ] {
+        let mut data = view();
+        data.podcast_items = vec![super::podcast::Item {
+            title: "Old preview".into(),
+            url: "https://example.test/old".into(),
+            kind: "preview".into(),
+            ..Default::default()
+        }]
+        .into();
+        data.podcast_page = Some(crate::podcast::Action::Preview {
+            url: "https://example.test/old".into(),
+        });
+        let mut app = App::default();
+        let (sender, receiver) = command::channel(8);
+        app.mode = Mode::Command;
+        app.editor.begin(line);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::PodcastRequest { .. })
+        ));
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(receiver.try_recv().is_err(), "{line}");
+        data.podcast_page = None;
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(receiver.try_recv().is_err(), "{line}");
     }
 }
 
@@ -6924,7 +6984,7 @@ fn podcast_search_is_sent_with_the_requested_page() {
     let (sender, receiver) = command::channel(8);
     app.flush_search(&sender);
     assert!(matches!(receiver.try_recv(),
-        Ok(Command::Podcast(crate::podcast::Action::Episodes { id, query, page }))
+        Ok(Command::PodcastRequest { action: crate::podcast::Action::Episodes { id, query, page }, .. })
             if id == "feed-id" && query == "第101集" && page.offset == 100));
     let data = view();
     app.mode = Mode::Command;

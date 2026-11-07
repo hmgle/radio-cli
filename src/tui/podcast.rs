@@ -1,5 +1,25 @@
 use crate::podcast::Action;
 use serde_json::Value;
+
+pub(super) fn is_browse(action: &Action) -> bool {
+    use crate::podcast::{DownloadAction, QueueAction};
+    matches!(
+        action,
+        Action::List { .. }
+            | Action::Add { .. }
+            | Action::Episodes { .. }
+            | Action::Search { .. }
+            | Action::Discover { .. }
+            | Action::Preview { .. }
+            | Action::Downloads {
+                action: DownloadAction::List
+            }
+            | Action::Queue {
+                action: QueueAction::List
+            }
+    )
+}
+
 #[derive(Clone, Default)]
 pub(super) struct Item {
     pub id: String,
