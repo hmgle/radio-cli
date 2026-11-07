@@ -498,6 +498,7 @@ podcast_empty = "暂无播客条目。使用 :podcast add URL 或 :podcast searc
 podcast_hint = "Enter 打开/播放 · Esc 返回 · :podcast 执行操作"
 podcast_confirm = "订阅此播客？使用 :podcast add URL 确认"
 podcast_download_busy = "请先暂停或取消下载再删除文件"
+podcast_download_in_use = "删除下载文件前请先停止播放"
 
 podcast_operation_done = "播客操作已完成"
 

@@ -461,15 +461,18 @@ impl Engine {
             Action::AutoNext { state } => self.podcast_auto_next(state == "on"),
             Action::Downloads {
                 action: DownloadAction::Remove { ref id },
-            } if self.podcast_runtime.download_active(id)
-                || self
-                    .session
-                    .status
-                    .episode
-                    .as_ref()
-                    .is_some_and(|e| &e.id == id) =>
-            {
+            } if self.podcast_runtime.download_active(id) => {
                 Err(crate::podcast::error(crate::t!("podcast_download_busy")))
+            }
+            Action::Downloads {
+                action: DownloadAction::Remove { ref id },
+            } if self.playback_active()
+                && self
+                    .store()
+                    .podcast_download(id)?
+                    .is_some_and(|d| !d.path.is_empty() && d.path == self.playback.url) =>
+            {
+                Err(crate::podcast::error(crate::t!("podcast_download_in_use")))
             }
             action => self.podcast_runtime.action(
                 &self.session.config,
@@ -795,6 +798,83 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_removal_checks_the_active_input_instead_of_the_saved_episode() {
+        use crate::podcast::{self, Action, Episode, Feed, Preview};
+        for streaming in [false, true] {
+            for background in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut config = crate::test_support::config(dir.path());
+                config.settings.mpv = crate::test_support::fake_mpv(dir.path())
+                    .to_string_lossy()
+                    .into_owned();
+                let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+                if background {
+                    engine.enable_background_media().unwrap();
+                }
+                let p = Preview {
+                    feed: Feed {
+                        url: "https://example.test/rss".into(),
+                        ..Default::default()
+                    },
+                    episodes: vec![Episode {
+                        guid: Some("episode".into()),
+                        url: "https://example.test/audio".into(),
+                        ..Default::default()
+                    }],
+                };
+                let feed = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+                let episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+                let path = podcast::download_path(engine.config(), &episode.id);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, b"fixture").unwrap();
+                let download = podcast::Download {
+                    episode_id: episode.id.clone(),
+                    state: "complete".into(),
+                    path: path.to_string_lossy().into_owned(),
+                    bytes: 7,
+                    ..Default::default()
+                };
+                // An online player must not reserve a download completed later.
+                if !streaming {
+                    engine.store().podcast_save_download(&download).unwrap();
+                }
+                engine.play_episode(&episode.id, false, None).unwrap();
+                if streaming {
+                    engine.store().podcast_save_download(&download).unwrap();
+                }
+                assert!(engine.playback_active());
+                let remove = Action::Downloads {
+                    action: podcast::DownloadAction::Remove {
+                        id: episode.id.clone(),
+                    },
+                };
+                if !streaming {
+                    assert!(engine.podcast_action(remove.clone()).is_err());
+                    assert!(path.exists());
+                    engine.stop_playback().unwrap();
+                    assert!(!engine.playback_active());
+                    assert_eq!(engine.status().episode.as_ref().unwrap().id, episode.id);
+                }
+                engine.podcast_action(remove).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let result = loop {
+                    if let Some(result) = engine.poll_podcast() {
+                        break result.unwrap();
+                    }
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(10));
+                };
+                assert_eq!(result["state"], "removed");
+                assert!(!path.exists());
+                if streaming {
+                    assert!(engine.playback_active());
+                }
+                engine.shutdown().unwrap();
+            }
+        }
+    }
 
     #[test]
     fn background_media_preserves_the_lock_budget_for_catalog_writes() {

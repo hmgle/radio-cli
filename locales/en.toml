@@ -499,6 +499,7 @@ podcast_empty = "No podcast entries. Use :podcast add URL or :podcast search QUE
 podcast_hint = "Enter open/play · Esc back · :podcast for actions"
 podcast_confirm = "Subscribe to this podcast? Use :podcast add URL to confirm"
 podcast_download_busy = "Pause or cancel this download before removing it"
+podcast_download_in_use = "Stop playback before removing the downloaded file"
 
 podcast_operation_done = "Podcast operation finished"
 
