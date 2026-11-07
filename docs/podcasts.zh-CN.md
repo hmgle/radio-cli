@@ -22,7 +22,10 @@ radio podcast unsubscribe FEED_ID
 
 `discover` 识别网页声明的 RSS/Atom，也能转换 Apple 节目链接；多结果时手动选择源。
 `preview` 不保存订阅，`add` 明确订阅但不播放。节目和单集列表支持 `--limit`（默认
-100，范围 1–1000）、`--offset`、`--all`。
+100，范围 1–1000）、`--offset`、`--all`。使用
+`radio podcast episodes FEED_ID --query "标题"` 或
+`radio podcast list --query "节目"` 可先按本地标题过滤，再分页。
+TUI 的 `/` 搜索同样覆盖当前节目的全部单集。
 
 `radio podcast search 查询词 [--country CN] [--limit 25]` 搜索 Apple Podcasts，
 地区指目录地区而非节目语言。缺少 `feedUrl` 的结果不能订阅。目录不可用不妨碍已有

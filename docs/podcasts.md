@@ -25,7 +25,10 @@ radio podcast unsubscribe FEED_ID
 `discover` returns public feed URLs declared in a page, or resolves an Apple
 Podcasts show link. With multiple results, choose a URL explicitly. `add`
 subscribes without playing; `preview` makes no subscription changes. Lists use
-`--limit` (1–1000, default 100), `--offset` and `--all`.
+`--limit` (1–1000, default 100), `--offset` and `--all`. Use
+`radio podcast episodes FEED_ID --query "title"` or
+`radio podcast list --query "show"` to filter local titles before pagination.
+The TUI `/` search also searches all episodes in the current feed.
 
 Search Apple Podcasts with `radio podcast search QUERY [--country CN]
 [--limit 25]`. The country is the store region, not the feed language. Results

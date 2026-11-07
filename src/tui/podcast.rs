@@ -86,6 +86,7 @@ pub(super) fn items(value: &Value) -> Vec<Item> {
 pub(super) fn browse(
     source: super::state::Source,
     feed: &Option<String>,
+    query: &str,
     offset: usize,
     limit: usize,
 ) -> Action {
@@ -106,10 +107,14 @@ pub(super) fn browse(
             if let Some(id) = feed {
                 Action::Episodes {
                     id: id.clone(),
+                    query: query.into(),
                     page,
                 }
             } else {
-                Action::List(page)
+                Action::List {
+                    page,
+                    query: query.into(),
+                }
             }
         }
     }

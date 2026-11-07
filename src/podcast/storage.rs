@@ -3,6 +3,17 @@ use crate::store::Store;
 use anyhow::Result;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
+pub(crate) fn register_functions(conn: &rusqlite::Connection) -> Result<()> {
+    conn.create_scalar_function(
+        "podcast_lower",
+        1,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| Ok(context.get::<String>(0)?.to_lowercase()),
+    )?;
+    Ok(())
+}
+
 pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS podcast_feeds(id TEXT PRIMARY KEY,url TEXT NOT NULL UNIQUE,subscribed INTEGER NOT NULL,json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS podcast_aliases(url TEXT PRIMARY KEY,feed_id TEXT NOT NULL REFERENCES podcast_feeds(id));
@@ -155,9 +166,64 @@ impl Store {
     }
     pub fn podcast_episodes(&self, id: &str) -> Result<Vec<Episode>> {
         self.podcast_feed(id)?;
-        let mut stmt=self.conn.prepare("SELECT id FROM podcast_episodes WHERE feed_id=?1 ORDER BY json_extract(json,'$.published') DESC,rowid DESC")?;
-        let ids = stmt.query_map([id], |r| r.get::<_, String>(0))?;
-        ids.map(|id| self.podcast_episode(&id?)).collect()
+        self.podcast_episode_rows(id, "", -1, 0)
+    }
+    pub fn podcast_episodes_page(
+        &self,
+        id: &str,
+        query: &str,
+        page: &crate::cli::Page,
+    ) -> Result<(Vec<Episode>, usize)> {
+        let query = query.to_lowercase();
+        self.read_snapshot(|store| {
+            store.podcast_feed(id)?;
+            let total = store.conn.query_row(
+                "SELECT count(*) FROM podcast_episodes WHERE feed_id=?1
+                 AND (?2='' OR instr(podcast_lower(json_extract(json,'$.title')),?2)>0)",
+                params![id, query],
+                |r| r.get(0),
+            )?;
+            let items = store.podcast_episode_rows(
+                id,
+                &query,
+                if page.all { -1 } else { i64::from(page.limit) },
+                page.offset.min(i64::MAX as usize) as i64,
+            )?;
+            Ok((items, total))
+        })
+    }
+    fn podcast_episode_rows(
+        &self,
+        id: &str,
+        query: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Episode>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.json,p.position_ms,p.duration_ms,p.completed FROM podcast_episodes e
+             LEFT JOIN podcast_progress p ON p.episode_id=e.id WHERE e.feed_id=?1
+             AND (?2='' OR instr(podcast_lower(json_extract(e.json,'$.title')),?2)>0)
+             ORDER BY json_extract(e.json,'$.published') DESC,e.rowid DESC LIMIT ?3 OFFSET ?4",
+        )?;
+        let rows = stmt.query_map(params![id, query, limit, offset], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<u64>>(1)?,
+                r.get::<_, Option<u64>>(2)?,
+                r.get::<_, Option<bool>>(3)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (json, position, duration, completed) = row?;
+            let mut episode: Episode = serde_json::from_str(&json)?;
+            if let Some(position) = position {
+                episode.position_ms = position;
+                episode.observed_duration_ms = duration;
+                episode.completed = completed.unwrap_or(false);
+            }
+            Ok(episode)
+        })
+        .collect()
     }
     pub fn podcast_progress(
         &self,

@@ -25,9 +25,16 @@ pub enum Action {
     Add {
         url: String,
     },
-    List(crate::cli::Page),
+    List {
+        #[command(flatten)]
+        page: crate::cli::Page,
+        #[arg(long, default_value = "")]
+        query: String,
+    },
     Episodes {
         id: String,
+        #[arg(long, default_value = "")]
+        query: String,
         #[command(flatten)]
         page: crate::cli::Page,
     },
@@ -133,7 +140,14 @@ fn page<T: Serialize>(items: &[T], p: crate::cli::Page) -> Value {
     } else {
         usize::from(p.limit)
     };
-    json!({"items":items.iter().skip(p.offset).take(limit).collect::<Vec<_>>(),"total":items.len(),"offset":p.offset,"limit":if p.all {None}else{Some(p.limit)},"has_more":p.offset.saturating_add(limit)<items.len()})
+    page_result(
+        &items.iter().skip(p.offset).take(limit).collect::<Vec<_>>(),
+        items.len(),
+        p,
+    )
+}
+fn page_result<T: Serialize>(items: &[T], total: usize, p: crate::cli::Page) -> Value {
+    json!({"items":items,"total":total,"offset":p.offset,"limit":if p.all {None}else{Some(p.limit)},"has_more":p.offset.saturating_add(items.len())<total})
 }
 pub fn refresh(
     config: &Config,
@@ -208,8 +222,19 @@ pub fn manage(
             }
             json!(store.podcast_subscribe(&p, &url)?)
         }
-        Action::List(p) => page(&store.podcast_feeds()?, p),
-        Action::Episodes { id, page: p } => page(&store.podcast_episodes(&id)?, p),
+        Action::List { page: p, query } => {
+            let query = query.to_lowercase();
+            let feeds: Vec<_> = store
+                .podcast_feeds()?
+                .into_iter()
+                .filter(|feed| feed.title.to_lowercase().contains(&query))
+                .collect();
+            page(&feeds, p)
+        }
+        Action::Episodes { id, query, page: p } => {
+            let (items, total) = store.podcast_episodes_page(&id, &query, &p)?;
+            page_result(&items, total, p)
+        }
         Action::Refresh { id } => refresh(config, store, id.as_deref(), stop)?,
         Action::Unsubscribe { id } => {
             store.podcast_unsubscribe(&id)?;

@@ -740,7 +740,10 @@ impl App {
         view.podcast_items
             .iter()
             .filter(|i| {
-                self.filter.query.is_empty()
+                // Feed and episode pages have already been filtered before
+                // pagination. Other podcast views return their full lists.
+                matches!(i.kind.as_str(), "feed" | "episode") && self.source == Source::Podcasts
+                    || self.filter.query.is_empty()
                     || i.title
                         .to_lowercase()
                         .contains(&self.filter.query.to_lowercase())
@@ -968,6 +971,7 @@ impl App {
                 Command::Podcast(super::podcast::browse(
                     self.source,
                     &self.podcast_feed,
+                    &self.filter.query,
                     self.filter.offset,
                     self.filter.limit,
                 )),
@@ -1377,12 +1381,21 @@ impl App {
                         if let Command::Podcast(action) = &command {
                             use crate::podcast::{Action, DownloadAction, QueueAction};
                             match action {
-                                Action::List(_)
+                                Action::List { .. }
                                 | Action::Search { .. }
                                 | Action::Discover { .. }
                                 | Action::Preview { .. }
                                 | Action::Episodes { .. } => {
                                     self.source = Source::Podcasts;
+                                    self.filter.query.clear();
+                                    self.filter.offset = 0;
+                                    if let Action::List { query, page }
+                                    | Action::Episodes { query, page, .. } = action
+                                    {
+                                        self.filter.query = query.clone();
+                                        self.filter.offset = page.offset;
+                                        self.filter.limit = usize::from(page.limit);
+                                    }
                                     self.podcast_feed = if let Action::Episodes { id, .. } = action
                                     {
                                         Some(id.clone())

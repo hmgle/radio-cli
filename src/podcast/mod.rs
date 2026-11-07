@@ -64,6 +64,7 @@ pub struct Download {
 }
 
 pub(crate) use storage::migrate;
+pub(crate) use storage::register_functions;
 
 pub use commands::{parse_time, refresh, valid_speed};
 

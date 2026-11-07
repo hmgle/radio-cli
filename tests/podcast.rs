@@ -25,6 +25,120 @@ fn preview(url: &str) -> Preview {
     }
 }
 #[test]
+fn episode_search_filters_before_sql_pagination_and_joins_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = support::config(dir.path());
+    let store = Store::open(&c.data_dir.join("radio.db")).unwrap();
+    let mut p = preview("https://example.test/rss");
+    p.episodes = (0..101)
+        .map(|i| Episode {
+            guid: Some(i.to_string()),
+            title: if i == 0 {
+                "BJÖRK 第101集 100%_mix".into()
+            } else {
+                format!("Item {i}")
+            },
+            url: format!("https://example.test/{i}.mp3"),
+            ..Default::default()
+        })
+        .collect();
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let all = store.podcast_episodes(&feed.id).unwrap();
+    let target = &all[100];
+    store
+        .podcast_progress(&target.id, 12345, Some(60000), true)
+        .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let page = radio_cli::cli::Page {
+        offset: 0,
+        limit: 100,
+        all: false,
+    };
+    let result = podcast::manage(
+        &c,
+        &store,
+        Action::Episodes {
+            id: feed.id.clone(),
+            query: "björk 第101集 100%_".into(),
+            page: page.clone(),
+        },
+        &stop,
+    )
+    .unwrap();
+    assert_eq!(result["total"], 1);
+    assert_eq!(result["has_more"], false);
+    assert_eq!(result["items"][0]["id"], target.id);
+    assert_eq!(result["items"][0]["position_ms"], 12345);
+    assert_eq!(result["items"][0]["observed_duration_ms"], 60000);
+    assert_eq!(result["items"][0]["completed"], true);
+    let result = podcast::manage(
+        &c,
+        &store,
+        Action::Episodes {
+            id: feed.id.clone(),
+            query: "iTeM".into(),
+            page: radio_cli::cli::Page {
+                offset: 98,
+                limit: 7,
+                all: false,
+            },
+        },
+        &stop,
+    )
+    .unwrap();
+    assert_eq!(result["total"], 100);
+    assert_eq!(result["items"].as_array().unwrap().len(), 2);
+    assert_eq!(result["has_more"], false);
+    let result = podcast::manage(
+        &c,
+        &store,
+        Action::Episodes {
+            id: feed.id,
+            query: String::new(),
+            page: radio_cli::cli::Page {
+                offset: 100,
+                all: true,
+                ..page
+            },
+        },
+        &stop,
+    )
+    .unwrap();
+    assert_eq!(result["total"], 101);
+    assert_eq!(result["items"][0]["id"], target.id);
+    assert_eq!(result["limit"], serde_json::Value::Null);
+}
+
+#[test]
+fn subscription_search_filters_before_pagination() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = support::config(dir.path());
+    let store = Store::open(&c.data_dir.join("radio.db")).unwrap();
+    for title in ["Alpha", "Beta", "节目 Γάμμα"] {
+        let mut p = preview(&format!("https://example.test/{title}"));
+        p.feed.title = title.into();
+        store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    }
+    let result = podcast::manage(
+        &c,
+        &store,
+        Action::List {
+            query: "γάμμα".into(),
+            page: radio_cli::cli::Page {
+                offset: 0,
+                limit: 1,
+                all: false,
+            },
+        },
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(result["total"], 1);
+    assert_eq!(result["items"][0]["title"], "节目 Γάμμα");
+    assert_eq!(result["has_more"], false);
+}
+
+#[test]
 fn subscriptions_merge_without_losing_identity_progress_or_missing_episodes() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("radio.db")).unwrap();

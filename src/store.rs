@@ -23,6 +23,7 @@ impl Store {
         // The session owner has already migrated the database. A short lock
         // budget lets background writers retry and observe shutdown promptly.
         let conn = Connection::open(path)?;
+        crate::podcast::register_functions(&conn)?;
         conn.busy_timeout(std::time::Duration::from_millis(100))?;
         conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;")?;
         Ok(Self { conn })
@@ -35,6 +36,7 @@ impl Store {
 
     pub(crate) fn open_reader(path: &Path) -> Result<Self> {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        crate::podcast::register_functions(&conn)?;
         conn.busy_timeout(std::time::Duration::from_millis(100))?;
         conn.execute_batch("PRAGMA cache_size=-4096;")?;
         Ok(Self { conn })
@@ -60,6 +62,7 @@ impl Store {
 
     pub fn open(path: &Path) -> Result<Self> {
         let mut conn = Connection::open(path)?;
+        crate::podcast::register_functions(&conn)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;

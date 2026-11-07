@@ -6667,7 +6667,7 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
     assert_eq!(app.filter.offset, 0);
     assert!(matches!(
         receiver.try_recv(),
-        Ok(Command::Podcast(crate::podcast::Action::List(_)))
+        Ok(Command::Podcast(crate::podcast::Action::List { .. }))
     ));
     assert!(matches!(
         command::parse(
@@ -6691,6 +6691,28 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
         receiver.try_recv(),
         Ok(Command::Podcast(crate::podcast::Action::Add { .. }))
     ));
+}
+
+#[test]
+fn podcast_search_is_sent_with_the_requested_page() {
+    let mut app = App::default();
+    app.source = Source::Podcasts;
+    app.podcast_feed = Some("feed-id".into());
+    app.filter.query = "第101集".into();
+    app.filter.offset = 100;
+    let (sender, receiver) = command::channel(8);
+    app.flush_search(&sender);
+    assert!(matches!(receiver.try_recv(),
+        Ok(Command::Podcast(crate::podcast::Action::Episodes { id, query, page }))
+            if id == "feed-id" && query == "第101集" && page.offset == 100));
+    let data = view();
+    app.mode = Mode::Command;
+    app.editor
+        .begin("podcast episodes another --query 标题 --offset 200");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert_eq!(app.filter.query, "标题");
+    assert_eq!(app.filter.offset, 200);
+    assert_eq!(app.podcast_feed.as_deref(), Some("another"));
 }
 
 #[test]

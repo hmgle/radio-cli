@@ -540,7 +540,7 @@ pub(super) fn execute(
             use crate::podcast::{Action, DownloadAction, QueueAction};
             let browse = matches!(
                 &action,
-                Action::List(_)
+                Action::List { .. }
                     | Action::Add { .. }
                     | Action::Episodes { .. }
                     | Action::Search { .. }
@@ -556,7 +556,7 @@ pub(super) fn execute(
             if browse {
                 let periodic = matches!(
                     &action,
-                    Action::List(_)
+                    Action::List { .. }
                         | Action::Episodes { .. }
                         | Action::Downloads {
                             action: DownloadAction::List
