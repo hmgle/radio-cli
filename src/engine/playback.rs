@@ -778,6 +778,13 @@ impl PlaybackController {
         session: &mut Session,
         _recording: &mut RecordingController,
     ) {
+        // Requests and load state belong to this player, including when it
+        // retires after failure rather than an explicit stop.
+        self.loaded = false;
+        self.seek_request = None;
+        self.resume_pending = false;
+        self.resume_blocked = false;
+        session.status.seekable = false;
         session.subtitles.cancel();
         session.artwork.cancel();
         if let Some((_, _, task)) = self.player_start.take() {
@@ -820,6 +827,8 @@ impl PlaybackController {
         self.generation = self.generation.wrapping_add(1);
         self.refresh_task = None;
         self.retire_player(session, recording);
+        self.session_started = false;
+        self.confirmed = false;
         session.status.muted = false;
         session.status.playback_state = PlaybackState::Idle;
         recording.stop_recording(session, self, None)

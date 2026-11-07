@@ -415,6 +415,19 @@ fn unseekable_resume_preserves_position_and_waits_for_explicit_restart() {
     assert!(engine.status().paused());
     assert!(!engine.playback_failed());
     assert!(engine.pause().is_err());
+    engine.stop_playback().unwrap();
+    assert_eq!(
+        engine.status().playback_state,
+        radio_cli::engine::PlaybackState::Idle
+    );
+    for _ in 0..3 {
+        engine.tick().unwrap();
+        assert_eq!(
+            engine.status().playback_state,
+            radio_cli::engine::PlaybackState::Idle
+        );
+        assert!(!engine.playback_active());
+    }
     engine.shutdown().unwrap();
     assert_eq!(
         engine.store().podcast_episode(&e.id).unwrap().position_ms,
