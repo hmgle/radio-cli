@@ -97,3 +97,30 @@ radio --lang en --json-v2 info missing    # station_not_found；退出码 1
 `subtitle_failed`（`detail`），退出码均为 1。此版本不提供 CLI 转写数据流。
 
 Station 对象新增可空的 `geo_lat`、`geo_long` 经纬度字段。旧数据缺失时为 `null`；运行 `sync` 可补齐上游提供的坐标。地图仅使用完整、有效的坐标对，不推测位置。
+
+
+## 播客结果
+
+`podcast list`、`podcast episodes` 沿用分页对象。ID 为本地 UUID。
+节目包含 `id`、`url`、`title`、`author`、`description`、`image`、`website`、
+`subscribed`，可空的 `etag`、`modified`、`refreshed_at`、`error`，以及刷新用的
+`revision`、`failures`。单集包含 `id`、`feed_id`，可空的 `guid`、`published`，
+`title`、`description`、`website`、附件 `url`/`mime`，可空的 `bytes`、`duration_ms`，
+`position_ms`、可空的 `observed_duration_ms` 和 `completed`。位置和时长单位为毫秒；
+`bytes` 是源声明值。
+
+`preview` 返回未保存 ID 的 `{feed,episodes}`；`add` 返回节目对象；`discover` 返回
+URL 数组；`search` 返回 Apple 目录对象数组（可能缺少 `feedUrl`）。`refresh` 返回
+`{id,ok,error?}` 数组，部分失败在数组中呈现。`unsubscribe` 返回
+`{id,subscribed:false}`；`mark` 返回单集对象。
+
+`download` 和 `downloads` 修改命令返回下载对象，`downloads list` 返回数组。
+字段为 `episode_id`、`state`、`bytes`，可空的 `etag`/`modified`/`error`，本地 `path`、
+资源 `url` 与任务 `generation`。状态为 `queued`、`downloading`、`paused`、
+`complete`、`cancelled`、`failed`、`removed`。队列列表和修改返回有序单集数组。
+`play`、`queue play` 在播放退出后返回 v2 `data:null`。
+
+OPML `import --dry-run` 返回 `{urls:[...]}`，导入返回逐源 `{id?,ok,error?}` 数组，
+导出返回 `{exported:N}`。`speed` 返回 `{speed:N}`，`auto-next` 返回
+`{auto_next:BOOL}`，定位操作需在 TUI 会话执行。播客操作失败使用 `podcast_failed`，
+参数为 `detail`，退出码为 1；取消保留 `cancelled`。不要解析错误消息文本。

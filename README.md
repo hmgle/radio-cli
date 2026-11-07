@@ -14,6 +14,8 @@ A lightweight terminal radio for Linux and macOS. Rust manages the local catalog
 and interface, SQLite stores favorites and history, mpv plays audio, and FFmpeg
 records streams without re-encoding. No account or API key is required.
 
+- Subscribe to public podcasts, resume episodes, download audio, and manage a
+  listening queue; see the [podcast guide](docs/podcasts.md).
 - Browse a catalog from [Radio Browser](https://www.radio-browser.info/), search
   locally, filter by country, language, tag, and bitrate, and play a random match.
 - Use the keyboard-first TUI or script the CLI, with legacy `--json` and stable

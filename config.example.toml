@@ -70,3 +70,8 @@ max_segment_secs = 8 # 2–20; VAD may include a short trailing pause
 uv = "uv"
 # Optional mirror: <base>/<model-id>/<file-path>; official source is fallback.
 # model_mirror = "https://mirror.example.com/radio-models/"
+
+# Public podcast downloads and TUI refresh interval (0 disables refresh).
+[podcasts]
+# directory = "/path/to/podcasts"
+refresh_hours = 6

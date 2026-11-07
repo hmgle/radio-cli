@@ -13,6 +13,7 @@
 面向 Linux 与 macOS 的轻量终端收音机。Rust 管理本地目录和交互，SQLite 保存收藏与历史，
 mpv 负责播放，FFmpeg 以流拷贝方式录音。无需账号或 API Key。
 
+- 订阅公开播客、续听单集、下载音频和管理队列，见[播客指南](docs/podcasts.zh-CN.md)。
 - 浏览 [Radio Browser](https://www.radio-browser.info/) 目录，在本地搜索，
   按国家/地区、语言、标签和码率筛选，并随机播放匹配电台。
 - 使用键盘优先的 TUI，或用 CLI 编写脚本；支持兼容旧格式的 `--json` 和稳定的

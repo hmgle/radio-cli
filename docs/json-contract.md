@@ -109,3 +109,35 @@ all exit 1. There is no CLI transcription
 stream in this version.
 
 Station objects include nullable `geo_lat` and `geo_long` coordinates. Older records default to `null`; run `sync` to populate coordinates provided by the directory. The map uses complete, valid coordinate pairs without inferring locations.
+
+
+## Podcast results
+
+`podcast list` and `podcast episodes` return the existing page object. IDs are
+local UUID strings. Feed fields include `id`, `url`, `title`, `author`,
+`description`, `image`, `website`, `subscribed`, nullable `etag`, `modified`,
+`refreshed_at`, `error`, and refresh bookkeeping `revision`/`failures`.
+Episode fields include `id`, `feed_id`, nullable `guid`/`published`, `title`,
+`description`, `website`, enclosure `url`/`mime`, nullable `bytes`/`duration_ms`,
+`position_ms`, nullable `observed_duration_ms`, and `completed`.
+All positions and durations are milliseconds; `bytes` is a feed hint.
+
+`podcast preview` returns `{feed,episodes}` without saved IDs; `add` returns a
+feed. `discover` returns a URL array; `search` returns Apple directory objects
+(including results without `feedUrl`). `refresh` returns an array of
+`{id,ok,error?}` outcomes; partial failures remain visible in that array.
+`unsubscribe` returns `{id,subscribed:false}`; `mark` returns an episode.
+
+`download` and mutating `downloads` commands return a download object;
+`downloads list` returns an array. Fields are `episode_id`, `state`, `bytes`,
+nullable `etag`/`modified`/`error`, local `path`, resource `url`, and task
+`generation`. States are `queued`, `downloading`, `paused`, `complete`,
+`cancelled`, `failed`, and `removed`. Queue list and mutation commands return
+an ordered episode array. `play` and `queue play` return v2 `data:null` after
+playback exits.
+
+OPML `import --dry-run` returns `{urls:[...]}`; import returns per-source
+`{id?,ok,error?}` results; export returns `{exported:N}`. `speed` returns
+`{speed:N}` and `auto-next` returns `{auto_next:BOOL}`. Seeking requires a TUI
+session. Podcast operation failures use `podcast_failed` with a `detail`
+parameter (exit 1); cancellation retains `cancelled`. Do not parse error text.

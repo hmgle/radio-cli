@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add public RSS/Atom podcast subscriptions, Apple directory search and feed
+  discovery, episode progress and seeking, offline downloads with validated
+  resume, an explicit listening queue, OPML exchange, and playback speed.
+  Expose podcast commands in the CLI and TUI with English and Chinese messages.
+  Keep finite episode completion separate from live radio reconnection.
+
 ## 0.11.1 — 2026-11-06
 
 - Accept Hong Kong and Macao short-name prefixes (`香港`, `澳门`, `香`, `澳`)
