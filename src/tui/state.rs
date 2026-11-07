@@ -1896,6 +1896,9 @@ impl App {
                 return;
             }
             if key.code == KeyCode::Enter && self.focus == Focus::List {
+                if !self.list_ready(view) {
+                    return;
+                }
                 if let Some(item) = self
                     .podcast_items(view)
                     .get(self.list.selected().unwrap_or(0))

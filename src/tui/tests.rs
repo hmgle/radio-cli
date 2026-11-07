@@ -6852,6 +6852,69 @@ fn podcast_keyboard_and_wheel_navigation_do_not_depend_on_radio_pages() {
 }
 
 #[test]
+fn podcast_enter_waits_for_the_requested_page() {
+    for mismatch in ["query", "feed", "offset", "source"] {
+        let mut data = view();
+        data.podcast_items = vec![super::podcast::Item {
+            id: "episode-id".into(),
+            title: "Old result".into(),
+            kind: "episode".into(),
+            ..Default::default()
+        }]
+        .into();
+        let mut app = App::default();
+        app.source = Source::Podcasts;
+        app.focus = Focus::List;
+        app.podcast_feed = Some("feed-id".into());
+        data.podcast_page = Some(super::podcast::browse(
+            app.source,
+            &app.podcast_feed,
+            "",
+            0,
+            app.filter.limit,
+        ));
+        match mismatch {
+            "query" => {
+                let (sender, receiver) = command::channel(8);
+                app.key(key(KeyCode::Char('/')), &data, &sender);
+                for c in "new query".chars() {
+                    app.key(key(KeyCode::Char(c)), &data, &sender);
+                }
+                app.key(key(KeyCode::Enter), &data, &sender);
+                app.flush_search(&sender);
+                assert!(matches!(receiver.try_recv(), Ok(Command::Podcast(
+                    crate::podcast::Action::Episodes { query, .. }
+                )) if query == "new query"));
+            }
+            "feed" => app.podcast_feed = Some("other-feed".into()),
+            "offset" => app.filter.offset = 100,
+            "source" => app.source = Source::PodcastDownloads,
+            _ => unreachable!(),
+        }
+        data.podcast_browse = true;
+        let (sender, receiver) = command::channel(8);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(receiver.try_recv().is_err(), "{mismatch}");
+        data.podcast_page = Some(super::podcast::browse(
+            app.source,
+            &app.podcast_feed,
+            &app.filter.query,
+            app.filter.offset,
+            app.filter.limit,
+        ));
+        Arc::make_mut(&mut data.podcast_items)[0].title = "new query result".into();
+        data.podcast_browse = false;
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(
+            matches!(receiver.try_recv(), Ok(Command::Podcast(
+            crate::podcast::Action::Play { id, .. }
+        )) if id == "episode-id"),
+            "{mismatch}"
+        );
+    }
+}
+
+#[test]
 fn podcast_search_is_sent_with_the_requested_page() {
     let mut app = App::default();
     app.source = Source::Podcasts;
