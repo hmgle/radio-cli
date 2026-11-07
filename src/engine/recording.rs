@@ -48,7 +48,10 @@ impl RecordingController {
         duration: Option<Duration>,
         dir: Option<&std::path::Path>,
     ) -> Result<()> {
-        if playback.source_kind == super::playback::SourceKind::Local {
+        if matches!(
+            playback.source_kind,
+            super::playback::SourceKind::Local | super::playback::SourceKind::Episode
+        ) {
             bail!(DomainError::new(ErrorCode::LocalRecording));
         }
         if playback.source_kind == super::playback::SourceKind::Ephemeral {

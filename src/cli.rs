@@ -166,6 +166,10 @@ fn list_stations(store: &Store, mut filter: Filter, page: &Page, json: bool) -> 
 
 #[derive(Subcommand)]
 pub enum Action {
+    Podcast {
+        #[command(subcommand)]
+        action: crate::podcast::Action,
+    },
     /// Manage optional local speech recognition (no automatic downloads).
     Subtitles {
         #[command(subcommand)]
@@ -413,6 +417,46 @@ fn run_inner(mut cli: Cli) -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, stop.clone())?;
     let mut store = Store::open(&config.data_dir.join("radio.db"))?;
     match action {
+        Action::Podcast { action } => match action {
+            crate::podcast::Action::Play {
+                id,
+                from_start,
+                speed,
+            } => {
+                let mut engine = Engine::new(config, stop.clone())?;
+                engine.play_episode(&id, from_start, speed)?;
+                playback_loop(&mut engine, &stop)?;
+            }
+            crate::podcast::Action::Queue {
+                action: crate::podcast::QueueAction::Play { auto_next },
+            } => {
+                let mut engine = Engine::new(config, stop.clone())?;
+                engine.play_podcast_queue(auto_next)?;
+                playback_loop(&mut engine, &stop)?;
+            }
+            action => {
+                let _lock = if matches!(
+                    &action,
+                    crate::podcast::Action::Download { .. }
+                        | crate::podcast::Action::Downloads {
+                            action: crate::podcast::DownloadAction::Resume { .. }
+                                | crate::podcast::DownloadAction::Remove { .. }
+                        }
+                        | crate::podcast::Action::Mark { .. }
+                ) {
+                    Some(crate::process::MediaLock::acquire(&config.runtime_dir)?)
+                } else {
+                    None
+                };
+                let mut value = crate::podcast::manage(&config, &store, action, &stop)?;
+                if cli.json {
+                    emit(&value)?;
+                } else {
+                    crate::podcast::sanitize_output(&mut value);
+                    println!("{}", serde_json::to_string_pretty(&value)?);
+                }
+            }
+        },
         Action::Completions { .. } | Action::Man => unreachable!(),
         Action::Countries(ref args) | Action::Languages(ref args) | Action::Tags(ref args) => {
             let kind = match action {

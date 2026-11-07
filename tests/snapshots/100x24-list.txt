@@ -9,13 +9,13 @@
 │  Recent plays  │┃                                              ┃│                                │
 │  Recordings    │┃                                              ┃│Catalog                         │
 │  Explore       │┃                                              ┃│Country:                        │
-│                │┃                                              ┃│  France (FR)                   │
-│j/k select      │┃                                              ┃│Language:                       │
-│Enter open      │┃                                              ┃│  french                        │
-│[ / ] categories│┃                                              ┃│State/province/area:            │
-│                │┃                                              ┃│  Unknown                       │
-│                │┃                                              ┃│Bitrate:                        │
-│                │┃                                              ┃│  96 kbps (catalog)             │
+│  Podcasts      │┃                                              ┃│  France (FR)                   │
+│  Podcast downlo│┃                                              ┃│Language:                       │
+│  Podcast queue │┃                                              ┃│  french                        │
+│                │┃                                              ┃│State/province/area:            │
+│j/k select      │┃                                              ┃│  Unknown                       │
+│Enter open      │┃                                              ┃│Bitrate:                        │
+│[ / ] categories│┃                                              ┃│  96 kbps (catalog)             │
 │                │┃                                              ┃│Codec:                          │
 ╰────────────────╯┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰────────────────────────────────╯
 5 Catalog ready · Playing                                                                           

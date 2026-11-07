@@ -8,6 +8,7 @@ pub mod geo;
 pub mod messages;
 pub mod model;
 pub mod player;
+pub mod podcast;
 pub mod process;
 pub mod recorder;
 mod redact;

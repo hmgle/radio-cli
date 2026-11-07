@@ -26,6 +26,9 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Status {
+    pub episode: Option<crate::podcast::Episode>,
+    pub seekable: bool,
+    pub speed: f64,
     pub station: Option<Station>,
     pub title: String,
     pub message: String,
@@ -40,7 +43,16 @@ pub struct Status {
 
 impl Status {
     pub(crate) fn control_eq(&self, other: &Self) -> bool {
-        self.station == other.station
+        self.episode
+            .as_ref()
+            .map(|e| (&e.id, e.completed, e.observed_duration_ms))
+            == other
+                .episode
+                .as_ref()
+                .map(|e| (&e.id, e.completed, e.observed_duration_ms))
+            && self.seekable == other.seekable
+            && self.speed == other.speed
+            && self.station == other.station
             && self.title == other.title
             && self.message == other.message
             && self.playback_state == other.playback_state
@@ -51,7 +63,10 @@ impl Status {
             && self.source_url == other.source_url
     }
     pub(crate) fn ui_eq(&self, other: &Self) -> bool {
-        self.control_eq(other) && self.recording_ms / 1000 == other.recording_ms / 1000
+        self.control_eq(other)
+            && self.recording_ms / 1000 == other.recording_ms / 1000
+            && self.episode.as_ref().map(|e| e.position_ms / 1000)
+                == other.episode.as_ref().map(|e| e.position_ms / 1000)
     }
     pub fn playing(&self) -> bool {
         matches!(
@@ -71,6 +86,7 @@ impl Status {
 }
 
 pub struct Engine {
+    podcast_runtime: crate::podcast::Runtime,
     session: Session,
     playback: PlaybackController,
     recording: RecordingController,
@@ -98,15 +114,24 @@ impl Session {
         if let Some(writer) = &self.persistence {
             writer.preference(key, value)
         } else {
-            self.store.set_meta(key, value)
+            if let Some(id) = key.strip_prefix("podcast_progress:") {
+                let (pos, duration, done) = serde_json::from_str(value)?;
+                self.store.podcast_progress(id, pos, duration, done)
+            } else if let Some(id) = key.strip_prefix("podcast_played:") {
+                self.store.podcast_played(id)
+            } else {
+                self.store.set_meta(key, value)
+            }
         }
     }
 
     fn remember_play(&self, uuid: &str) -> Result<()> {
         if let Some(writer) = &self.persistence {
-            writer.played(uuid)
+            writer.played(uuid)?;
+            writer.preference("pref_last_media", "station")
         } else {
             self.store.played(uuid)?;
+            self.store.set_meta("pref_last_media", "station")?;
             self.store.set_meta("pref_last_station", uuid)
         }
     }
@@ -235,6 +260,9 @@ impl Engine {
         let recovery_warnings = recorder::recover(&store)?;
         let directory = Directory::new(&config, stop.clone())?;
         let status = Status {
+            episode: None,
+            seekable: false,
+            speed: 1.,
             station: None,
             title: String::new(),
             message: if recovery_warnings.is_empty() {
@@ -251,6 +279,7 @@ impl Engine {
             source_url: String::new(),
         };
         Ok(Self {
+            podcast_runtime: Default::default(),
             session: Session {
                 persistence: None,
                 subtitles: crate::speech::Controller::default(),
@@ -267,6 +296,15 @@ impl Engine {
                 playback_failed: false,
             },
             playback: PlaybackController {
+                episode: None,
+                progress: Default::default(),
+                seek_request: None,
+                loaded: false,
+                resume_pending: false,
+                resume_blocked: false,
+                last_save: Instant::now(),
+                queue_mode: false,
+                auto_next: false,
                 generation: 0,
                 refresh_task: None,
                 click_task: None,
@@ -298,6 +336,46 @@ impl Engine {
         })
     }
 
+    pub fn play_episode(&mut self, id: &str, from_start: bool, speed: Option<f64>) -> Result<()> {
+        self.playback.play_episode(
+            &mut self.session,
+            &mut self.recording,
+            id,
+            from_start,
+            speed,
+        )
+    }
+    pub fn play_podcast_queue(&mut self, auto_next: bool) -> Result<()> {
+        let id = self
+            .store()
+            .podcast_queue()?
+            .first()
+            .map(|e| e.id.clone())
+            .context(crate::t!("podcast_empty_queue"))?;
+        self.play_episode(&id, false, None)?;
+        self.playback.queue_mode = true;
+        self.playback.auto_next = auto_next;
+        Ok(())
+    }
+    pub fn seek_episode(&mut self, position: u64) -> Result<()> {
+        self.playback.seek_episode(&mut self.session, position)
+    }
+    pub fn podcast_speed(&mut self, rate: f64) -> Result<()> {
+        crate::podcast::valid_speed(rate)?;
+        if let Some(p) = self.playback.player.as_mut()
+            && self.playback.episode.is_some()
+        {
+            p.request(serde_json::json!(["set_property", "speed", rate]))?;
+        }
+        self.session.status.speed = rate;
+        self.session
+            .save_preference("podcast_speed", &rate.to_string())
+    }
+    pub fn podcast_auto_next(&mut self, on: bool) -> Result<()> {
+        self.playback.auto_next = on;
+        self.session
+            .save_preference("podcast_auto_next", if on { "on" } else { "off" })
+    }
     pub fn play(&mut self, uuid: &str) -> Result<()> {
         let result = self
             .playback
@@ -345,7 +423,75 @@ impl Engine {
         result
     }
 
+    pub fn podcast_action(&mut self, action: crate::podcast::Action) -> Result<()> {
+        use crate::podcast::{Action, DownloadAction, QueueAction};
+        match action {
+            Action::Play {
+                id,
+                from_start,
+                speed,
+            } => self.play_episode(&id, from_start, speed),
+            Action::Queue {
+                action: QueueAction::Play { auto_next },
+            } => self.play_podcast_queue(
+                auto_next || self.store().meta("podcast_auto_next")?.as_deref() == Some("on"),
+            ),
+            Action::Seek { time } => self.seek_episode(crate::podcast::parse_time(&time)?),
+            Action::Speed { rate } => self.podcast_speed(rate),
+            Action::Mark { id, state } => {
+                let e = self.session.store.podcast_episode(&id)?;
+                if self.playback.episode.as_ref().is_some_and(|e| e.id == id) {
+                    self.stop_playback()?;
+                    self.playback.episode = None;
+                }
+                self.playback.progress.remove(&id);
+                self.session.save_preference(
+                    &format!("podcast_progress:{id}"),
+                    &serde_json::to_string(&(
+                        if state == "played" {
+                            e.observed_duration_ms.unwrap_or(e.position_ms)
+                        } else {
+                            0
+                        },
+                        e.observed_duration_ms,
+                        state == "played",
+                    ))?,
+                )
+            }
+            Action::AutoNext { state } => self.podcast_auto_next(state == "on"),
+            Action::Downloads {
+                action: DownloadAction::Remove { ref id },
+            } if self.podcast_runtime.download_active(id)
+                || self
+                    .session
+                    .status
+                    .episode
+                    .as_ref()
+                    .is_some_and(|e| &e.id == id) =>
+            {
+                Err(crate::podcast::error(crate::t!("podcast_download_busy")))
+            }
+            action => self.podcast_runtime.action(
+                &self.session.config,
+                action,
+                self.session._lock.clone(),
+            ),
+        }
+    }
+    pub fn podcast_tasks(&self) -> (usize, bool) {
+        self.podcast_runtime.tasks()
+    }
+    pub fn poll_podcast(&mut self) -> Option<Result<serde_json::Value>> {
+        self.podcast_runtime.poll()
+    }
+    pub fn cancel_podcast(&mut self) {
+        self.podcast_runtime.cancel();
+    }
     pub fn tick(&mut self) -> Result<()> {
+        if self.session.background_media {
+            self.podcast_runtime
+                .tick(&self.session.config, self.session._lock.clone())?;
+        }
         self.poll_background()?;
         self.playback.tick(&mut self.session, &mut self.recording)?;
         self.recording
@@ -576,6 +722,7 @@ impl Engine {
     }
 
     fn shutdown_with_budget(&mut self, budget: Duration) -> Result<()> {
+        self.podcast_runtime = Default::default();
         let mut failure = self.stop_playback().err();
         self.session.subtitles.enabled(false);
         self.playback.click_task = None;

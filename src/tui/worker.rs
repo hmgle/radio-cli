@@ -52,6 +52,11 @@ pub(super) enum PageStatus<'a> {
 
 #[derive(Clone)]
 pub(super) struct View {
+    pub podcast_items: Arc<Vec<super::podcast::Item>>,
+    pub podcast_total: usize,
+    pub podcast_browse: bool,
+    pub podcast_task: String,
+    podcast_poll: Option<(crate::podcast::Action, Instant)>,
     pub subtitles: crate::speech::Snapshot,
     pub artwork_station: Option<String>,
     pub track_artwork: Option<crate::engine::artwork::TrackArtwork>,
@@ -132,6 +137,11 @@ impl View {
             page_retry_attempt: 0,
             page_failure: None,
             immediate_revision: 1,
+            podcast_items: Arc::new(vec![]),
+            podcast_total: 0,
+            podcast_browse: false,
+            podcast_task: String::new(),
+            podcast_poll: None,
             recordings_revision: 0,
             logs_revision: 0,
             operation_error_id: 0,
@@ -526,6 +536,51 @@ pub(super) fn execute(
     view: &Arc<Mutex<View>>,
 ) -> Result<()> {
     match command {
+        Command::Podcast(action) => {
+            use crate::podcast::{Action, DownloadAction, QueueAction};
+            let browse = matches!(
+                &action,
+                Action::List(_)
+                    | Action::Add { .. }
+                    | Action::Episodes { .. }
+                    | Action::Search { .. }
+                    | Action::Discover { .. }
+                    | Action::Preview { .. }
+                    | Action::Downloads {
+                        action: DownloadAction::List
+                    }
+                    | Action::Queue {
+                        action: QueueAction::List
+                    }
+            );
+            if browse {
+                let periodic = matches!(
+                    &action,
+                    Action::List(_)
+                        | Action::Episodes { .. }
+                        | Action::Downloads {
+                            action: DownloadAction::List
+                        }
+                        | Action::Queue {
+                            action: QueueAction::List
+                        }
+                );
+                view.lock().unwrap().podcast_poll =
+                    periodic.then(|| (action.clone(), Instant::now()));
+                let source = match &action {
+                    Action::Downloads { .. } => "podcast_downloads",
+                    Action::Queue { .. } => "podcast_queue",
+                    _ => "podcasts",
+                };
+                engine.save_preference("pref_source", source)?;
+                let mut data = view.lock().unwrap();
+                data.podcast_browse = true;
+                data.podcast_items = Arc::new(vec![]);
+                data.revision += 1;
+                engine.cancel_podcast();
+            }
+            engine.podcast_action(action)?;
+        }
         Command::Subtitles(action) => match action.as_str() {
             "on" => engine.set_subtitles(true),
             "off" => engine.set_subtitles(false),
@@ -589,6 +644,7 @@ pub(super) fn execute(
             }
         }
         Command::Search(value) => {
+            view.lock().unwrap().podcast_poll = None;
             let source = if value.geo.is_some() {
                 super::state::Source::Explore
             } else if value.history {
@@ -688,6 +744,7 @@ pub(super) fn execute(
             data.log(crate::t!("catalog_sync_started"));
         }
         Command::Cancel => {
+            engine.cancel_podcast();
             let Some(job) = job else {
                 bail!(crate::t!("catalog_task_missing"));
             };
@@ -697,6 +754,7 @@ pub(super) fn execute(
             data.log(crate::t!("catalog_task_cancel_requested"));
         }
         Command::Recordings(value) => {
+            view.lock().unwrap().podcast_poll = None;
             if let Err(error) = engine.save_preference("pref_source", "recordings") {
                 view.lock().unwrap().fail_operation(&format!("{error:#}"));
             }
@@ -828,6 +886,46 @@ pub(super) fn run(
                 drop(active);
                 request_refresh(&view);
             }
+            let repeat = {
+                let mut data = view.lock().unwrap();
+                if !data.podcast_browse {
+                    data.podcast_poll.as_mut().and_then(|(a, at)| {
+                        if at.elapsed() >= Duration::from_secs(3) {
+                            *at = Instant::now();
+                            Some(a.clone())
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                }
+            };
+            if let Some(action) = repeat
+                && engine.podcast_action(action).is_ok()
+            {
+                view.lock().unwrap().podcast_browse = true;
+            }
+            if let Some(result) = engine.poll_podcast() {
+                let mut data = view.lock().unwrap();
+                match result {
+                    Ok(value) => {
+                        if data.podcast_browse {
+                            data.podcast_items = Arc::new(super::podcast::items(&value));
+                            data.podcast_total = value["total"]
+                                .as_u64()
+                                .map_or(data.podcast_items.len(), |v| v as usize);
+                            data.podcast_browse = false;
+                        }
+                        data.log(crate::t!("podcast_operation_done"));
+                        data.revision += 1;
+                    }
+                    Err(e) => {
+                        data.podcast_browse = false;
+                        data.fail_operation(&e.to_string());
+                    }
+                }
+            }
             if let Some(result) = engine.poll_diagnostics() {
                 let mut data = view.lock().unwrap();
                 match result {
@@ -844,6 +942,19 @@ pub(super) fn run(
                     Err(error) => {
                         data.log(&crate::t!("diagnostics_failed", "detail" => format!("{error:#}")))
                     }
+                }
+            }
+            {
+                let (downloads, network) = engine.podcast_tasks();
+                let label = if downloads == 0 && !network {
+                    String::new()
+                } else {
+                    crate::t!("podcast_tasks","downloads"=>downloads,"network"=>network)
+                };
+                let mut data = view.lock().unwrap();
+                if data.podcast_task != label {
+                    data.podcast_task = label;
+                    data.revision += 1;
                 }
             }
             engine.request_artwork(view.lock().unwrap().artwork_station.clone());

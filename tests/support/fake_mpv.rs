@@ -21,11 +21,28 @@ fn main() {
     let (mut stream, _) = listener.accept().unwrap();
     let input = BufReader::new(stream.try_clone().unwrap());
     let mut volume = args.iter().find_map(|s| s.strip_prefix("--volume=")).unwrap_or("80").parse::<i32>().unwrap();
-    let mut paused = false;
+    let episode=args.iter().any(|s|s=="--pause=yes");
+    let mut episode_eof=false;
+    let mut paused = episode;
     for line in input.lines() {
         let Ok(line) = line else { break; };
         writeln!(log,"{line}").unwrap(); log.flush().unwrap();
         if line.contains("\"quit\"") { break; }
+        if episode {
+            let id=line.split("\"request_id\":").nth(1).and_then(|v|v.split('}').next()).and_then(|v|v.parse::<u64>().ok());
+            if let Some(id)=id {let _=writeln!(stream,"{{\"request_id\":{id},\"error\":\"success\"}}");}
+            if line.contains("\"loadfile\"") {
+                episode_eof=line.contains("/episode-eof");
+                let seekable=!line.contains("/noseek");
+                let _=writeln!(stream,"{{\"event\":\"file-loaded\"}}\n{{\"event\":\"property-change\",\"name\":\"seekable\",\"data\":{seekable}}}");
+                continue;
+            }
+            if line.contains("\"set_property\",\"pause\",false") {
+                let _=writeln!(stream,"{{\"event\":\"playback-restart\"}}");
+                if episode_eof {let _=writeln!(stream,"{{\"event\":\"end-file\",\"reason\":\"eof\"}}");}
+                continue;
+            }
+        }
         let event = if line.contains("\"loadfile\"") {
             if args.iter().any(|s| s == "--audio-device=test/fail") {
                 writeln!(stream, "{{\"event\":\"end-file\",\"reason\":\"error\",\"file_error\":\"audio output initialization failed\"}}").unwrap();

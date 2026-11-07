@@ -26,6 +26,11 @@ pub(crate) mod asiafm;
 #[derive(Debug)]
 pub enum Event {
     Playing,
+    Loaded,
+    Position(Option<u64>),
+    Duration(Option<u64>),
+    Seekable(bool),
+    Reply(u64, bool),
     Title(String),
     End(String),
     Failed(DomainError),
@@ -39,6 +44,7 @@ pub struct Player {
     stream: UnixStream,
     socket: PathBuf,
     buffer: Vec<u8>,
+    request: u64,
     audio_device: Option<String>,
     asiafm_metadata_patch: bool,
 }
@@ -386,6 +392,7 @@ impl Player {
             url,
             stop,
             asiafm::enabled(&config.settings, stationuuid, url),
+            false,
         )
     }
 
@@ -397,7 +404,19 @@ impl Player {
         let path = fs::canonicalize(path)?;
         let url = reqwest::Url::from_file_path(path)
             .map_err(|_| DomainError::new(ErrorCode::InvalidUrl))?;
-        Self::start_input(config, url.as_str(), stop, false)
+        Self::start_input(config, url.as_str(), stop, false, false)
+    }
+
+    pub fn start_episode(config: &Config, input: &str, stop: &Arc<AtomicBool>) -> Result<Self> {
+        let input = if input.starts_with('/') {
+            reqwest::Url::from_file_path(fs::canonicalize(input)?)
+                .map_err(|_| DomainError::new(ErrorCode::InvalidUrl))?
+                .to_string()
+        } else {
+            validate_url(input)?;
+            input.to_owned()
+        };
+        Self::start_input(config, &input, stop, false, true)
     }
 
     fn start_input(
@@ -405,6 +424,7 @@ impl Player {
         url: &str,
         stop: &Arc<AtomicBool>,
         asiafm_metadata_patch: bool,
+        paused: bool,
     ) -> Result<Self> {
         let socket = ipc_socket_path(&config.runtime_dir);
         if socket.as_os_str().len() > SOCKET_PATH_LIMIT {
@@ -415,7 +435,10 @@ impl Player {
         if config.settings.normalize_loudness && !supports_normalization(config, stop)? {
             bail!(DomainError::new(ErrorCode::NormalizationUnavailable));
         }
-        let command = playback_command(config, &socket);
+        let mut command = playback_command(config, &socket);
+        if paused {
+            command.arg("--pause=yes");
+        }
         let mut child = crate::process::spawn_owned(command)
             .context(DomainError::new(ErrorCode::MissingDependency).with("program", "mpv"))?;
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -441,10 +464,19 @@ impl Player {
             stream,
             socket,
             buffer: vec![],
+            request: 0,
             audio_device: config.settings.audio_device.clone(),
             asiafm_metadata_patch,
         };
-        for (id, property) in [(1, "metadata"), (2, "pause"), (3, "volume"), (4, "mute")] {
+        for (id, property) in [
+            (1, "metadata"),
+            (2, "pause"),
+            (3, "volume"),
+            (4, "mute"),
+            (5, "time-pos"),
+            (6, "duration"),
+            (7, "seekable"),
+        ] {
             player.command(json!(["observe_property", id, property]))?;
         }
         player.command(json!(["loadfile", url, "replace"]))?;
@@ -458,6 +490,13 @@ impl Player {
         Ok(())
     }
 
+    pub fn request(&mut self, command: Value) -> Result<u64> {
+        self.request += 1;
+        let mut bytes = serde_json::to_vec(&json!({"command":command,"request_id":self.request}))?;
+        bytes.push(b'\n');
+        self.stream.write_all(&bytes)?;
+        Ok(self.request)
+    }
     pub fn toggle_pause(&mut self) -> Result<()> {
         self.command(json!(["cycle", "pause"]))
     }
@@ -501,7 +540,11 @@ impl Player {
             let Ok(value) = parse_ipc_message(&line) else {
                 continue;
             };
+            if let Some(id) = value["request_id"].as_u64() {
+                out.push(Event::Reply(id, value["error"].as_str() == Some("success")));
+            }
             match value["event"].as_str().unwrap_or("") {
+                "file-loaded" => out.push(Event::Loaded),
                 "playback-restart" => out.push(Event::Playing),
                 "end-file" => {
                     if value["file_error"]
@@ -532,6 +575,21 @@ impl Player {
                             title
                         };
                         out.push(Event::Title(title));
+                    }
+                    "time-pos" => out.push(Event::Position(
+                        value["data"]
+                            .as_f64()
+                            .filter(|v| v.is_finite() && *v >= 0.)
+                            .map(|v| (v * 1000.) as u64),
+                    )),
+                    "duration" => out.push(Event::Duration(
+                        value["data"]
+                            .as_f64()
+                            .filter(|v| v.is_finite() && *v > 0.)
+                            .map(|v| (v * 1000.) as u64),
+                    )),
+                    "seekable" => {
+                        out.push(Event::Seekable(value["data"].as_bool().unwrap_or(false)))
                     }
                     "pause" => out.push(Event::Paused(value["data"].as_bool().unwrap_or(false))),
                     "mute" => out.push(Event::Muted(value["data"].as_bool().unwrap_or(false))),

@@ -9,13 +9,13 @@
 │  Recent plays  ││                                                                           │┃                                                               ┃
 │  Recordings    ││                                                                           │┃Catalog                                                        ┃
 │  Explore       ││                                                                           │┃Country:             France (FR)                               ┃
-│                ││                                                                           │┃Language:            french                                    ┃
-│j/k select      ││                                                                           │┃State/province/area: Unknown                                   ┃
-│Enter open      ││                                                                           │┃Bitrate:             96 kbps (catalog)                         ┃
-│[ / ] categories││                                                                           │┃Codec:               MP3 (catalog)                             ┃
-│                ││                                                                           │┃HLS:                 No                                        ┃
-│                ││                                                                           │┃Tags:                Unknown                                   ┃
-│                ││                                                                           │┃Favorite:            No · Catalog: Active                      ┃
+│  Podcasts      ││                                                                           │┃Language:            french                                    ┃
+│  Podcast downlo││                                                                           │┃State/province/area: Unknown                                   ┃
+│  Podcast queue ││                                                                           │┃Bitrate:             96 kbps (catalog)                         ┃
+│                ││                                                                           │┃Codec:               MP3 (catalog)                             ┃
+│j/k select      ││                                                                           │┃HLS:                 No                                        ┃
+│Enter open      ││                                                                           │┃Tags:                Unknown                                   ┃
+│[ / ] categories││                                                                           │┃Favorite:            No · Catalog: Active                      ┃
 │                ││                                                                           │┃                                                               ┃
 │                ││                                                                           │┃Addresses                                                      ┃
 │                ││                                                                           │┃UUID:                00000000-0000-0000-0000-000000000000      ┃

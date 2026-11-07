@@ -220,6 +220,9 @@ mod tests {
     fn recording_header_shows_a_readable_timer_that_freezes_after_stopping() {
         use crate::engine::PlaybackState;
         let mut status = Status {
+            episode: None,
+            seekable: false,
+            speed: 1.,
             station: None,
             title: String::new(),
             message: String::new(),

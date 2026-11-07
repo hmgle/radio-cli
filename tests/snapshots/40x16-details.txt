@@ -3,7 +3,7 @@
 │Song title                            │
 ╰──────────────────────────────────────╯
 ╭ 1 Sources ───────────────────────────╮
-│>All     Saved  Recent  Files  Map    │
+│>All  Save Rec File Map  Podc Pod Podc│
 ╰──────────────────────────────────────╯
 ┏ ▶ [2/3] Details · 2 back · j/k scroll┓
 ┃Selected Station                      ┃

@@ -21,7 +21,9 @@ pub(super) struct CommandReceiver {
 fn priority(command: &Command) -> bool {
     matches!(
         command,
-        Command::Pause
+        Command::Podcast(
+            crate::podcast::Action::Seek { .. } | crate::podcast::Action::Speed { .. }
+        ) | Command::Pause
             | Command::Mute
             | Command::Stop
             | Command::RecordStop
@@ -100,6 +102,7 @@ impl CommandReceiver {
 
 #[derive(Clone)]
 pub(super) enum Command {
+    Podcast(crate::podcast::Action),
     Subtitles(String),
     SubtitleModel(String),
     LocatePlaying {
@@ -183,6 +186,33 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "volume",
     "record",
     "record stop",
+    "podcast list",
+    "podcast episodes",
+    "podcast add",
+    "podcast preview",
+    "podcast search",
+    "podcast discover",
+    "podcast refresh",
+    "podcast unsubscribe",
+    "podcast play",
+    "podcast mark",
+    "podcast download",
+    "podcast downloads list",
+    "podcast downloads pause",
+    "podcast downloads resume",
+    "podcast downloads cancel",
+    "podcast downloads remove",
+    "podcast queue list",
+    "podcast queue add",
+    "podcast queue remove",
+    "podcast queue move",
+    "podcast queue clear",
+    "podcast queue play",
+    "podcast import",
+    "podcast export",
+    "podcast seek",
+    "podcast speed",
+    "podcast auto-next",
     "recordings list",
     "recordings play",
     "recordings remove",
@@ -345,6 +375,10 @@ pub(super) fn parse(
         bail!(crate::t!("command_process_options"));
     }
     let parsed = match cli.command {
+        Some(Action::Podcast {
+            action: crate::podcast::Action::Add { url },
+        }) => Parsed::Worker(Command::Podcast(crate::podcast::Action::Preview { url })),
+        Some(Action::Podcast { action }) => Parsed::Worker(Command::Podcast(action)),
         Some(Action::Sync { accept_shrink }) => Parsed::Worker(Command::Sync(accept_shrink)),
         Some(Action::Search(search)) => Parsed::Search(search.filter()),
         Some(Action::Play { uuid }) => Parsed::Worker(Command::Play(uuid)),

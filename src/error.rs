@@ -14,6 +14,7 @@ macro_rules! codes {
 }
 
 codes! {
+    PodcastFailed => ("podcast_failed", 1),
     SubtitleSettings => ("subtitle_settings", 1),
     SubtitleModel => ("subtitle_model", 1),
     SubtitleIntegrity => ("subtitle_integrity", 1),

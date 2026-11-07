@@ -10,6 +10,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub podcasts: PodcastSettings,
     pub subtitles: SubtitleSettings,
     pub artwork: ArtworkMode,
     pub keybindings: Keybindings,
@@ -37,6 +38,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            podcasts: PodcastSettings::default(),
             subtitles: SubtitleSettings::default(),
             artwork: ArtworkMode::Off,
             keybindings: Keybindings::default(),
@@ -342,6 +344,9 @@ impl Config {
             .clone()
             .unwrap_or_else(|| data_dir.join("recordings"));
         let recording_dir = std::path::absolute(recording_dir)?;
+        if let Some(directory) = settings.podcasts.directory.as_mut() {
+            *directory = std::path::absolute(&*directory)?;
+        }
         let runtime_dir = data_dir.join("run");
         Ok(Self {
             settings,
@@ -556,5 +561,20 @@ mod tests {
                 .recording_min_free_mb,
             1
         );
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PodcastSettings {
+    pub directory: Option<PathBuf>,
+    pub refresh_hours: u16,
+}
+impl Default for PodcastSettings {
+    fn default() -> Self {
+        Self {
+            directory: None,
+            refresh_hours: 6,
+        }
     }
 }

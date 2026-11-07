@@ -263,7 +263,7 @@ fn station_row(
 fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     let mut painted = None;
     let area = frame.area();
-    app.source_rows = [Rect::default(); 5];
+    app.source_rows = [Rect::default(); 8];
     app.filter_summary = Rect::default();
     app.update_size(area.width, area.height);
     if app.too_small {
@@ -408,6 +408,19 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     } else {
         crate::t!("player_idle_panel", "volume" => volume, "recording" => recording)
     };
+    let player_text = if let Some(e) = &view.status.episode {
+        format!(
+            "{player_text}\n{} / {} · {:.2}×",
+            super::display::duration(e.position_ms),
+            e.observed_duration_ms
+                .or(e.duration_ms)
+                .map(super::display::duration)
+                .unwrap_or_else(|| "?".into()),
+            view.status.speed
+        )
+    } else {
+        player_text
+    };
     let player_text = if layout.shared {
         let width = usize::from(area.width.saturating_sub(2));
         let state = format!(" · {playing}");
@@ -441,7 +454,17 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 fit(&recording, width.saturating_sub(19)).trim_end()
             )
         };
-        let title = if view.status.title.is_empty() {
+        let title = if let Some(e) = &view.status.episode {
+            format!(
+                "{} / {} · {:.2}×",
+                super::display::duration(e.position_ms),
+                e.observed_duration_ms
+                    .or(e.duration_ms)
+                    .map(super::display::duration)
+                    .unwrap_or_else(|| "?".into()),
+                view.status.speed
+            )
+        } else if view.status.title.is_empty() {
             crate::t!("player_no_title").into()
         } else {
             value(&view.status.title)
@@ -475,6 +498,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     let inner = source_rect.inner(ratatui::layout::Margin::new(1, 1));
     if source_rect.height >= 7 {
         for source in Source::ALL {
+            if source.index() as u16 >= inner.height {
+                continue;
+            }
             let rect = Rect::new(inner.x, inner.y + source.index() as u16, inner.width, 1);
             app.source_rows[source.index()] = rect;
             frame.render_widget(
@@ -491,20 +517,20 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 rect,
             );
         }
-        if inner.height > 6 {
+        if inner.height > 9 {
             let source_keys = crate::t!("sources_keys")
                 .split('\n')
                 .map(|line| shortcut_line(line, app.theme))
                 .collect::<Vec<_>>();
             frame.render_widget(
                 Paragraph::new(source_keys).style(style(app.theme, Role::Border)),
-                Rect::new(inner.x, inner.y + 6, inner.width, inner.height - 6),
+                Rect::new(inner.x, inner.y + 9, inner.width, inner.height - 9),
             );
         }
     } else {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 5); 5])
+            .constraints([Constraint::Ratio(1, 8); 8])
             .split(inner);
         for source in Source::ALL {
             let rect = columns[source.index()];
@@ -573,14 +599,19 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             "prefix" => if layout.shared { crate::t!("list_shared") } else { "2" },
             "source" => source_label,
             "count" => app.length(view),
-            "total" => if app.source == Source::Recordings {
+            "total" => if app.source.is_podcast(){view.podcast_total} else if app.source == Source::Recordings {
                 view.recordings_total
             } else {
                 view.total
             },
             "page" => app.filter.offset / app.filter.limit.max(1) + 1
         );
-        let items: Vec<ListItem> = if app.source == Source::Recordings {
+        let items: Vec<ListItem> = if app.source.is_podcast() {
+            app.podcast_items(view)
+                .iter()
+                .map(|i| ListItem::new(crate::clean_text(&i.title)))
+                .collect()
+        } else if app.source == Source::Recordings {
             view.recordings_for(&app.filter)
                 .iter()
                 .map(|r| {
@@ -630,7 +661,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         if items.is_empty() {
             frame.render_widget(
                 Paragraph::new(
-                    match view.page_status(&app.filter) {
+                    match if app.source.is_podcast(){if view.podcast_browse {PageStatus::Loading}else{PageStatus::Ready}}else{view.page_status(&app.filter)} {
                         PageStatus::Failed(error) => crate::t!("page_failed", "detail" => fit(&super::display::diagnostic(error), usize::from(rect.width.saturating_sub(2))).trim_end()),
                         PageStatus::Loading => crate::t!("page_loading").into(),
                         PageStatus::Ready => empty_hint(app).into(),
@@ -656,7 +687,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         }
     }
     if show_details {
-        let text = if app.source == Source::Recordings && !app.inspect_info {
+        let text = if app.source.is_podcast() {
+            app.podcast_items(view)
+                .get(app.list.selected().unwrap_or(0))
+                .map(|i| {
+                    format!(
+                        "{}\n{}\n{}\n{}\n{}",
+                        crate::clean_text(&i.title),
+                        crate::clean_text(&i.description),
+                        i.id,
+                        crate::clean_text(&i.url),
+                        crate::t!("podcast_hint")
+                    )
+                })
+                .unwrap_or_else(|| crate::t!("podcast_empty").into())
+        } else if app.source == Source::Recordings && !app.inspect_info {
             view.recordings_for(&app.filter).get(app.list.selected().unwrap_or(0)).map(|r| {
                 crate::t!(
                     "recording_details",
@@ -734,6 +779,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         view.catalog_note.clone()
     } else {
         format!("{} · {}", view.task, view.catalog_note)
+    };
+    let task = if view.podcast_task.is_empty() {
+        task
+    } else {
+        format!("{} · {}", task, view.podcast_task)
     };
     let rect = app.rects[Focus::Activity.index()];
     let visible = usize::from(rect.height.saturating_sub(3));
@@ -1168,6 +1218,9 @@ fn empty_hint(app: &App) -> &'static str {
         Source::Favorites => crate::t!("empty_favorites"),
         Source::History => crate::t!("empty_history"),
         Source::Explore => crate::t!("explore_empty"),
+        Source::Podcasts | Source::PodcastDownloads | Source::PodcastQueue => {
+            crate::t!("podcast_empty")
+        }
     }
 }
 
@@ -1376,6 +1429,10 @@ fn clear_popup(frame: &mut Frame, rect: Rect, theme: crate::config::Theme) {
 }
 
 pub(super) fn context_hint(source: Source, focus: Focus) -> &'static str {
+    if source.is_podcast() && focus == Focus::List {
+        return crate::t!("podcast_hint");
+    }
+
     match (source, focus) {
         (_, Focus::Sources) => crate::t!("context_sources"),
         (Source::Recordings, Focus::List) => {

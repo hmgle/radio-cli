@@ -45,7 +45,16 @@ fn parse(body: &str) -> Vec<Entry> {
 pub(super) fn sections(locale: Locale, jump_binding: &str) -> Vec<Section> {
     let section = |title: &'static str, body: &'static str| Section {
         title,
-        entries: parse(body),
+        entries: {
+            let mut entries = parse(body);
+            if title == messages::text_in(locale, "help_commands_title") {
+                entries.push(Entry::Item {
+                    keys: ":podcast COMMAND".into(),
+                    detail: messages::text_in(locale, "podcast_hint").into(),
+                });
+            }
+            entries
+        },
     };
     let mut playback = section(
         messages::text_in(locale, "help_play_title"),

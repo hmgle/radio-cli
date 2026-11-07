@@ -521,3 +521,31 @@ fn shrinking_cancels_deletion_and_blocks_invisible_commands() {
     );
     assert_eq!(store.count().unwrap(), 1);
 }
+
+#[test]
+fn podcast_preview_requires_confirmation_in_real_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::new(|_, stream| {
+        response(stream,200,"application/rss+xml",b"<rss><channel><title>Terminal podcast preview</title><item><title>Episode</title><enclosure url='https://example.test/audio.mp3' type='audio/mpeg'/></item></channel></rss>")
+    });
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    store
+        .upsert(&Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "Station".into(),
+            url: "https://example.test/live".into(),
+            custom: true,
+            active: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut tui = Tui::start(dir.path(), "http://127.0.0.1:1");
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("Sources"));
+    tui.send(&format!(":podcast add {}/rss\r", server.url));
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("Terminal podcast preview"));
+    assert!(store.podcast_feeds().unwrap().is_empty());
+    tui.send("\r");
+    tui.wait(|| store.podcast_feeds().unwrap().len() == 1);
+    tui.quit();
+}

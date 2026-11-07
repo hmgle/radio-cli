@@ -5,6 +5,7 @@ mod display;
 mod help;
 mod map;
 mod output;
+mod podcast;
 mod render;
 mod state;
 mod styles;

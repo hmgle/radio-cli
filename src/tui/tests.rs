@@ -272,6 +272,9 @@ fn view() -> View {
     selected.bitrate = 96;
     selected.codec = "MP3".into();
     let mut data = View::new(Status {
+        episode: None,
+        seekable: false,
+        speed: 1.,
         station: Some(playing),
         title: "Song title".into(),
         message: "Playing".into(),
@@ -1093,7 +1096,10 @@ fn double_click_plays_only_the_same_station_without_intervening_movement() {
 fn context_hints_match_source_and_focus_actions() {
     let data = view();
     let (sender, receiver) = command::channel(20);
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         let mut app = App::default();
         app.source = source;
         for focus in Focus::ALL {
@@ -1362,7 +1368,10 @@ fn source_preferences_are_persisted_by_the_owner_and_restored_when_enabled() {
         ..Filter::default()
     };
     let mut job = None;
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         let value = Filter {
             geo: (source == Source::Explore)
                 .then_some(crate::geo::GeoFilter::Cell(crate::geo::GeoBounds::default())),
@@ -2463,7 +2472,10 @@ fn recording_refresh_preserves_selected_identity() {
 
 #[test]
 fn refreshing_page_keeps_rows_and_selection_interactive() {
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         let (mut app, mut data) = scrollable_list(source, 40);
         let (sender, receiver) = command::channel(4);
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -2522,7 +2534,10 @@ fn refreshing_page_keeps_rows_and_selection_interactive() {
 
 #[test]
 fn navigation_during_loading_or_failure_preserves_selection_for_recovery() {
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         for phase in [
             worker::PagePhase::Loading,
             worker::PagePhase::Error("storage unavailable".into()),
@@ -2645,7 +2660,10 @@ fn source_commands_submit_only_the_requested_page() {
 
 #[test]
 fn page_down_uses_totals_and_waits_for_the_current_query() {
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         let (sender, receiver) = command::channel(16);
         let mut app = App::default();
         app.source = source;
@@ -3389,7 +3407,10 @@ fn auto_repeat_moves_and_edits_but_never_triggers_actions() {
 #[test]
 fn ctrl_line_scroll_moves_the_viewport_while_preserving_a_visible_selection() {
     let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         let (mut app, data) = scrollable_list(source, 40);
         let (sender, receiver) = command::channel(4);
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -3442,7 +3463,10 @@ fn ctrl_line_scroll_moves_the_viewport_while_preserving_a_visible_selection() {
 
 #[test]
 fn ctrl_line_scroll_moves_edge_selections_just_enough_to_keep_them_visible() {
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         for code in ['e', 'y'] {
             let (mut app, mut data) = scrollable_list(source, 40);
             let (sender, receiver) = command::channel(4);
@@ -4165,7 +4189,10 @@ fn english_panels_and_editors_use_consistent_interface_language() {
     .into();
     for (width, height) in [(40, 16), (80, 24), (160, 48)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        for source in Source::ALL {
+        for source in Source::ALL
+            .into_iter()
+            .filter(|source| !source.is_podcast())
+        {
             for focus in Focus::ALL {
                 let mut app = App::default();
                 app.source = source;
@@ -4692,7 +4719,10 @@ fn light_popups_keep_the_cleared_border_column_on_the_light_background() {
 fn viewport_alignment_survives_render_resize_and_mouse_hits() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let (sender, receiver) = command::channel(4);
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         for len in [3, 40] {
             for selected in [0, len - 1] {
                 for suffix in ['t', 'z', 'b'] {
@@ -5945,7 +5975,10 @@ fn deletion_confirmation_keeps_target_and_survives_queue_rejection() {
 #[test]
 fn page_failure_disables_stale_objects_and_retries_the_current_filter() {
     use super::worker::{PagePhase, PageState};
-    for source in Source::ALL {
+    for source in Source::ALL
+        .into_iter()
+        .filter(|source| !source.is_podcast())
+    {
         let mut data = view();
         let mut app = App::default();
         app.source = source;
@@ -6589,5 +6622,97 @@ fn explore_layout_snapshots_show_map_and_narrow_focus() {
             std::fs::write(&path, &rendered).unwrap();
         }
         assert_eq!(rendered, std::fs::read_to_string(path).unwrap());
+    }
+}
+
+#[test]
+fn podcast_sources_open_feeds_and_preview_before_subscribing() {
+    let mut data = view();
+    data.podcast_items = vec![super::podcast::Item {
+        id: "feed-id".into(),
+        title: "节目".into(),
+        kind: "feed".into(),
+        ..Default::default()
+    }]
+    .into();
+    let mut app = App::default();
+    app.source = Source::Podcasts;
+    app.focus = Focus::List;
+    let (sender, receiver) = command::channel(8);
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert_eq!(app.podcast_feed.as_deref(), Some("feed-id"));
+    assert!(
+        matches!(receiver.try_recv(),Ok(Command::Podcast(crate::podcast::Action::Episodes{id,..})) if id=="feed-id")
+    );
+    data.podcast_items = vec![super::podcast::Item {
+        id: "episode-id".into(),
+        title: "单集".into(),
+        kind: "episode".into(),
+        ..Default::default()
+    }]
+    .into();
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv(),Ok(Command::Podcast(crate::podcast::Action::Play{id,..})) if id=="episode-id")
+    );
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(app.podcast_feed.is_none());
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(Command::Podcast(crate::podcast::Action::List(_)))
+    ));
+    assert!(matches!(
+        command::parse(
+            "podcast add https://example.test/feed",
+            None,
+            None,
+            &Filter::default()
+        )
+        .unwrap(),
+        command::Parsed::Worker(Command::Podcast(crate::podcast::Action::Preview { .. }))
+    ));
+    data.podcast_items = vec![super::podcast::Item {
+        title: "Preview".into(),
+        url: "https://example.test/feed".into(),
+        kind: "preview".into(),
+        ..Default::default()
+    }]
+    .into();
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(Command::Podcast(crate::podcast::Action::Add { .. }))
+    ));
+}
+
+#[test]
+fn podcast_views_render_without_station_actions() {
+    {
+        let mut data = view();
+        data.podcast_items = vec![super::podcast::Item {
+            id: "episode-id".into(),
+            title: "单集 title".into(),
+            kind: "episode".into(),
+            description: "Episode details".into(),
+            ..Default::default()
+        }]
+        .into();
+        for size in [(40, 16), (80, 24), (160, 48)] {
+            for source in [
+                Source::Podcasts,
+                Source::PodcastDownloads,
+                Source::PodcastQueue,
+            ] {
+                let mut app = App::default();
+                app.source = source;
+                app.focus = Focus::List;
+                let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                assert!(text(&terminal).contains("title"));
+                let (sender, receiver) = command::channel(2);
+                app.key(key(KeyCode::Char('f')), &data, &sender);
+                assert!(receiver.try_recv().is_err());
+            }
+        }
     }
 }

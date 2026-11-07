@@ -15,7 +15,7 @@ const RECORDING_ORDER: &str =
     "CASE WHEN json_valid(json) THEN json_extract(json,'$.started_at') END DESC,id DESC";
 
 pub struct Store {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl Store {
@@ -66,10 +66,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 8 {
+        if version > 9 {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 8 {
+        if version < 9 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -99,7 +99,7 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2..=8 => {},
+                2..=9 => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             if version < 3 {
@@ -170,7 +170,10 @@ impl Store {
                     "CREATE INDEX IF NOT EXISTS recording_started ON recordings({RECORDING_ORDER});"
                 ))?;
             }
-            tx.pragma_update(None, "user_version", 8)?;
+            if version < 9 {
+                crate::podcast::migrate(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 9)?;
             tx.commit()?;
         }
         Ok(Self { conn })
@@ -306,8 +309,23 @@ impl Store {
             let threshold = tx.last_insert_rowid().saturating_sub(1000);
             tx.execute("DELETE FROM history WHERE id<=?1", [threshold])?;
             Self::write_meta(&tx, "pref_last_station", uuid)?;
+            Self::write_meta(&tx, "pref_last_media", "station")?;
         }
         for (key, value) in preferences {
+            if let Some(id) = key.strip_prefix("podcast_progress:") {
+                let (pos, duration, done): (u64, Option<u64>, bool) = serde_json::from_str(value)?;
+                tx.execute("INSERT INTO podcast_progress VALUES (?1,?2,?3,?4,?5) ON CONFLICT(episode_id) DO UPDATE SET position_ms=excluded.position_ms,duration_ms=COALESCE(excluded.duration_ms,duration_ms),completed=excluded.completed,updated_at=excluded.updated_at",params![id,pos.min(i64::MAX as u64),duration.map(|d|d.min(i64::MAX as u64)),done,chrono::Utc::now().to_rfc3339()])?;
+                continue;
+            }
+            if let Some(id) = key.strip_prefix("podcast_played:") {
+                tx.execute(
+                    "INSERT INTO podcast_history(episode_id,played_at) VALUES (?1,?2)",
+                    params![id, value],
+                )?;
+                Self::write_meta(&tx, "pref_last_episode", id)?;
+                Self::write_meta(&tx, "pref_last_media", "episode")?;
+                continue;
+            }
             Self::write_meta(&tx, key, value)?;
         }
         tx.commit()?;

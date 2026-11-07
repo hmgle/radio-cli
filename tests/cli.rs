@@ -1284,3 +1284,33 @@ fn play_and_random_progress_follow_the_cli_language() {
         }
     }
 }
+
+#[test]
+fn podcast_json_pages_errors_and_help_keep_the_existing_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = radio(dir.path())
+        .args(["--json-v2", "podcast", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["data"]["items"], serde_json::json!([]));
+    assert_eq!(value["data"]["limit"], 100);
+    let output = radio(dir.path())
+        .args(["--json-v2", "podcast", "episodes", "missing"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "podcast_failed");
+    let output = radio(dir.path())
+        .args(["podcast", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    for command in ["download", "queue", "import", "export", "refresh"] {
+        assert!(help.contains(command));
+    }
+}

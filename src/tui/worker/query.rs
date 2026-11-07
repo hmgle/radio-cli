@@ -524,6 +524,9 @@ mod tests {
 
     fn status() -> crate::engine::Status {
         crate::engine::Status {
+            episode: None,
+            seekable: false,
+            speed: 1.,
             station: None,
             title: String::new(),
             message: String::new(),
