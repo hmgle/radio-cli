@@ -144,6 +144,7 @@ struct Node {
     name: String,
     text: String,
     base: Url,
+    html: bool,
 }
 pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
     if data.len() as u64 > LIMIT {
@@ -242,6 +243,12 @@ pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
                     name,
                     text: String::new(),
                     base: node_base,
+                    // XHTML tags are consumed by the XML reader. Only HTML
+                    // needs another parsing pass after XML entity decoding.
+                    html: root != "feed"
+                        || attrs
+                            .get("type")
+                            .is_some_and(|t| matches!(t.as_str(), "html" | "text/html")),
                 });
                 if !empty {
                     continue;
@@ -286,6 +293,13 @@ fn finish(
 ) {
     let Some(n) = stack.pop() else { return };
     let text = n.text.trim();
+    let display_text = || {
+        if n.html {
+            plain(text)
+        } else {
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+    };
     let parent = stack.last().map(|n| n.name.as_str()).unwrap_or("");
     let resolved = || {
         url(text, Some(&n.base))
@@ -294,9 +308,9 @@ fn finish(
     };
     if let Some(e) = current.as_mut() {
         match n.name.as_str() {
-            "title" => e.title = plain(text),
+            "title" => e.title = display_text(),
             "guid" | "id" if !text.is_empty() => e.guid = Some(text.into()),
-            "description" | "summary" | "content" => e.description = plain(text),
+            "description" | "summary" | "content" => e.description = display_text(),
             "pubDate" | "published" | "updated" => {
                 e.published = chrono::DateTime::parse_from_rfc2822(text)
                     .or_else(|_| chrono::DateTime::parse_from_rfc3339(text))
@@ -315,10 +329,10 @@ fn finish(
         }
     } else {
         match n.name.as_str() {
-            "title" if matches!(parent, "channel" | "feed") => f.title = plain(text),
-            "author" | "managingEditor" => f.author = plain(text),
-            "name" if parent == "author" => f.author = plain(text),
-            "description" | "subtitle" => f.description = plain(text),
+            "title" if matches!(parent, "channel" | "feed") => f.title = display_text(),
+            "author" | "managingEditor" => f.author = display_text(),
+            "name" if parent == "author" => f.author = display_text(),
+            "description" | "subtitle" => f.description = display_text(),
             "link" if !text.is_empty() => f.website = resolved(),
             "url" if parent == "image" && f.image.is_empty() => f.image = resolved(),
             "logo" | "icon" => f.image = resolved(),
@@ -501,6 +515,40 @@ mod tests {
         let p=parse_xml(r#"<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://media.test/"><title>Atom</title><entry><id>x</id><title>one</title><link rel="enclosure" href="one.mp3" type="audio/mpeg"/></entry></feed>"#).unwrap();
         assert_eq!(p.episodes[0].url, "https://media.test/one.mp3");
         assert_eq!(p.episodes[0].duration_ms, None);
+    }
+    #[test]
+    fn atom_text_constructs_preserve_literal_markup() {
+        for (kind, content) in [
+            ("", "Show &lt;test&gt; &amp;lt;literal&amp;gt;"),
+            (
+                r#" type="text""#,
+                "Show &lt;test&gt; &amp;lt;literal&amp;gt;",
+            ),
+            (r#" type="text""#, "<![CDATA[Show <test> &lt;literal&gt;]]>"),
+            (
+                r#" type="html""#,
+                "&lt;b&gt;Show&lt;/b&gt; &amp;lt;test&amp;gt; &amp;amp;lt;literal&amp;amp;gt;",
+            ),
+            (
+                r#" type="xhtml""#,
+                r#"<div xmlns="http://www.w3.org/1999/xhtml"><b>Show</b> &lt;test&gt; &amp;lt;literal&amp;gt;</div>"#,
+            ),
+        ] {
+            let p = parse_xml(&format!(
+                r#"<feed xmlns="http://www.w3.org/2005/Atom">
+                <title{kind}>{content}</title><subtitle{kind}>{content}</subtitle>
+                <entry><id>one</id><title{kind}>{content}</title>
+                <summary{kind}>{content}</summary>
+                <link rel="enclosure" href="one.mp3" type="audio/mpeg"/>
+                </entry></feed>"#,
+            ))
+            .unwrap();
+            let expected = "Show <test> &lt;literal&gt;";
+            assert_eq!(p.feed.title, expected, "{kind}: {content}");
+            assert_eq!(p.feed.description, expected);
+            assert_eq!(p.episodes[0].title, expected);
+            assert_eq!(p.episodes[0].description, expected);
+        }
     }
     #[test]
     fn malformed_external_entities_and_missing_audio_are_rejected() {
