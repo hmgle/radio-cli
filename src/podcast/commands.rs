@@ -141,6 +141,9 @@ pub fn refresh(
     id: Option<&str>,
     stop: &Arc<AtomicBool>,
 ) -> Result<Value> {
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(DomainError::new(ErrorCode::Cancelled).into());
+    }
     let feeds = if let Some(id) = id {
         vec![store.podcast_feed(id)?]
     } else {
@@ -148,6 +151,9 @@ pub fn refresh(
     };
     let mut results = vec![];
     for f in feeds {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(DomainError::new(ErrorCode::Cancelled).into());
+        }
         match fetch(config, &f.url, Some(&f), stop) {
             Ok(p) => {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -157,6 +163,14 @@ pub fn refresh(
                 results.push(json!({"id":f.id,"ok":true}));
             }
             Err(e) => {
+                if e.downcast_ref::<DomainError>()
+                    .is_some_and(|e| e.code == ErrorCode::Cancelled)
+                {
+                    return Err(e);
+                }
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(DomainError::new(ErrorCode::Cancelled).into());
+                }
                 let mut f = f;
                 f.error = Some(e.to_string());
                 f.failures = f.failures.saturating_add(1);

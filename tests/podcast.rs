@@ -119,6 +119,49 @@ fn opml_roundtrip_queue_and_marks_are_independent_of_stations() {
     assert_eq!(s.count().unwrap(), 0);
 }
 #[test]
+fn cancelled_refresh_propagates_without_changing_feed_failures_or_timestamps() {
+    let stop = Arc::new(AtomicBool::new(false));
+    let cancel = stop.clone();
+    let server = support::Server::new(move |_, stream| {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        support::response(
+            stream,
+            200,
+            "application/rss+xml",
+            b"<rss><channel><title>Updated</title></channel></rss>",
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let c = support::config(dir.path());
+    let s = Store::open(&c.data_dir.join("radio.db")).unwrap();
+    let mut p = preview(&server.url);
+    p.feed.failures = 2;
+    p.feed.error = Some("previous failure".into());
+    p.feed.refreshed_at = Some("2026-01-01T00:00:00Z".into());
+    let f = s.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let error = podcast::refresh(&c, &s, None, &stop).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::Cancelled
+    );
+    assert_eq!(s.podcast_feed(&f.id).unwrap(), f);
+
+    // Cancellation also applies when no feeds would otherwise be fetched.
+    s.podcast_unsubscribe(&f.id).unwrap();
+    let error = podcast::refresh(&c, &s, None, &stop).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<radio_cli::error::DomainError>()
+            .unwrap()
+            .code,
+        radio_cli::error::ErrorCode::Cancelled
+    );
+}
+
+#[test]
 fn conditional_fetch_discovery_and_failed_refresh_keep_cached_entries() {
     let server = support::Server::new(|request, stream| {
         if request.starts_with("GET /page ") {
