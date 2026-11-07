@@ -6762,7 +6762,7 @@ fn podcast_selection_resume_restores_the_episode_page_once_without_playback() {
     app.reconcile(&data);
     assert_eq!(app.list.selected(), Some(2));
     assert_eq!(app.podcast_items(&data)[2].id, target.id);
-    app.list.select(Some(0));
+    app.key(key(KeyCode::Home), &data, &sender);
     app.reconcile(&data);
     assert_eq!(app.list.selected(), Some(0));
 
@@ -6785,6 +6785,61 @@ fn podcast_selection_resume_restores_the_episode_page_once_without_playback() {
     assert_eq!(fresh.source, Source::Stations);
     assert!(fresh.podcast_feed.is_none());
     assert_eq!(fresh.filter.offset, 0);
+}
+
+#[test]
+fn podcast_keyboard_and_wheel_navigation_do_not_depend_on_radio_pages() {
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    for source in [
+        Source::Podcasts,
+        Source::PodcastDownloads,
+        Source::PodcastQueue,
+    ] {
+        let mut data = view();
+        data.page = None;
+        assert!(!data.page_ready(&Filter::default()));
+        data.podcast_items = (0..10)
+            .map(|i| super::podcast::Item {
+                id: i.to_string(),
+                title: format!("Episode {i}"),
+                kind: "episode".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let mut app = App::default();
+        app.source = source;
+        app.focus = Focus::List;
+        app.rects[Focus::List.index()] = ratatui::layout::Rect::new(0, 0, 40, 5);
+        let (sender, _receiver) = command::channel(8);
+        app.key(key(KeyCode::Down), &data, &sender);
+        assert_eq!(app.list.selected(), Some(1), "{source:?}");
+        app.key(key(KeyCode::End), &data, &sender);
+        assert_eq!(app.list.selected(), Some(9));
+        app.key(key(KeyCode::Home), &data, &sender);
+        assert_eq!(app.list.selected(), Some(0));
+        app.mouse(
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 2,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            },
+            &data,
+            &sender,
+        );
+        assert_eq!(app.list.selected(), Some(3));
+        app.key(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &data,
+            &sender,
+        );
+        assert_eq!(app.list.offset(), 1);
+        data.podcast_items = vec![].into();
+        data.podcast_browse = true;
+        app.key(key(KeyCode::Down), &data, &sender);
+        assert_eq!(app.list.selected(), Some(3));
+    }
 }
 
 #[test]

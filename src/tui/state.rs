@@ -766,6 +766,16 @@ impl App {
             view.stations_for(&self.filter).len()
         }
     }
+    fn list_ready(&self, view: &View) -> bool {
+        if self.source.is_podcast() {
+            view.podcast_page.as_ref().is_none_or(|action| {
+                self.source == Source::Podcasts
+                    && super::podcast::page_matches(action, &self.podcast_feed, &self.filter)
+            }) && (!view.podcast_browse || !view.podcast_items.is_empty())
+        } else {
+            view.page_ready(&self.filter)
+        }
+    }
     pub fn reconcile(&mut self, view: &View) {
         if self.source.is_podcast() {
             if view.podcast_page.as_ref().is_some_and(|action| {
@@ -1152,7 +1162,7 @@ impl App {
             Focus::List => {
                 // Loading and failed queries have no actionable rows. Keep the
                 // last selection identity so recovery can restore it.
-                if !view.page_ready(&self.filter) || self.length(view) == 0 {
+                if !self.list_ready(view) || self.length(view) == 0 {
                     return;
                 }
                 let index = (self.list.selected().unwrap_or(0) as i64 + i64::from(delta))
@@ -1183,7 +1193,7 @@ impl App {
         let rect = self.rects[Focus::List.index()];
         let height = usize::from(rect.height.saturating_sub(2));
         let len = self.length(view);
-        if !view.page_ready(&self.filter) || rect.width <= 2 || height == 0 || len == 0 {
+        if !self.list_ready(view) || rect.width <= 2 || height == 0 || len == 0 {
             return;
         }
         // Allow the last row to reach the top, including on short pages.
@@ -1235,7 +1245,7 @@ impl App {
     /// Select a visible row or align the selection within the viewport.
     /// Like line scrolling, alignment may leave empty rows below the last item.
     fn viewport(&mut self, key: KeyCode, view: &View, align: bool) {
-        if self.focus != Focus::List || !view.page_ready(&self.filter) {
+        if self.focus != Focus::List || !self.list_ready(view) {
             return;
         }
         let height = usize::from(self.rects[Focus::List.index()].height.saturating_sub(2));
@@ -1271,7 +1281,7 @@ impl App {
             self.move_selection(if forward { 10 } else { -10 }, view);
             return;
         }
-        if !self.source.is_podcast() && !view.page_ready(&self.filter) {
+        if !self.list_ready(view) {
             return;
         }
         let total = if self.source.is_podcast() {
