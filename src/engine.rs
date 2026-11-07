@@ -487,8 +487,8 @@ impl Engine {
     pub fn poll_podcast(&mut self) -> Option<Result<serde_json::Value>> {
         self.podcast_runtime.poll()
     }
-    pub fn cancel_podcast(&mut self) {
-        self.podcast_runtime.cancel();
+    pub fn cancel_podcast(&mut self) -> bool {
+        self.podcast_runtime.cancel()
     }
     pub fn tick(&mut self) -> Result<()> {
         if self.session.background_media {

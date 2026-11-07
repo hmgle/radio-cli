@@ -70,8 +70,8 @@ impl Runtime {
     pub(crate) fn download_active(&self, id: &str) -> bool {
         self.downloads.contains_key(id)
     }
-    pub(crate) fn cancel(&mut self) {
-        self.action = None;
+    pub(crate) fn cancel(&mut self) -> bool {
+        self.action.take().is_some()
     }
     pub(crate) fn tick(&mut self, config: &Config, lock: Arc<MediaLock>) -> Result<()> {
         self.downloads.retain(|_, task| task.poll().is_none());

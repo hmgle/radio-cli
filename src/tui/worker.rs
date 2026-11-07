@@ -747,14 +747,26 @@ pub(super) fn execute(
             data.log(crate::t!("catalog_sync_started"));
         }
         Command::Cancel => {
-            engine.cancel_podcast();
-            let Some(job) = job else {
-                bail!(crate::t!("catalog_task_missing"));
-            };
-            job.cancel.store(true, Ordering::Relaxed);
+            let podcast = engine.cancel_podcast();
             let mut data = view.lock().unwrap();
-            data.task = crate::t!("catalog_task_cancelling").into();
-            data.log(crate::t!("catalog_task_cancel_requested"));
+            let podcast = podcast || data.podcast_browse;
+            if podcast {
+                data.podcast_browse = false;
+                data.podcast_poll = None;
+                if data.podcast_items.is_empty() {
+                    data.podcast_total = 0;
+                }
+                data.log(crate::t!("podcast_operation_cancelled"));
+                data.revision += 1;
+                data.immediate_revision += 1;
+            }
+            if let Some(job) = job {
+                job.cancel.store(true, Ordering::Relaxed);
+                data.task = crate::t!("catalog_task_cancelling").into();
+                data.log(crate::t!("catalog_task_cancel_requested"));
+            } else if !podcast {
+                bail!(crate::t!("catalog_task_missing"));
+            }
         }
         Command::Recordings(value) => {
             view.lock().unwrap().podcast_poll = None;
@@ -1014,4 +1026,65 @@ pub(super) fn run(
     drop(job);
     result?;
     shutdown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelling_podcast_commands_clears_loading_and_periodic_refresh() {
+        for (with_catalog, browse) in [(false, false), (false, true), (true, false), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = crate::test_support::config(dir.path());
+            let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
+            let mut filter = Filter::default();
+            let (_sender, result) = mpsc::channel();
+            let catalog_cancel = Arc::new(AtomicBool::new(false));
+            let mut job = with_catalog.then(|| CatalogJob {
+                cancel: catalog_cancel.clone(),
+                progress: Arc::new(AtomicUsize::new(0)),
+                result,
+                handle: None,
+                bootstrap: false,
+            });
+            execute(
+                Command::Podcast(if browse {
+                    crate::podcast::Action::Queue {
+                        action: crate::podcast::QueueAction::List,
+                    }
+                } else {
+                    crate::podcast::Action::Refresh { id: None }
+                }),
+                &mut engine,
+                &mut filter,
+                &mut job,
+                &view,
+            )
+            .unwrap();
+            let before = view.lock().unwrap().revision;
+            assert_eq!(view.lock().unwrap().podcast_browse, browse);
+            assert_eq!(view.lock().unwrap().podcast_poll.is_some(), browse);
+            execute(Command::Cancel, &mut engine, &mut filter, &mut job, &view).unwrap();
+            let data = view.lock().unwrap();
+            assert!(!data.podcast_browse);
+            assert!(data.podcast_poll.is_none());
+            assert!(data.revision > before);
+            assert!(engine.poll_podcast().is_none());
+            assert!(!engine.podcast_tasks().1);
+            assert_eq!(catalog_cancel.load(Ordering::Relaxed), with_catalog);
+            assert!(
+                data.logs
+                    .iter()
+                    .any(|line| line.contains(crate::t!("podcast_operation_cancelled")))
+            );
+            if with_catalog {
+                assert_eq!(data.task, crate::t!("catalog_task_cancelling"));
+            }
+            drop(data);
+            job = None;
+            assert!(execute(Command::Cancel, &mut engine, &mut filter, &mut job, &view).is_err());
+        }
+    }
 }

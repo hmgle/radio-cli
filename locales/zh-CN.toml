@@ -501,6 +501,7 @@ podcast_download_busy = "请先暂停或取消下载再删除文件"
 podcast_download_in_use = "删除下载文件前请先停止播放"
 
 podcast_operation_done = "播客操作已完成"
+podcast_operation_cancelled = "播客操作已取消"
 
 podcast_rate_limited = "播客目录请求已限流；请等待服务器要求的时间后重试"
 

@@ -75,7 +75,8 @@ podcast playback. `:podcast seek` accepts seconds or `HH:MM:SS`; seeking require
 mpv support. Speeds range from 0.5 to 3.0 and persist independently of live radio.
 `/` filters show or episode titles locally, F5 reloads the current view, and
 `:podcast refresh [FEED_ID]` fetches feeds. `:sync-cancel` also cancels the current
-podcast command; pause/cancel individual downloads with the commands below.
+podcast command and stops the view's periodic reload; F5 loads it again.
+Pause/cancel individual downloads with the commands below.
 Radio favorite and recording actions do not apply to episodes.
 
 The existing `resume` setting also governs podcasts. `selection` restores the

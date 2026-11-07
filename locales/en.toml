@@ -502,6 +502,7 @@ podcast_download_busy = "Pause or cancel this download before removing it"
 podcast_download_in_use = "Stop playback before removing the downloaded file"
 
 podcast_operation_done = "Podcast operation finished"
+podcast_operation_cancelled = "Podcast operation cancelled"
 
 podcast_rate_limited = "Podcast directory rate limit reached; retry after the server delay"
 
