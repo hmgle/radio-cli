@@ -124,7 +124,8 @@ radio podcast export subscriptions.opml
 
 Import validates the complete OPML before fetching each source and reports each
 result. Existing subscriptions are deduplicated. Partial failures do not remove
-successful subscriptions. Export contains active subscriptions only, without
+successful subscriptions. Cancellation stops the import immediately and keeps
+subscriptions already imported. Export contains active subscriptions only, without
 progress or downloads. Existing export files require `--overwrite`.
 
 Optional TOML settings:

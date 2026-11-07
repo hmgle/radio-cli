@@ -164,6 +164,53 @@ fn subscriptions_merge_without_losing_identity_progress_or_missing_episodes() {
     assert!(store.podcast_episode(&e.id).unwrap().completed);
 }
 #[test]
+fn opml_import_stops_on_cancellation_and_keeps_prior_successes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for successful in [0, 1] {
+        let stop = Arc::new(AtomicBool::new(false));
+        let cancel = stop.clone();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        let server = support::Server::new(move |_, stream| {
+            if counter.fetch_add(1, Ordering::Relaxed) == successful {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            support::response(stream, 200, "application/rss+xml",
+                b"<rss><channel><title>Feed</title><item><title>Episode</title><enclosure url='/audio.mp3' type='audio/mpeg'/></item></channel></rss>");
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let config = support::config(dir.path());
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let file = dir.path().join("feeds.opml");
+        let outlines: String = (0..3)
+            .map(|i| format!("<outline xmlUrl='{}/{i}'/>", server.url))
+            .collect();
+        std::fs::write(&file, format!("<opml><body>{outlines}</body></opml>")).unwrap();
+        for _ in 0..2 {
+            let error = podcast::manage(
+                &config,
+                &store,
+                Action::Import {
+                    file: file.clone(),
+                    dry_run: false,
+                },
+                &stop,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<radio_cli::error::DomainError>()
+                    .unwrap()
+                    .code,
+                radio_cli::error::ErrorCode::Cancelled
+            );
+            assert_eq!(requests.load(Ordering::Relaxed), successful + 1);
+            assert_eq!(store.podcast_feeds().unwrap().len(), successful);
+        }
+    }
+}
+
+#[test]
 fn opml_roundtrip_queue_and_marks_are_independent_of_stations() {
     let dir = tempfile::tempdir().unwrap();
     let c = support::config(dir.path());

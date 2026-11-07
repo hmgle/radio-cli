@@ -323,6 +323,9 @@ pub fn manage(
             json!({"exported":feeds.len()})
         }
         Action::Import { file, dry_run } => {
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(DomainError::new(ErrorCode::Cancelled).into());
+            }
             use std::io::Read;
             let mut data = Vec::new();
             std::fs::File::open(file)?
@@ -334,14 +337,30 @@ pub fn manage(
             } else {
                 let mut results = vec![];
                 for u in urls {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(DomainError::new(ErrorCode::Cancelled).into());
+                    }
                     match fetch(config, &u, None, stop).and_then(|p| {
+                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            return Err(DomainError::new(ErrorCode::Cancelled).into());
+                        }
                         store.podcast_subscribe(
                             &p.ok_or_else(|| error(crate::t!("podcast_invalid_feed")))?,
                             &u,
                         )
                     }) {
                         Ok(f) => results.push(json!({"id":f.id,"ok":true})),
-                        Err(e) => results.push(json!({"ok":false,"error":e.to_string()})),
+                        Err(e) => {
+                            if e.downcast_ref::<DomainError>()
+                                .is_some_and(|e| e.code == ErrorCode::Cancelled)
+                            {
+                                return Err(e);
+                            }
+                            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                                return Err(DomainError::new(ErrorCode::Cancelled).into());
+                            }
+                            results.push(json!({"ok":false,"error":e.to_string()}));
+                        }
                     }
                 }
                 json!(results)
