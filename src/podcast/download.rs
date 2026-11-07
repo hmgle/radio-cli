@@ -1,6 +1,6 @@
 use super::*;
 use crate::{config::Config, store::Store};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
@@ -46,9 +46,7 @@ fn run(
     } else {
         store.podcast_download(id)?
     };
-    let e = store.podcast_episode(id)?;
     let final_path = download_path(config, id);
-    fs::create_dir_all(final_path.parent().unwrap())?;
     let part = final_path.with_extension("part");
     let exists = previous.is_some();
     let mut d = previous.unwrap_or_else(|| Download {
@@ -56,16 +54,6 @@ fn run(
         ..Default::default()
     });
     if d.state == "complete" && std::path::Path::new(&d.path).is_file() {
-        return Ok(d);
-    }
-    if final_path.is_file()
-        && d.bytes > 0
-        && fs::metadata(&final_path)?.len() == d.bytes
-        && !part.exists()
-    {
-        d.state = "complete".into();
-        d.error = None;
-        store.podcast_download_update(&d)?;
         return Ok(d);
     }
     d.state = "downloading".into();
@@ -77,6 +65,21 @@ fn run(
         store.podcast_save_download(&d)?;
     }
     let result = (|| -> Result<()> {
+        let e = store.podcast_episode(id)?;
+        fs::create_dir_all(final_path.parent().unwrap()).with_context(|| {
+            format!(
+                "create download directory {}",
+                final_path.parent().unwrap().display()
+            )
+        })?;
+        if final_path.is_file()
+            && d.bytes > 0
+            && fs::metadata(&final_path)?.len() == d.bytes
+            && !part.exists()
+        {
+            d.state = "complete".into();
+            return Ok(());
+        }
         let available = fs2::available_space(final_path.parent().unwrap())?;
         let existing = fs::metadata(&part).map_or(0, |m| m.len());
         if available
@@ -262,7 +265,7 @@ fn run(
             }
             .into();
         }
-        d.error = Some(crate::clean_text(&format!("{e}")));
+        d.error = Some(crate::clean_text(&format!("{e:#}")));
     }
     if let Err(update) = store.podcast_download_update(&d) {
         result?;

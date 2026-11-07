@@ -210,6 +210,70 @@ mod tests {
     }
 
     #[test]
+    fn download_initialization_failure_is_saved_and_not_scheduled_again() {
+        for scheduled in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            config.settings.podcasts.refresh_hours = 0;
+            let blocked = dir.path().join("blocked");
+            std::fs::write(&blocked, b"not a directory").unwrap();
+            config.settings.podcasts.directory = Some(blocked.clone());
+            let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+            let preview = Preview {
+                feed: Feed {
+                    url: "https://example.test/feed".into(),
+                    ..Default::default()
+                },
+                episodes: vec![Episode {
+                    url: "https://example.test/audio".into(),
+                    ..Default::default()
+                }],
+            };
+            let feed = store
+                .podcast_subscribe(&preview, &preview.feed.url)
+                .unwrap();
+            let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let result = if scheduled {
+                Runtime::enqueue(&store, &episode.id).unwrap();
+                let snapshot = store.podcast_download(&episode.id).unwrap().unwrap();
+                crate::podcast::download::scheduled(&config, &snapshot, &stop)
+            } else {
+                download(&config, &episode.id, &stop)
+            };
+            assert!(result.is_err());
+            let failed = store.podcast_download(&episode.id).unwrap().unwrap();
+            assert_eq!(failed.state, "failed");
+            let diagnostic = failed.error.as_ref().unwrap();
+            assert!(
+                diagnostic.contains(blocked.to_str().unwrap()),
+                "{diagnostic}"
+            );
+            assert_eq!(std::fs::read(&blocked).unwrap(), b"not a directory");
+            let mut runtime = Runtime {
+                scan: Instant::now(),
+                scan_task: Some(
+                    Background::start("test-podcast-scan", move |_| Ok((vec![failed], vec![])))
+                        .unwrap(),
+                ),
+                ..Default::default()
+            };
+            let lock = Arc::new(MediaLock::acquire(&config.data_dir).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while runtime.scan_task.is_some() {
+                runtime.tick(&config, lock.clone()).unwrap();
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(runtime.downloads.is_empty());
+            assert_eq!(
+                store.podcast_download(&episode.id).unwrap().unwrap().state,
+                "failed"
+            );
+        }
+    }
+
+    #[test]
     fn stale_scan_cannot_restart_changed_downloads() {
         for state in [
             "paused",
