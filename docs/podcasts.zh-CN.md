@@ -61,7 +61,8 @@ Space 暂停/继续。Alt-Left/Right 后退/前进 15 秒；精确定位接受�
 F5 重新加载视图；`:podcast refresh [FEED_ID]` 抓取 RSS。`:sync-cancel` 也取消当前
 播客命令；下载需用对应 pause/cancel 命令。播客不适用电台收藏和实时录音操作。
 
-现有 `resume` 配置也用于播客：`selection` 只恢复选择，`playback` 续播最后单集，
+现有 `resume` 配置也用于播客：`selection` 恢复最后单集及其所在页的选择但不播放，
+`playback` 续播最后单集，
 `disabled` 不自动恢复播放。
 
 ## 下载与队列

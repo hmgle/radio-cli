@@ -168,6 +168,20 @@ impl Store {
         self.podcast_feed(id)?;
         self.podcast_episode_rows(id, "", -1, 0)
     }
+    pub(crate) fn podcast_episode_position(&self, feed: &str, id: &str) -> Result<Option<usize>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT position FROM (
+                SELECT id,row_number() OVER (
+                    ORDER BY json_extract(json,'$.published') DESC,rowid DESC
+                )-1 AS position FROM podcast_episodes WHERE feed_id=?1
+             ) WHERE id=?2",
+                params![feed, id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
     pub fn podcast_episodes_page(
         &self,
         id: &str,

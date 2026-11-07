@@ -6694,6 +6694,100 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
 }
 
 #[test]
+fn podcast_selection_resume_restores_the_episode_page_once_without_playback() {
+    use crate::{
+        config::ResumeMode,
+        podcast::{Episode, Feed, Preview},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = crate::test_support::config(dir.path());
+    config.settings.resume = ResumeMode::Selection;
+    config.settings.mpv = "/missing/mpv".into();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let p = Preview {
+        feed: Feed {
+            url: "https://example.test/rss".into(),
+            title: "节目".into(),
+            ..Default::default()
+        },
+        episodes: (0..205)
+            .map(|i| Episode {
+                guid: Some(i.to_string()),
+                title: format!("单集 {i}"),
+                published: Some(format!("2026-01-{:02}T00:00:00Z", i % 28 + 1)),
+                url: format!("https://example.test/{i}.mp3"),
+                ..Default::default()
+            })
+            .collect(),
+    };
+    let feed = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episodes = engine.store().podcast_episodes(&feed.id).unwrap();
+    let target = &episodes[102];
+    engine.store().podcast_played(&target.id).unwrap();
+    engine.resume_last_station().unwrap();
+    assert!(!engine.playback_active());
+    let mut app = App::restore(engine.store(), ResumeMode::Selection).unwrap();
+    assert_eq!(app.source, Source::Podcasts);
+    assert_eq!(app.podcast_feed.as_deref(), Some(feed.id.as_str()));
+    assert_eq!(app.filter.offset, 100);
+    let mut data = View::new(engine.status().clone());
+    app.reconcile(&data); // Empty view while the first browse is pending.
+    assert_eq!(app.list.selected(), None);
+    let (sender, receiver) = command::channel(8);
+    app.flush_search(&sender);
+    let Command::Podcast(action) = receiver.try_recv().unwrap() else {
+        panic!("expected browse")
+    };
+    let value = crate::podcast::manage(
+        engine.config(),
+        engine.store(),
+        action.clone(),
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    data.podcast_items = super::podcast::items(&value).into();
+    data.podcast_total = 205;
+    // Rows for a different page must not consume the pending target.
+    data.podcast_page = Some(crate::podcast::Action::Episodes {
+        id: feed.id.clone(),
+        query: String::new(),
+        page: crate::cli::Page {
+            offset: 0,
+            limit: 100,
+            all: false,
+        },
+    });
+    app.reconcile(&data);
+    data.podcast_page = Some(action);
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(2));
+    assert_eq!(app.podcast_items(&data)[2].id, target.id);
+    app.list.select(Some(0));
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(0));
+
+    // If the target disappears before its page arrives, consume restoration
+    // once so a later refresh cannot unexpectedly move the user's cursor.
+    let mut missing = App::restore(engine.store(), ResumeMode::Selection).unwrap();
+    let mut absent = data.clone();
+    absent.podcast_items = data
+        .podcast_items
+        .iter()
+        .filter(|item| item.id != target.id)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    missing.reconcile(&absent);
+    assert_eq!(missing.list.selected(), Some(0));
+    missing.reconcile(&data);
+    assert_eq!(missing.list.selected(), Some(0));
+    let fresh = App::restore(engine.store(), ResumeMode::Disabled).unwrap();
+    assert_eq!(fresh.source, Source::Stations);
+    assert!(fresh.podcast_feed.is_none());
+    assert_eq!(fresh.filter.offset, 0);
+}
+
+#[test]
 fn podcast_search_is_sent_with_the_requested_page() {
     let mut app = App::default();
     app.source = Source::Podcasts;

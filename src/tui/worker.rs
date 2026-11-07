@@ -55,6 +55,7 @@ pub(super) struct View {
     pub podcast_items: Arc<Vec<super::podcast::Item>>,
     pub podcast_total: usize,
     pub podcast_browse: bool,
+    pub podcast_page: Option<crate::podcast::Action>,
     pub podcast_task: String,
     podcast_poll: Option<(crate::podcast::Action, Instant)>,
     pub subtitles: crate::speech::Snapshot,
@@ -140,6 +141,7 @@ impl View {
             podcast_items: Arc::new(vec![]),
             podcast_total: 0,
             podcast_browse: false,
+            podcast_page: None,
             podcast_task: String::new(),
             podcast_poll: None,
             recordings_revision: 0,
@@ -575,6 +577,7 @@ pub(super) fn execute(
                 engine.save_preference("pref_source", source)?;
                 let mut data = view.lock().unwrap();
                 data.podcast_browse = true;
+                data.podcast_page = None;
                 data.podcast_items = Arc::new(vec![]);
                 data.revision += 1;
                 engine.cancel_podcast();
@@ -911,6 +914,8 @@ pub(super) fn run(
                 match result {
                     Ok(value) => {
                         if data.podcast_browse {
+                            data.podcast_page =
+                                data.podcast_poll.as_ref().map(|(action, _)| action.clone());
                             data.podcast_items = Arc::new(super::podcast::items(&value));
                             data.podcast_total = value["total"]
                                 .as_u64()

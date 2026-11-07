@@ -79,7 +79,7 @@ podcast command; pause/cancel individual downloads with the commands below.
 Radio favorite and recording actions do not apply to episodes.
 
 The existing `resume` setting also governs podcasts. `selection` restores the
-podcast source without starting playback; `playback` resumes the last episode;
+last episode and its page without starting playback; `playback` resumes the last episode;
 `disabled` starts without restoring playback.
 
 ## Downloads and queue

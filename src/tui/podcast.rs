@@ -8,6 +8,21 @@ pub(super) struct Item {
     pub url: String,
     pub kind: String,
 }
+pub(super) fn page_matches(
+    action: &Action,
+    feed: &Option<String>,
+    filter: &crate::model::Filter,
+) -> bool {
+    let (id, query, page) = match action {
+        Action::List { query, page } => (None, query, page),
+        Action::Episodes { id, query, page } => (Some(id), query, page),
+        _ => return false,
+    };
+    id == feed.as_ref()
+        && query == &filter.query
+        && page.offset == filter.offset
+        && usize::from(page.limit) == filter.limit
+}
 pub(super) fn items(value: &Value) -> Vec<Item> {
     if let Some(p) = value.get("feed") {
         return vec![Item {

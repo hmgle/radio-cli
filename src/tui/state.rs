@@ -630,16 +630,22 @@ impl App {
         } else {
             Source::restore(store, resume)?
         };
-        let (filter, restore_selection) = source.initial_filter(store, resume)?;
-        let podcast_feed =
-            if source == Source::Podcasts && resume != crate::config::ResumeMode::Disabled {
-                store
-                    .meta("pref_last_episode")?
-                    .and_then(|id| store.podcast_episode(&id).ok())
-                    .map(|e| e.feed_id)
-            } else {
-                None
-            };
+        let (mut filter, mut restore_selection) = source.initial_filter(store, resume)?;
+        let episode = if source == Source::Podcasts && resume != crate::config::ResumeMode::Disabled
+        {
+            store
+                .meta("pref_last_episode")?
+                .and_then(|id| store.podcast_episode(&id).ok())
+        } else {
+            None
+        };
+        if let Some(e) = &episode
+            && let Some(position) = store.podcast_episode_position(&e.feed_id, &e.id)?
+        {
+            filter.offset = position / filter.limit * filter.limit;
+            restore_selection = Some(e.id.clone());
+        }
+        let podcast_feed = episode.map(|e| e.feed_id);
         Ok(Self {
             source,
             filter,
@@ -762,6 +768,13 @@ impl App {
     }
     pub fn reconcile(&mut self, view: &View) {
         if self.source.is_podcast() {
+            if view.podcast_page.as_ref().is_some_and(|action| {
+                super::podcast::page_matches(action, &self.podcast_feed, &self.filter)
+            }) && let Some(id) = self.restore_selection.take()
+            {
+                self.list
+                    .select(view.podcast_items.iter().position(|item| item.id == id));
+            }
             let len = self.length(view);
             self.list.select(if len == 0 {
                 None
