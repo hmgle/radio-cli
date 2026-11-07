@@ -332,6 +332,71 @@ fn m4a_resume_seek_pause_and_queue_completion_use_episode_progress() {
 }
 
 #[test]
+fn download_rejects_a_valid_partial_range_until_the_full_resource_is_present() {
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let expected = bytes.clone();
+    let initial = bytes[..bytes.len() / 4].to_vec();
+    let first = Arc::new(AtomicBool::new(true));
+    let server = support::Server::new(move |request, stream| {
+        let start = request
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("range: bytes=")
+                    .and_then(|v| v.strip_suffix('-'))?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .expect("download must resume the retained part");
+        let end = if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            bytes.len() / 2
+        } else {
+            bytes.len()
+        };
+        let _ = write!(
+            stream,
+            "HTTP/1.1 206 Partial Content\r\nETag: \"resource\"\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            start,
+            end - 1,
+            bytes.len(),
+            end - start
+        );
+        let _ = stream.write_all(&bytes[start..end]);
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let c = support::config(dir.path());
+    let s = Store::open(&c.data_dir.join("radio.db")).unwrap();
+    let p = preview(&server.url);
+    let f = s.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let e = s.podcast_episodes(&f.id).unwrap().remove(0);
+    let path = podcast::download_path(&c, &e.id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path.with_extension("part"), &initial).unwrap();
+    s.podcast_save_download(&podcast::Download {
+        episode_id: e.id.clone(),
+        state: "paused".into(),
+        etag: Some("\"resource\"".into()),
+        url: e.url.clone(),
+        bytes: initial.len() as u64,
+        ..Default::default()
+    })
+    .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    assert!(podcast::download(&c, &e.id, &stop).is_err());
+    assert!(!path.exists());
+    assert_eq!(s.podcast_download(&e.id).unwrap().unwrap().state, "failed");
+    assert_eq!(
+        std::fs::read(path.with_extension("part")).unwrap(),
+        expected[..expected.len() / 2]
+    );
+    assert_eq!(
+        podcast::download(&c, &e.id, &stop).unwrap().state,
+        "complete"
+    );
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+}
+
+#[test]
 fn download_range_resume_validates_the_resource() {
     let bytes = support::fixture("libmp3lame", "mp3");
     let partial = bytes[..bytes.len() / 2].to_vec();

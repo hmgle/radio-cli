@@ -100,14 +100,15 @@ pub fn download(config: &Config, id: &str, stop: &Arc<AtomicBool>) -> Result<Dow
             )));
         }
         let append = r.status() == 206 && offset > 0;
+        let mut total_length = None;
+        let mut expected = r.content_length();
         if r.status() == 206 {
             let range = r
                 .headers()
                 .get("content-range")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-            let r_content_length = r.content_length();
-            let valid = range
+            let (start, end, total) = range
                 .strip_prefix("bytes ")
                 .and_then(|v| v.split_once('/'))
                 .and_then(|(r, t)| {
@@ -115,18 +116,21 @@ pub fn download(config: &Config, id: &str, stop: &Arc<AtomicBool>) -> Result<Dow
                     let start = a.parse::<u64>().ok()?;
                     let end = b.parse::<u64>().ok()?;
                     let total = t.parse::<u64>().ok()?;
-                    Some(
-                        start == offset
-                            && end >= start
-                            && total > end
-                            && r_content_length.is_none_or(|length| length == end - start + 1),
-                    )
-                });
-            if !append || valid != Some(true) {
+                    Some((start, end, total))
+                })
+                .filter(|&(start, end, total)| {
+                    start == offset
+                        && end >= start
+                        && total > end
+                        && expected.is_none_or(|length| length == end - start + 1)
+                })
+                .ok_or_else(|| error(crate::t!("podcast_invalid_range")))?;
+            if !append {
                 return Err(error(crate::t!("podcast_invalid_range")));
             }
+            expected = Some(end - start + 1);
+            total_length = Some(total);
         }
-        let expected = r.content_length();
         if append {
             let validator = r.headers().get("etag").and_then(|v| v.to_str().ok());
             if d.etag
@@ -187,7 +191,10 @@ pub fn download(config: &Config, id: &str, stop: &Arc<AtomicBool>) -> Result<Dow
         }
         file.sync_all()?;
         drop(file);
-        if expected.is_some_and(|n| n != d.bytes - start) || d.bytes == 0 {
+        if expected.is_some_and(|n| n != d.bytes - start)
+            || total_length.is_some_and(|n| n != d.bytes)
+            || d.bytes == 0
+        {
             return Err(error(crate::t!("podcast_invalid_download")));
         }
         let output = crate::process::output(
