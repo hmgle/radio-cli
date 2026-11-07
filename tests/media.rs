@@ -30,6 +30,43 @@ fn sample(url: &str) -> Station {
 }
 
 #[test]
+fn direct_url_reconnects_after_confirmed_playback_without_persisting_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into_owned();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    engine
+        .store()
+        .set_meta("pref_last_station", "remembered")
+        .unwrap();
+    engine.play("https://example.test/live-eof").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !matches!(
+        engine.status().playback_state,
+        radio_cli::engine::PlaybackState::Reconnecting { .. }
+    ) {
+        engine.tick().unwrap();
+        assert!(!engine.playback_failed(), "{:?}", engine.status());
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(engine.store().count().unwrap(), 0);
+    assert_eq!(
+        engine.store().meta("pref_last_station").unwrap().as_deref(),
+        Some("remembered")
+    );
+    let conn = rusqlite::Connection::open(engine.config().data_dir.join("radio.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM history", [], |r| r.get::<_, usize>(0))
+            .unwrap(),
+        0
+    );
+    engine.stop_playback().unwrap();
+    engine.tick().unwrap();
+    assert!(!engine.playback_active());
+}
+
+#[test]
 fn direct_url_playback_is_ephemeral_and_failures_leave_no_playing_state() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = support::config(dir.path());

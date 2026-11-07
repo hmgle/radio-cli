@@ -599,13 +599,17 @@ impl PlaybackController {
                                     self.confirmed = true;
                                     if let Some(s) = &session.status.station
                                         && !self.session_started
-                                        && self.source_kind == SourceKind::Catalog
+                                        && matches!(
+                                            self.source_kind,
+                                            SourceKind::Catalog | SourceKind::Ephemeral
+                                        )
                                     {
                                         if self.source_kind != SourceKind::Ephemeral {
                                             session.remember_play(&s.stationuuid)?;
                                         }
                                         self.session_started = true;
-                                        if !s.custom
+                                        if self.source_kind == SourceKind::Catalog
+                                            && !s.custom
                                             && self
                                                 .click_task
                                                 .as_ref()

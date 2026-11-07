@@ -49,6 +49,7 @@ fn main() {
                 break;
             }
             else if line.contains("/fail") { "{\"event\":\"end-file\",\"reason\":\"error\"}".to_owned() }
+            else if line.contains("/live-eof") { "{\"event\":\"playback-restart\"}\n{\"event\":\"end-file\",\"reason\":\"eof\"}".to_owned() }
             else { "{\"event\":\"playback-restart\"}".to_owned() }
         } else if line.contains("\"cycle\",\"pause\"") {
             paused = !paused;
