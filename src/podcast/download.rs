@@ -21,12 +21,35 @@ pub fn download_path(config: &Config, id: &str) -> PathBuf {
         .join(format!("{id}.audio"))
 }
 pub fn download(config: &Config, id: &str, stop: &Arc<AtomicBool>) -> Result<Download> {
+    run(config, id, stop, None)
+}
+pub(super) fn scheduled(
+    config: &Config,
+    expected: &Download,
+    stop: &Arc<AtomicBool>,
+) -> Result<Download> {
+    run(config, &expected.episode_id, stop, Some(expected))
+}
+fn run(
+    config: &Config,
+    id: &str,
+    stop: &Arc<AtomicBool>,
+    expected: Option<&Download>,
+) -> Result<Download> {
     let store = Store::open(&config.data_dir.join("radio.db"))?;
+    let previous = if let Some(expected) = expected {
+        Some(
+            store
+                .podcast_claim_download(expected)?
+                .ok_or_else(|| DomainError::new(ErrorCode::Cancelled))?,
+        )
+    } else {
+        store.podcast_download(id)?
+    };
     let e = store.podcast_episode(id)?;
     let final_path = download_path(config, id);
     fs::create_dir_all(final_path.parent().unwrap())?;
     let part = final_path.with_extension("part");
-    let previous = store.podcast_download(id)?;
     let exists = previous.is_some();
     let mut d = previous.unwrap_or_else(|| Download {
         episode_id: id.into(),

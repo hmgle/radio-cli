@@ -268,6 +268,27 @@ impl Store {
             .optional()?;
         json.map(|j| Ok(serde_json::from_str(&j)?)).transpose()
     }
+    pub(crate) fn podcast_claim_download(&self, expected: &Download) -> Result<Option<Download>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "UPDATE podcast_downloads
+                 SET json=json_set(json,'$.state','downloading','$.error',NULL,'$.generation',?4)
+                 WHERE episode_id=?1 AND json_extract(json,'$.state')=?2
+                 AND json_extract(json,'$.state') IN ('queued','downloading')
+                 AND COALESCE(json_extract(json,'$.generation'),0)=?3
+                 RETURNING json",
+                params![
+                    expected.episode_id,
+                    expected.state,
+                    expected.generation,
+                    expected.generation.saturating_add(1)
+                ],
+                |r| r.get(0),
+            )
+            .optional()?;
+        json.map(|j| Ok(serde_json::from_str(&j)?)).transpose()
+    }
     pub(crate) fn podcast_download_update(&self, d: &Download) -> Result<()> {
         let changed=self.conn.execute("UPDATE podcast_downloads SET json=?2 WHERE episode_id=?1 AND COALESCE(json_extract(json,'$.generation'),0)=?3",params![d.episode_id,serde_json::to_string(d)?,d.generation])?;
         if changed == 0 {

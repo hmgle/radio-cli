@@ -19,6 +19,7 @@ pub struct Runtime {
     scan: Instant,
     scan_task: Option<Background<(Vec<Download>, Vec<Feed>)>>,
 }
+
 impl Default for Runtime {
     fn default() -> Self {
         Self {
@@ -130,7 +131,7 @@ impl Runtime {
                     id.clone(),
                     Background::start("radio-podcast-download", move |stop| {
                         let _lock = lock;
-                        download(&config, &id, &stop)
+                        super::download::scheduled(&config, &d, &stop)
                     })?,
                 );
             }
@@ -162,5 +163,154 @@ impl Runtime {
             store.podcast_save_download(&d)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_download_completes_with_the_claimed_generation() {
+        let audio = crate::test_support::fixture("libmp3lame", "mp3");
+        let bytes = audio.len() as u64;
+        let server = crate::test_support::Server::new(move |_, stream| {
+            crate::test_support::response(stream, 200, "audio/mpeg", &audio);
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let preview = Preview {
+            feed: Feed {
+                url: format!("{}/feed", server.url),
+                ..Default::default()
+            },
+            episodes: vec![Episode {
+                url: format!("{}/audio", server.url),
+                ..Default::default()
+            }],
+        };
+        let feed = store
+            .podcast_subscribe(&preview, &preview.feed.url)
+            .unwrap();
+        let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+        Runtime::enqueue(&store, &episode.id).unwrap();
+        let snapshot = store.podcast_download(&episode.id).unwrap().unwrap();
+        let finished = crate::podcast::download::scheduled(
+            &config,
+            &snapshot,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert_eq!(finished.generation, snapshot.generation + 1);
+        assert_eq!(finished.state, "complete");
+        assert_eq!(finished.bytes, bytes);
+        assert!(std::path::Path::new(&finished.path).is_file());
+        assert_eq!(store.podcast_download(&episode.id).unwrap(), Some(finished));
+    }
+
+    #[test]
+    fn stale_scan_cannot_restart_changed_downloads() {
+        for state in [
+            "paused",
+            "cancelled",
+            "removed",
+            "queued",
+            "failed",
+            "complete",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            config.settings.podcasts.refresh_hours = 0;
+            let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+            let preview = Preview {
+                feed: Feed {
+                    url: "http://127.0.0.1:1/feed".into(),
+                    ..Default::default()
+                },
+                episodes: vec![Episode {
+                    url: "http://127.0.0.1:1/audio".into(),
+                    ..Default::default()
+                }],
+            };
+            let feed = store
+                .podcast_subscribe(&preview, &preview.feed.url)
+                .unwrap();
+            let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+            Runtime::enqueue(&store, &episode.id).unwrap();
+            let snapshot = store.podcast_download(&episode.id).unwrap().unwrap();
+            let mut current = snapshot.clone();
+            current.state = state.into();
+            // Also reject state changes without a generation bump.
+            if matches!(state, "paused" | "cancelled" | "removed" | "queued") {
+                current.generation += 1;
+            }
+            store.podcast_save_download(&current).unwrap();
+            let mut runtime = Runtime {
+                scan: Instant::now(),
+                scan_task: Some(
+                    Background::start("test-podcast-scan", move |_| Ok((vec![snapshot], vec![])))
+                        .unwrap(),
+                ),
+                ..Default::default()
+            };
+            let lock = Arc::new(MediaLock::acquire(&config.data_dir).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while runtime.scan_task.is_some() || !runtime.downloads.is_empty() {
+                runtime.tick(&config, lock.clone()).unwrap();
+                assert!(Instant::now() < deadline, "{state}");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(store.podcast_download(&episode.id).unwrap(), Some(current));
+            assert!(!download_path(&config, &episode.id).exists());
+            assert!(
+                !download_path(&config, &episode.id)
+                    .with_extension("part")
+                    .exists()
+            );
+        }
+    }
+
+    #[test]
+    fn claiming_downloads_fences_old_snapshots_and_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let preview = Preview {
+            feed: Feed {
+                url: "https://example.test/feed".into(),
+                ..Default::default()
+            },
+            episodes: vec![Episode {
+                url: "https://example.test/audio".into(),
+                ..Default::default()
+            }],
+        };
+        let feed = store
+            .podcast_subscribe(&preview, &preview.feed.url)
+            .unwrap();
+        let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+        for state in ["queued", "downloading"] {
+            let snapshot = Download {
+                episode_id: episode.id.clone(),
+                state: state.into(),
+                generation: 7,
+                ..Default::default()
+            };
+            let mut latest = snapshot.clone();
+            latest.bytes = 100;
+            store.podcast_save_download(&latest).unwrap();
+            let claimed = store.podcast_claim_download(&snapshot).unwrap().unwrap();
+            assert_eq!(claimed.state, "downloading");
+            assert_eq!(claimed.generation, 8);
+            assert_eq!(claimed.bytes, 100);
+            assert!(store.podcast_claim_download(&snapshot).unwrap().is_none());
+            assert!(store.podcast_download_update(&snapshot).is_err());
+            latest = claimed.clone();
+            latest.generation += 1;
+            latest.state = "paused".into();
+            store.podcast_save_download(&latest).unwrap();
+            assert!(store.podcast_download_update(&claimed).is_err());
+            assert_eq!(store.podcast_download(&episode.id).unwrap(), Some(latest));
+        }
     }
 }
