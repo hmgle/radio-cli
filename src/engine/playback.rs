@@ -56,6 +56,9 @@ impl PlaybackController {
             .as_ref()
             .filter(|p| p.id == id)
             .or_else(|| self.progress.get(id))
+            // A feed refresh can clear completion while preserving position.
+            // Cached progress belongs to the media metadata it was saved with.
+            .filter(|p| p.url == e.url && p.bytes == e.bytes && p.duration_ms == e.duration_ms)
         {
             e.position_ms = p.position_ms;
             e.observed_duration_ms = p.observed_duration_ms;

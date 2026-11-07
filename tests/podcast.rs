@@ -705,6 +705,62 @@ fn unseekable_resume_preserves_position_and_waits_for_explicit_restart() {
 }
 
 #[test]
+fn replay_after_media_refresh_uses_the_preserved_database_position() {
+    for changed in ["duration", "bytes", "title"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = support::config(dir.path());
+        config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into_owned();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let mut p = preview("https://example.test/rss");
+        p.episodes[0].url = "https://example.test/episode-eof".into();
+        p.episodes[0].duration_ms = Some(20000);
+        p.episodes[0].bytes = Some(100);
+        let feed = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+        let episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+        engine
+            .store()
+            .podcast_progress(&episode.id, 15000, Some(20000), false)
+            .unwrap();
+        engine.play_episode(&episode.id, false, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while engine.playback_active() {
+            engine.tick().unwrap();
+            assert!(Instant::now() < deadline, "{:?}", engine.status());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            engine
+                .store()
+                .podcast_episode(&episode.id)
+                .unwrap()
+                .completed
+        );
+        match changed {
+            "duration" => p.episodes[0].duration_ms = Some(30000),
+            "bytes" => p.episodes[0].bytes = Some(200),
+            "title" => p.episodes[0].title = "Updated title".into(),
+            _ => unreachable!(),
+        }
+        engine
+            .store()
+            .podcast_refresh_merge(&feed, Some(p))
+            .unwrap();
+        let refreshed = engine.store().podcast_episode(&episode.id).unwrap();
+        assert_eq!(refreshed.position_ms, 15000);
+        assert_eq!(refreshed.completed, changed == "title");
+        engine.play_episode(&episode.id, false, None).unwrap();
+        let replay = engine.status().episode.as_ref().unwrap();
+        assert_eq!(
+            replay.position_ms,
+            if changed == "title" { 0 } else { 15000 },
+            "{changed}"
+        );
+        assert!(!replay.completed);
+        engine.shutdown().unwrap();
+    }
+}
+
+#[test]
 fn queue_auto_next_consumes_only_explicit_entries() {
     let dir = tempfile::tempdir().unwrap();
     let mut c = support::config(dir.path());

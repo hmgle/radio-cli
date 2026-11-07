@@ -800,6 +800,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replay_preserves_uncommitted_progress_for_unchanged_media() {
+        use crate::podcast::{Episode, Feed, Preview};
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::test_support::config(dir.path());
+        config.settings.mpv = crate::test_support::fake_mpv(dir.path())
+            .to_string_lossy()
+            .into_owned();
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        let preview = Preview {
+            feed: Feed {
+                url: "https://example.test/feed".into(),
+                ..Default::default()
+            },
+            episodes: vec![Episode {
+                url: "https://example.test/audio".into(),
+                duration_ms: Some(20000),
+                ..Default::default()
+            }],
+        };
+        let feed = engine
+            .store()
+            .podcast_subscribe(&preview, &preview.feed.url)
+            .unwrap();
+        let mut episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+        let id = episode.id.clone();
+        engine.enable_background_media().unwrap();
+        let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        episode.position_ms = 8000;
+        engine.playback.episode = Some(episode);
+        engine
+            .playback
+            .save_episode(&mut engine.session, false)
+            .unwrap();
+        engine.playback.episode = None;
+        assert_eq!(engine.store().podcast_episode(&id).unwrap().position_ms, 0);
+        engine.play_episode(&id, false, None).unwrap();
+        assert_eq!(engine.status().episode.as_ref().unwrap().position_ms, 8000);
+        connection.execute_batch("ROLLBACK").unwrap();
+        engine.shutdown().unwrap();
+        assert_eq!(
+            engine.store().podcast_episode(&id).unwrap().position_ms,
+            8000
+        );
+    }
+
+    #[test]
     fn download_removal_checks_the_active_input_instead_of_the_saved_episode() {
         use crate::podcast::{self, Action, Episode, Feed, Preview};
         for streaming in [false, true] {
