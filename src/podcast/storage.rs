@@ -297,6 +297,45 @@ impl Store {
     }
     pub fn podcast_queue_set(&self, ids: &[String]) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        self.podcast_queue_write(ids)?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn podcast_queue_update(&self, action: QueueAction) -> Result<Vec<Episode>> {
+        if matches!(action, QueueAction::List) {
+            return self.read_snapshot(|store| store.podcast_queue());
+        }
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let mut ids = self
+            .conn
+            .prepare("SELECT episode_id FROM podcast_queue ORDER BY position,rowid")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        match action {
+            QueueAction::Add { id } => {
+                self.podcast_episode(&id)?;
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            QueueAction::Remove { id } => ids.retain(|v| v != &id),
+            QueueAction::Clear => ids.clear(),
+            QueueAction::Move { id, position } => {
+                if position == 0 || position > ids.len() || !ids.contains(&id) {
+                    return Err(error(crate::t!("podcast_invalid_time")));
+                }
+                ids.retain(|v| v != &id);
+                ids.insert(position - 1, id);
+            }
+            QueueAction::Play { .. } => return Err(error(crate::t!("podcast_playback_only"))),
+            QueueAction::List => unreachable!(),
+        }
+        self.podcast_queue_write(&ids)?;
+        let items = self.podcast_queue()?;
+        tx.commit()?;
+        Ok(items)
+    }
+    fn podcast_queue_write(&self, ids: &[String]) -> Result<()> {
         self.conn.execute("DELETE FROM podcast_queue", [])?;
         for (i, id) in ids.iter().enumerate() {
             self.conn.execute(
@@ -304,7 +343,157 @@ impl Store {
                 params![id, i],
             )?;
         }
-        tx.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Barrier, atomic::AtomicBool};
+
+    fn queue_fixture() -> (tempfile::TempDir, crate::config::Config, Vec<Episode>) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let preview = Preview {
+            feed: Feed {
+                url: "https://example.test/rss".into(),
+                ..Default::default()
+            },
+            episodes: (0..2)
+                .map(|i| Episode {
+                    guid: Some(i.to_string()),
+                    url: format!("https://example.test/{i}.mp3"),
+                    ..Default::default()
+                })
+                .collect(),
+        };
+        let feed = store
+            .podcast_subscribe(&preview, &preview.feed.url)
+            .unwrap();
+        let episodes = store.podcast_episodes(&feed.id).unwrap();
+        (dir, config, episodes)
+    }
+
+    #[test]
+    fn concurrent_queue_additions_preserve_both_updates() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
+        let (_dir, config, episodes) = queue_fixture();
+        let barrier = Arc::new(Barrier::new(2));
+        let workers: Vec<_> = episodes
+            .iter()
+            .map(|e| {
+                let config = config.clone();
+                let id = e.id.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                    let mut synchronized = false;
+                    // Align the first write transactions. Reading before BEGIN
+                    // makes both workers overwrite the same old queue snapshot.
+                    store.conn.authorizer(Some(move |context: AuthContext<'_>| {
+                        if !synchronized
+                            && matches!(
+                                context.action,
+                                AuthAction::Transaction {
+                                    operation: TransactionOperation::Begin
+                                }
+                            )
+                        {
+                            synchronized = true;
+                            barrier.wait();
+                        }
+                        Authorization::Allow
+                    }));
+                    manage(
+                        &config,
+                        &store,
+                        Action::Queue {
+                            action: QueueAction::Add { id },
+                        },
+                        &Arc::new(AtomicBool::new(false)),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let mut actual: Vec<_> = store
+            .podcast_queue()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        let mut expected: Vec<_> = episodes.into_iter().map(|e| e.id).collect();
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn listing_the_queue_is_read_only() {
+        let (_dir, config, episodes) = queue_fixture();
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        store.podcast_queue_set(&[episodes[0].id.clone()]).unwrap();
+        store.conn.execute_batch("PRAGMA query_only=ON").unwrap();
+        let value = manage(
+            &config,
+            &store,
+            Action::Queue {
+                action: QueueAction::List,
+            },
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert_eq!(value[0]["id"], episodes[0].id);
+    }
+
+    #[test]
+    fn queue_edits_preserve_order_and_rollback_invalid_moves() {
+        let (_dir, config, episodes) = queue_fixture();
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        for episode in [&episodes[0], &episodes[1], &episodes[0]] {
+            store
+                .podcast_queue_update(QueueAction::Add {
+                    id: episode.id.clone(),
+                })
+                .unwrap();
+        }
+        let reordered = store
+            .podcast_queue_update(QueueAction::Move {
+                id: episodes[0].id.clone(),
+                position: 2,
+            })
+            .unwrap();
+        assert_eq!(
+            reordered.iter().map(|e| &e.id).collect::<Vec<_>>(),
+            vec![&episodes[1].id, &episodes[0].id]
+        );
+        assert!(
+            store
+                .podcast_queue_update(QueueAction::Move {
+                    id: episodes[0].id.clone(),
+                    position: 3,
+                })
+                .is_err()
+        );
+        assert_eq!(store.podcast_queue().unwrap(), reordered);
+        let remaining = store
+            .podcast_queue_update(QueueAction::Remove {
+                id: episodes[1].id.clone(),
+            })
+            .unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, episodes[0].id);
+        assert!(
+            store
+                .podcast_queue_update(QueueAction::Clear)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

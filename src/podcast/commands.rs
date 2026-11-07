@@ -295,32 +295,7 @@ pub fn manage(
             }
         },
         Action::Queue { action } => {
-            let mut ids: Vec<_> = store
-                .podcast_queue()?
-                .iter()
-                .map(|e| e.id.clone())
-                .collect();
-            match action {
-                QueueAction::List => {}
-                QueueAction::Add { id } => {
-                    store.podcast_episode(&id)?;
-                    if !ids.contains(&id) {
-                        ids.push(id);
-                    }
-                }
-                QueueAction::Remove { id } => ids.retain(|v| v != &id),
-                QueueAction::Clear => ids.clear(),
-                QueueAction::Move { id, position } => {
-                    if position == 0 || position > ids.len() || !ids.contains(&id) {
-                        return Err(error(crate::t!("podcast_invalid_time")));
-                    }
-                    ids.retain(|v| v != &id);
-                    ids.insert(position - 1, id);
-                }
-                QueueAction::Play { .. } => return Err(error(crate::t!("podcast_playback_only"))),
-            }
-            store.podcast_queue_set(&ids)?;
-            json!(store.podcast_queue()?)
+            json!(store.podcast_queue_update(action)?)
         }
         Action::Export { file, overwrite } => {
             use std::io::Write;

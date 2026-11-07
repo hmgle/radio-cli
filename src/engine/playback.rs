@@ -664,16 +664,17 @@ impl PlaybackController {
                                 self.stop_playback(session, recording)?;
                                 session.status.message = crate::t!("podcast_finished").into();
                                 if queue_mode {
-                                    let ids: Vec<_> = session
+                                    let next = session
                                         .store
-                                        .podcast_queue()?
+                                        .podcast_queue_update(
+                                            crate::podcast::QueueAction::Remove { id },
+                                        )?
                                         .into_iter()
-                                        .filter(|e| e.id != id)
-                                        .map(|e| e.id)
-                                        .collect();
-                                    session.store.podcast_queue_set(&ids)?;
-                                    if advance && let Some(id) = ids.first() {
-                                        self.play_episode(session, recording, id, false, None)?;
+                                        .next();
+                                    if advance && let Some(next) = next {
+                                        self.play_episode(
+                                            session, recording, &next.id, false, None,
+                                        )?;
                                         self.queue_mode = true;
                                         self.auto_next = true;
                                     }
