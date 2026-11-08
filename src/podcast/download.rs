@@ -176,26 +176,38 @@ fn run(
                 return Err(error(crate::t!("podcast_invalid_range")));
             }
         }
-        d.etag = r
-            .headers()
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        d.modified = r
-            .headers()
-            .get("last-modified")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        d.url = e.url.clone();
-        d.media = Some(e.media());
-        d.bytes = if append { offset } else { 0 };
-        store.podcast_download_update(&d)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(append)
-            .truncate(!append)
-            .open(&part)?;
+        let mut file = store.podcast_download_transaction(id, |current| {
+            if current.is_none_or(|current| current.generation != d.generation) {
+                return Err(DomainError::new(ErrorCode::Cancelled).into());
+            }
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(append)
+                .truncate(!append)
+                .open(&part)
+                .with_context(|| format!("initialize download file {}", part.display()))?;
+            if !append {
+                // Make truncation durable before associating this path with
+                // the response validators, including in the error handler.
+                file.sync_all()?;
+            }
+            d.etag = r
+                .headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            d.modified = r
+                .headers()
+                .get("last-modified")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            d.url = e.url.clone();
+            d.media = Some(e.media());
+            d.bytes = if append { offset } else { 0 };
+            store.podcast_download_update(&d)?;
+            Ok(file)
+        })?;
         let mut buf = [0; 65536];
         let mut saved = Instant::now();
         let start = d.bytes;

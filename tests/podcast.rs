@@ -706,6 +706,226 @@ fn m4a_resume_seek_pause_and_queue_completion_use_episode_progress() {
     engine.shutdown().unwrap();
 }
 
+fn seed_restarting_download(
+    config: &radio_cli::config::Config,
+    store: &Store,
+    url: &str,
+    old: &[u8],
+) -> (Episode, std::path::PathBuf, podcast::Download) {
+    let p = preview(url);
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    let path = podcast::download_path(config, &episode.id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path.with_extension("part"), old).unwrap();
+    let download = podcast::Download {
+        episode_id: episode.id.clone(),
+        state: "paused".into(),
+        etag: Some("\"old\"".into()),
+        modified: Some("Thu, 01 Jan 2026 00:00:00 GMT".into()),
+        url: episode.url.clone(),
+        media: Some(episode.media()),
+        bytes: old.len() as u64,
+        path: path.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    store.podcast_save_download(&download).unwrap();
+    (episode, path, download)
+}
+
+#[test]
+fn rejected_download_resume_keeps_old_validators_when_truncation_fails() {
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let expected = bytes.clone();
+    let mut old = bytes[..bytes.len() / 2].to_vec();
+    let changed = old.len() / 2;
+    old[changed] ^= 1;
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let first = Arc::new(AtomicBool::new(true));
+    let part_slot = Arc::new(std::sync::Mutex::new(std::path::PathBuf::new()));
+    let slot = part_slot.clone();
+    let server = support::Server::new(move |request, stream| {
+        let request = request.to_ascii_lowercase();
+        let offset = request
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("range: bytes=")?
+                    .strip_suffix('-')?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .unwrap_or(0);
+        if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            assert!(offset > 0);
+            assert!(request.contains("if-range: \"old\""));
+            // Block opening the part on all users, including root, without
+            // changing the saved bytes. Restore the old file before retrying.
+            let part = slot.lock().unwrap();
+            std::fs::rename(&*part, part.with_extension("saved")).unwrap();
+            std::fs::create_dir(&*part).unwrap();
+        }
+        let append = offset > 0 && request.contains("if-range: \"new\"");
+        if append {
+            write!(
+                stream,
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {}-{}/{}\r\n",
+                offset,
+                bytes.len() - 1,
+                bytes.len()
+            )
+            .unwrap();
+        } else {
+            write!(stream, "HTTP/1.1 200 OK\r\n").unwrap();
+        }
+        let body = if append { &bytes[offset..] } else { &bytes[..] };
+        write!(stream, "ETag: \"new\"\r\nLast-Modified: Mon, 02 Feb 2026 00:00:00 GMT\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+        let _ = stream.write_all(body);
+    });
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let (episode, path, download) = seed_restarting_download(&config, &store, &server.url, &old);
+    let part = path.with_extension("part");
+    *part_slot.lock().unwrap() = part.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    assert!(podcast::download(&config, &episode.id, &stop).is_err());
+    std::fs::remove_dir(&part).unwrap();
+    std::fs::rename(part.with_extension("saved"), &part).unwrap();
+    assert_eq!(std::fs::read(&part).unwrap(), old);
+    let failed = store.podcast_download(&episode.id).unwrap().unwrap();
+    assert_eq!(failed.state, "failed");
+    assert!(failed.error.is_some());
+    assert_eq!(failed.etag, download.etag);
+    assert_eq!(failed.modified, download.modified);
+    assert_eq!(failed.bytes, download.bytes);
+    assert_eq!(
+        podcast::download(&config, &episode.id, &stop)
+            .unwrap()
+            .state,
+        "complete"
+    );
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+}
+
+#[test]
+fn download_restart_recovers_if_metadata_publication_rolls_back() {
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let expected = bytes.clone();
+    let old = vec![0; bytes.len() / 2];
+    let server = support::Server::new(move |request, stream| {
+        assert!(!request.to_ascii_lowercase().contains("if-range: \"new\""));
+        write!(stream, "HTTP/1.1 200 OK\r\nETag: \"new\"\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len()).unwrap();
+        let _ = stream.write_all(&bytes);
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let db = config.data_dir.join("radio.db");
+    let store = Store::open(&db).unwrap();
+    let (episode, path, download) = seed_restarting_download(&config, &store, &server.url, &old);
+    let connection = rusqlite::Connection::open(db).unwrap();
+    // Interrupt both metadata publication and failure reporting. This leaves
+    // the same disk/database boundary as a crash before the transaction commits.
+    connection
+        .execute_batch(
+            r#"CREATE TRIGGER reject_new_download_validators
+        BEFORE UPDATE ON podcast_downloads WHEN json_extract(NEW.json,'$.etag')='"new"'
+        BEGIN SELECT RAISE(ABORT,'metadata publication interrupted'); END;"#,
+        )
+        .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    assert!(podcast::download(&config, &episode.id, &stop).is_err());
+    assert_eq!(
+        std::fs::metadata(path.with_extension("part"))
+            .unwrap()
+            .len(),
+        0
+    );
+    let interrupted = store.podcast_download(&episode.id).unwrap().unwrap();
+    assert_eq!(interrupted.etag, download.etag);
+    assert_eq!(interrupted.modified, download.modified);
+    assert_eq!(interrupted.state, "downloading");
+    connection
+        .execute_batch("DROP TRIGGER reject_new_download_validators")
+        .unwrap();
+    podcast::download(&config, &episode.id, &stop).unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+}
+
+#[test]
+fn download_restart_recovers_after_sigkill_following_validator_publication() {
+    use std::process::{Command, Stdio};
+    struct DownloadProcess(std::process::Child);
+    impl Drop for DownloadProcess {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let bytes = support::fixture("libmp3lame", "mp3");
+    let expected = bytes.clone();
+    let old = vec![0; bytes.len() / 2];
+    let first = AtomicBool::new(true);
+    let (release, go) = std::sync::mpsc::channel();
+    let go = std::sync::Mutex::new(go);
+    let server = support::Server::new(move |request, stream| {
+        if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            assert!(request.to_ascii_lowercase().contains("if-range: \"old\""));
+            write!(stream, "HTTP/1.1 200 OK\r\nETag: \"new\"\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len()).unwrap();
+            stream.flush().unwrap();
+            // Keep the body unavailable until the downloading process is dead.
+            let _ = go.lock().unwrap().recv_timeout(Duration::from_secs(5));
+        } else {
+            assert!(!request.to_ascii_lowercase().contains("range:"));
+            support::response(stream, 200, "audio/mpeg", &bytes);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let (episode, path, _) = seed_restarting_download(&config, &store, &server.url, &old);
+    let mut child = DownloadProcess(
+        Command::new(env!("CARGO_BIN_EXE_radio"))
+            .arg("--data-dir")
+            .arg(&config.data_dir)
+            .arg("--config")
+            .arg(config.data_dir.join("test-default.toml"))
+            .args(["podcast", "download", &episode.id])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let download = store.podcast_download(&episode.id).unwrap().unwrap();
+        if download.etag.as_deref() == Some("\"new\"") {
+            assert_eq!(download.bytes, 0);
+            assert_eq!(
+                std::fs::metadata(path.with_extension("part"))
+                    .unwrap()
+                    .len(),
+                0
+            );
+            break;
+        }
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "download exited before initialization"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "new validators were never published"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    child.0.kill().unwrap();
+    assert!(!child.0.wait().unwrap().success());
+    release.send(()).unwrap();
+    let finished =
+        podcast::download(&config, &episode.id, &Arc::new(AtomicBool::new(false))).unwrap();
+    assert_eq!(finished.state, "complete");
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+}
+
 #[test]
 fn download_rejects_a_valid_partial_range_until_the_full_resource_is_present() {
     let bytes = support::fixture("libmp3lame", "mp3");
