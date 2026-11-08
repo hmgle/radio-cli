@@ -1193,15 +1193,11 @@ mod tests {
                     .store()
                     .podcast_subscribe(&preview, &preview.feed.url)
                     .unwrap();
-                let id = engine
-                    .store()
-                    .podcast_episodes(&feed.id)
-                    .unwrap()
-                    .remove(0)
-                    .id;
+                let episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+                let id = episode.id.clone();
                 engine
                     .store()
-                    .podcast_progress(&id, 15000, Some(20000), false)
+                    .podcast_progress(&episode, 15000, Some(20000), false)
                     .unwrap();
                 engine.enable_background_media().unwrap();
                 if active {

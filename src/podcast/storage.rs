@@ -239,14 +239,23 @@ impl Store {
         })
         .collect()
     }
+    /// Save progress only while the supplied media snapshot is still current.
     pub fn podcast_progress(
         &self,
-        id: &str,
+        episode: &Episode,
         pos: u64,
         duration: Option<u64>,
         completed: bool,
     ) -> Result<()> {
-        Self::write_progress(&self.conn, id, pos, duration, completed)
+        self.podcast_save_progress(
+            &episode.id,
+            &EpisodeProgress {
+                media: episode.media(),
+                position_ms: pos,
+                observed_duration_ms: duration,
+                completed,
+            },
+        )
     }
     pub(crate) fn podcast_save_progress(&self, id: &str, progress: &EpisodeProgress) -> Result<()> {
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
@@ -267,26 +276,11 @@ impl Store {
         let Some(json) = json else { return Ok(()) };
         let episode: Episode = serde_json::from_str(&json)?;
         // The write transaction also excludes refreshes between this check and
-        // the UPSERT. An old playback must not undo a refresh's progress reset.
+        // the UPSERT. An old media snapshot must not undo a refresh's reset.
         if episode.media() != progress.media {
             return Ok(());
         }
-        Self::write_progress(
-            tx,
-            id,
-            progress.position_ms,
-            progress.observed_duration_ms,
-            progress.completed,
-        )
-    }
-    fn write_progress(
-        conn: &rusqlite::Connection,
-        id: &str,
-        pos: u64,
-        duration: Option<u64>,
-        completed: bool,
-    ) -> Result<()> {
-        conn.execute("INSERT INTO podcast_progress VALUES (?1,?2,?3,?4,?5) ON CONFLICT(episode_id) DO UPDATE SET position_ms=excluded.position_ms,duration_ms=COALESCE(excluded.duration_ms,duration_ms),completed=excluded.completed,updated_at=excluded.updated_at",params![id,pos.min(i64::MAX as u64),duration.map(|d|d.min(i64::MAX as u64)),completed,chrono::Utc::now().to_rfc3339()])?;
+        tx.execute("INSERT INTO podcast_progress VALUES (?1,?2,?3,?4,?5) ON CONFLICT(episode_id) DO UPDATE SET position_ms=excluded.position_ms,duration_ms=COALESCE(excluded.duration_ms,duration_ms),completed=excluded.completed,updated_at=excluded.updated_at",params![id,progress.position_ms.min(i64::MAX as u64),progress.observed_duration_ms.map(|d|d.min(i64::MAX as u64)),progress.completed,chrono::Utc::now().to_rfc3339()])?;
         Ok(())
     }
     pub fn podcast_played(&self, id: &str) -> Result<()> {
@@ -467,6 +461,101 @@ mod tests {
             .unwrap();
         let episodes = store.podcast_episodes(&feed.id).unwrap();
         (dir, config, episodes)
+    }
+
+    #[test]
+    fn cli_marks_cannot_overwrite_progress_after_a_concurrent_media_refresh() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
+        use std::{sync::mpsc, time::Duration};
+
+        for state in ["played", "unplayed"] {
+            for changed in ["duration", "bytes", "url", "title", "unchanged"] {
+                let dir = tempfile::tempdir().unwrap();
+                let config = crate::test_support::config(dir.path());
+                let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                let mut preview = Preview {
+                    feed: Feed {
+                        url: "https://example.test/rss".into(),
+                        ..Default::default()
+                    },
+                    episodes: vec![Episode {
+                        guid: Some("episode".into()),
+                        url: "https://example.test/audio".into(),
+                        duration_ms: Some(20000),
+                        bytes: Some(100),
+                        ..Default::default()
+                    }],
+                };
+                let feed = store
+                    .podcast_subscribe(&preview, &preview.feed.url)
+                    .unwrap();
+                let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+                store
+                    .podcast_progress(&episode, 15000, Some(20000), true)
+                    .unwrap();
+
+                let (ready, wait) = mpsc::channel();
+                let (release, go) = mpsc::channel();
+                let id = episode.id.clone();
+                let worker = std::thread::spawn(move || {
+                    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                    let mut synchronized = false;
+                    // Mark has read its media snapshot before requesting the
+                    // write transaction. The INSERT hook catches the old path
+                    // which bypassed that transaction and its media guard.
+                    store.conn.authorizer(Some(move |context: AuthContext<'_>| {
+                        if !synchronized
+                            && matches!(
+                                context.action,
+                                AuthAction::Transaction {
+                                    operation: TransactionOperation::Begin
+                                } | AuthAction::Insert {
+                                    table_name: "podcast_progress"
+                                }
+                            )
+                        {
+                            synchronized = true;
+                            ready.send(()).unwrap();
+                            go.recv_timeout(Duration::from_secs(3)).unwrap();
+                        }
+                        Authorization::Allow
+                    }));
+                    manage(
+                        &config,
+                        &store,
+                        Action::Mark {
+                            id,
+                            state: state.into(),
+                        },
+                        &Arc::new(AtomicBool::new(false)),
+                    )
+                    .unwrap()
+                });
+                wait.recv_timeout(Duration::from_secs(3)).unwrap();
+                match changed {
+                    "duration" => preview.episodes[0].duration_ms = Some(40000),
+                    "bytes" => preview.episodes[0].bytes = Some(200),
+                    "url" => preview.episodes[0].url = "https://example.test/new-audio".into(),
+                    "title" => preview.episodes[0].title = "Updated title".into(),
+                    "unchanged" => {}
+                    _ => unreachable!(),
+                }
+                store.podcast_refresh_merge(&feed, Some(preview)).unwrap();
+                let mut expected = store.podcast_episode(&episode.id).unwrap();
+                if matches!(changed, "title" | "unchanged") {
+                    expected.completed = state == "played";
+                    expected.position_ms = if expected.completed { 20000 } else { 0 };
+                }
+                release.send(()).unwrap();
+                let result = worker.join().unwrap();
+                assert_eq!(
+                    store.podcast_episode(&episode.id).unwrap(),
+                    expected,
+                    "{state}: {changed}"
+                );
+                assert_eq!(result, serde_json::to_value(&expected).unwrap());
+            }
+        }
     }
 
     #[test]

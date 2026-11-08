@@ -46,7 +46,7 @@ fn episode_search_filters_before_sql_pagination_and_joins_progress() {
     let all = store.podcast_episodes(&feed.id).unwrap();
     let target = &all[100];
     store
-        .podcast_progress(&target.id, 12345, Some(60000), true)
+        .podcast_progress(target, 12345, Some(60000), true)
         .unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let page = radio_cli::cli::Page {
@@ -146,7 +146,7 @@ fn subscriptions_merge_without_losing_identity_progress_or_missing_episodes() {
     let f = store.podcast_subscribe(&p, &p.feed.url).unwrap();
     let e = store.podcast_episodes(&f.id).unwrap().remove(0);
     store
-        .podcast_progress(&e.id, 12345, Some(60000), true)
+        .podcast_progress(&e, 12345, Some(60000), true)
         .unwrap();
     p.episodes[0].url = "https://cdn.test/replacement".into();
     store.podcast_refresh_merge(&f, Some(p.clone())).unwrap();
@@ -503,7 +503,7 @@ fn m4a_resume_seek_pause_and_queue_completion_use_episode_progress() {
     let e = engine.store().podcast_episodes(&f.id).unwrap().remove(0);
     engine
         .store()
-        .podcast_progress(&e.id, 1200, None, false)
+        .podcast_progress(&e, 1200, None, false)
         .unwrap();
     engine
         .store()
@@ -673,7 +673,7 @@ fn unseekable_resume_preserves_position_and_waits_for_explicit_restart() {
     let e = engine.store().podcast_episodes(&f.id).unwrap().remove(0);
     engine
         .store()
-        .podcast_progress(&e.id, 15000, None, false)
+        .podcast_progress(&e, 15000, None, false)
         .unwrap();
     engine.play_episode(&e.id, false, None).unwrap();
     let deadline = Instant::now() + Duration::from_millis(1500);
@@ -719,7 +719,7 @@ fn replay_after_media_refresh_uses_the_preserved_database_position() {
         let episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
         engine
             .store()
-            .podcast_progress(&episode.id, 15000, Some(20000), false)
+            .podcast_progress(&episode, 15000, Some(20000), false)
             .unwrap();
         engine.play_episode(&episode.id, false, None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -798,8 +798,9 @@ fn missing_guids_deduplicate_by_url_and_stale_refresh_cannot_resubscribe() {
     p.episodes.push(p.episodes[0].clone());
     let f = s.podcast_subscribe(&p, &p.feed.url).unwrap();
     assert_eq!(s.podcast_episodes(&f.id).unwrap().len(), 1);
-    let id = s.podcast_episodes(&f.id).unwrap()[0].id.clone();
-    s.podcast_progress(&id, 321, Some(1000), true).unwrap();
+    let episode = s.podcast_episodes(&f.id).unwrap().remove(0);
+    let id = episode.id.clone();
+    s.podcast_progress(&episode, 321, Some(1000), true).unwrap();
     p.episodes[0].guid = Some("new-identity".into());
     s.podcast_refresh_merge(&f, Some(p.clone())).unwrap();
     assert_eq!(s.podcast_episodes(&f.id).unwrap().len(), 2);

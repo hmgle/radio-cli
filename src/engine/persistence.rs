@@ -273,7 +273,7 @@ mod tests {
             engine
                 .store()
                 .podcast_progress(
-                    &id,
+                    &episode,
                     15000,
                     Some(20000),
                     matches!(changed, "duration" | "bytes"),

@@ -243,7 +243,7 @@ pub fn manage(
         Action::Mark { id, state } => {
             let e = store.podcast_episode(&id)?;
             store.podcast_progress(
-                &id,
+                &e,
                 if state == "played" {
                     e.observed_duration_ms.unwrap_or(e.position_ms)
                 } else {
