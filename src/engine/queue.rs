@@ -18,6 +18,7 @@ struct Completion {
     advance: bool,
     retry_at: Instant,
     reported: bool,
+    removed: bool,
 }
 
 pub(super) struct Finished {
@@ -29,7 +30,7 @@ pub(super) struct Finished {
 #[derive(Default)]
 pub(super) struct Completions {
     pending: VecDeque<Completion>,
-    task: Option<Background<Option<Episode>>>,
+    task: Option<Background<(Option<Episode>, u64)>>,
 }
 
 impl Completions {
@@ -40,6 +41,7 @@ impl Completions {
             advance,
             retry_at: Instant::now(),
             reported: false,
+            removed: false,
         });
     }
 
@@ -51,17 +53,28 @@ impl Completions {
         self.pending.iter().any(|p| p.generation == generation)
     }
 
-    pub fn poll(&mut self, path: &Path, lock: Arc<MediaLock>) -> Result<Option<Finished>> {
+    pub fn poll(
+        &mut self,
+        path: &Path,
+        lock: Arc<MediaLock>,
+        store: &Store,
+    ) -> Result<Option<Finished>> {
         if let Some(result) = self.task.as_ref().and_then(|task| task.poll()) {
             self.task = None;
             match result {
-                Ok(next) => {
-                    let completed = self.pending.pop_front().unwrap();
-                    return Ok(Some(Finished {
-                        generation: completed.generation,
-                        advance: completed.advance,
-                        next,
-                    }));
+                Ok((next, revision)) => {
+                    let pending = self.pending.front_mut().unwrap();
+                    pending.removed = true;
+                    // Queue edits can commit after the completion task finishes.
+                    // Refresh only the candidate; removal must not run twice.
+                    if store.podcast_queue_revision()? == revision {
+                        let completed = self.pending.pop_front().unwrap();
+                        return Ok(Some(Finished {
+                            generation: completed.generation,
+                            advance: completed.advance,
+                            next,
+                        }));
+                    }
                 }
                 Err(error) => {
                     let busy = error.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
@@ -88,13 +101,16 @@ impl Completions {
         {
             let path = path.to_owned();
             let id = pending.id.clone();
+            let removed = pending.removed;
             self.task = Some(Background::start("radio-podcast-complete", move |_| {
                 let _lock = lock;
                 let store = Store::open_writer(&path)?;
-                Ok(store
-                    .podcast_queue_update(QueueAction::Remove { id })?
-                    .into_iter()
-                    .next())
+                let (items, revision) = if removed {
+                    store.podcast_queue_snapshot()?
+                } else {
+                    store.podcast_queue_update_revision(QueueAction::Remove { id })?
+                };
+                Ok((items.into_iter().next(), revision))
             })?);
         }
         Ok(None)

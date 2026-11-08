@@ -828,6 +828,7 @@ impl PlaybackController {
         if let Some(completed) = self.queue_completions.poll(
             &session.config.data_dir.join("radio.db"),
             session._lock.clone(),
+            &session.store,
         )? && completed.generation == self.generation
             && completed.advance
             && self.auto_next

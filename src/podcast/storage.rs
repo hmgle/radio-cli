@@ -333,8 +333,24 @@ impl Store {
         Ok(())
     }
     pub fn podcast_queue_update(&self, action: QueueAction) -> Result<Vec<Episode>> {
+        self.podcast_queue_update_revision(action)
+            .map(|(items, _)| items)
+    }
+    pub(crate) fn podcast_queue_revision(&self) -> Result<u64> {
+        Ok(self
+            .meta("podcast_queue_revision")?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
+    }
+    pub(crate) fn podcast_queue_snapshot(&self) -> Result<(Vec<Episode>, u64)> {
+        self.read_snapshot(|store| Ok((store.podcast_queue()?, store.podcast_queue_revision()?)))
+    }
+    pub(crate) fn podcast_queue_update_revision(
+        &self,
+        action: QueueAction,
+    ) -> Result<(Vec<Episode>, u64)> {
         if matches!(action, QueueAction::List) {
-            return self.read_snapshot(|store| store.podcast_queue());
+            return self.podcast_queue_snapshot();
         }
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         let mut ids = self
@@ -363,8 +379,9 @@ impl Store {
         }
         self.podcast_queue_write(&ids)?;
         let items = self.podcast_queue()?;
+        let revision = self.podcast_queue_revision()?;
         tx.commit()?;
-        Ok(items)
+        Ok((items, revision))
     }
     fn podcast_queue_write(&self, ids: &[String]) -> Result<()> {
         self.conn.execute("DELETE FROM podcast_queue", [])?;
@@ -374,6 +391,11 @@ impl Store {
                 params![id, i],
             )?;
         }
+        self.conn.execute(
+            "INSERT INTO meta(key,value) VALUES ('podcast_queue_revision','1')
+            ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
+            [],
+        )?;
         Ok(())
     }
 }

@@ -827,6 +827,104 @@ mod tests {
     use super::*;
 
     #[test]
+    fn queue_completion_refreshes_candidates_after_concurrent_edits() {
+        use crate::podcast::{Episode, Feed, Preview, QueueAction};
+        for edit in ["clear", "remove", "move", "readd"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            config.settings.mpv = crate::test_support::fake_mpv(dir.path())
+                .to_string_lossy()
+                .into_owned();
+            let path = config.data_dir.join("radio.db");
+            let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            let preview = Preview {
+                feed: Feed {
+                    url: "https://example.test/feed".into(),
+                    ..Default::default()
+                },
+                episodes: ["episode-eof", "second", "third"]
+                    .into_iter()
+                    .map(|name| Episode {
+                        guid: Some(name.into()),
+                        url: format!("https://example.test/{name}"),
+                        ..Default::default()
+                    })
+                    .collect(),
+            };
+            let feed = engine
+                .store()
+                .podcast_subscribe(&preview, &preview.feed.url)
+                .unwrap();
+            let episodes = engine.store().podcast_episodes(&feed.id).unwrap();
+            let ids: Vec<_> = ["episode-eof", "second", "third"]
+                .into_iter()
+                .map(|name| {
+                    episodes
+                        .iter()
+                        .find(|e| e.guid.as_deref() == Some(name))
+                        .unwrap()
+                        .id
+                        .clone()
+                })
+                .collect();
+            engine.store().podcast_queue_set(&ids).unwrap();
+            engine.enable_background_media().unwrap();
+            engine.play_podcast_queue(true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while engine.playback.queue_completions.is_empty() {
+                engine.tick().unwrap();
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // Launch completion, then stop polling until its transaction commits.
+            engine.poll_background().unwrap();
+            let external = Store::open(&path).unwrap();
+            while external.podcast_queue().unwrap().len() != 2 {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let action = match edit {
+                "clear" => QueueAction::Clear,
+                "remove" => QueueAction::Remove { id: ids[1].clone() },
+                "move" => QueueAction::Move {
+                    id: ids[2].clone(),
+                    position: 1,
+                },
+                "readd" => QueueAction::Add { id: ids[0].clone() },
+                _ => unreachable!(),
+            };
+            external.podcast_queue_update(action).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !engine.playback.queue_completions.is_empty() {
+                engine.tick().unwrap();
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            match edit {
+                "clear" => {
+                    assert!(!engine.playback_active());
+                    assert_eq!(engine.status().playback_state, PlaybackState::Idle);
+                }
+                "remove" | "move" => {
+                    assert_eq!(engine.status().episode.as_ref().unwrap().id, ids[2])
+                }
+                "readd" => {
+                    assert_eq!(engine.status().episode.as_ref().unwrap().id, ids[1]);
+                    assert!(
+                        external
+                            .podcast_queue()
+                            .unwrap()
+                            .iter()
+                            .any(|e| e.id == ids[0])
+                    );
+                }
+                _ => unreachable!(),
+            }
+            engine.shutdown().unwrap();
+        }
+    }
+
+    #[test]
     fn queue_completion_retries_without_blocking_or_overriding_controls() {
         use crate::podcast::{Episode, Feed, Preview};
         for control in ["advance", "stop", "switch", "off", "shutdown"] {
