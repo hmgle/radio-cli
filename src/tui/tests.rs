@@ -7021,6 +7021,55 @@ fn podcast_list_commands_clear_episode_search_context() {
 }
 
 #[test]
+fn podcast_browsing_retries_after_the_command_queue_fills() {
+    for source in [
+        Source::Podcasts,
+        Source::PodcastDownloads,
+        Source::PodcastQueue,
+    ] {
+        let mut app = App::default();
+        app.source = source;
+        app.podcast_feed = Some("feed-id".into());
+        app.filter.query = "current query".into();
+        app.filter.offset = 100;
+        let (sender, receiver) = command::channel(1);
+        sender.send(Command::Refresh).unwrap();
+        app.flush_search(&sender);
+        assert!(app.search_due.is_some(), "{source:?}");
+        assert!(matches!(receiver.try_recv(), Ok(Command::Refresh)));
+        // The regular TUI timer retries the request when capacity returns.
+        app.search_due = Some(Instant::now());
+        if app.search_due.is_some_and(|due| Instant::now() >= due) {
+            app.flush_search(&sender);
+        }
+        let Command::PodcastRequest { action, .. } = receiver.try_recv().unwrap() else {
+            panic!("expected browse request");
+        };
+        match (source, action) {
+            (Source::Podcasts, crate::podcast::Action::Episodes { id, query, page }) => {
+                assert_eq!(id, "feed-id");
+                assert_eq!(query, "current query");
+                assert_eq!(page.offset, 100);
+            }
+            (
+                Source::PodcastDownloads,
+                crate::podcast::Action::Downloads {
+                    action: crate::podcast::DownloadAction::List,
+                },
+            )
+            | (
+                Source::PodcastQueue,
+                crate::podcast::Action::Queue {
+                    action: crate::podcast::QueueAction::List,
+                },
+            ) => {}
+            _ => panic!("wrong browse action"),
+        }
+        assert!(app.search_due.is_none());
+    }
+}
+
+#[test]
 fn podcast_search_is_sent_with_the_requested_page() {
     let mut app = App::default();
     app.source = Source::Podcasts;

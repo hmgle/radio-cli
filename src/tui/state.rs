@@ -1035,28 +1035,20 @@ impl App {
             return;
         }
         self.pending_jump = None;
-        if self.source.is_podcast() {
-            self.send(
-                sender,
-                Command::Podcast(super::podcast::browse(
-                    self.source,
-                    &self.podcast_feed,
-                    &self.filter.query,
-                    self.filter.offset,
-                    self.filter.limit,
-                )),
-            );
-            self.search_due = None;
-            return;
-        }
-        if self.send(
-            sender,
-            if self.source == Source::Recordings {
-                Command::Recordings(self.filter.clone())
-            } else {
-                Command::Search(self.filter.clone())
-            },
-        ) {
+        let command = if self.source.is_podcast() {
+            Command::Podcast(super::podcast::browse(
+                self.source,
+                &self.podcast_feed,
+                &self.filter.query,
+                self.filter.offset,
+                self.filter.limit,
+            ))
+        } else if self.source == Source::Recordings {
+            Command::Recordings(self.filter.clone())
+        } else {
+            Command::Search(self.filter.clone())
+        };
+        if self.send(sender, command) {
             self.search_due = None;
         } else {
             self.search_due = Some(Instant::now() + Duration::from_millis(200));
