@@ -439,23 +439,30 @@ impl Engine {
             Action::Seek { time } => self.seek_episode(crate::podcast::parse_time(&time)?),
             Action::Speed { rate } => self.podcast_speed(rate),
             Action::Mark { id, state } => {
-                let e = self.session.store.podcast_episode(&id)?;
+                let mut e = self.session.store.podcast_episode(&id)?;
                 if self.playback.episode.as_ref().is_some_and(|e| e.id == id) {
                     self.stop_playback()?;
                     self.playback.episode = None;
                 }
-                self.playback.progress.remove(&id);
+                e.completed = state == "played";
+                e.position_ms = if e.completed {
+                    e.observed_duration_ms.unwrap_or(e.position_ms)
+                } else {
+                    0
+                };
+                self.playback.progress.insert(id.clone(), e.clone());
+                if self
+                    .session
+                    .status
+                    .episode
+                    .as_ref()
+                    .is_some_and(|p| p.id == id)
+                {
+                    self.session.status.episode = Some(e.clone());
+                }
                 self.session.save_preference(
                     &format!("podcast_progress:{id}"),
-                    &serde_json::to_string(&(
-                        if state == "played" {
-                            e.observed_duration_ms.unwrap_or(e.position_ms)
-                        } else {
-                            0
-                        },
-                        e.observed_duration_ms,
-                        state == "played",
-                    ))?,
+                    &serde_json::to_string(&(e.position_ms, e.observed_duration_ms, e.completed))?,
                 )
             }
             Action::AutoNext { state } => self.podcast_auto_next(state == "on"),
@@ -798,6 +805,67 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn podcast_marks_apply_before_the_background_write_finishes() {
+        use crate::podcast::{Action, Episode, Feed, Preview};
+        for active in [false, true] {
+            for state in ["unplayed", "played"] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut config = crate::test_support::config(dir.path());
+                config.settings.mpv = crate::test_support::fake_mpv(dir.path())
+                    .to_string_lossy()
+                    .into_owned();
+                let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+                let preview = Preview {
+                    feed: Feed {
+                        url: "https://example.test/feed".into(),
+                        ..Default::default()
+                    },
+                    episodes: vec![Episode {
+                        url: "https://example.test/audio".into(),
+                        ..Default::default()
+                    }],
+                };
+                let feed = engine
+                    .store()
+                    .podcast_subscribe(&preview, &preview.feed.url)
+                    .unwrap();
+                let id = engine
+                    .store()
+                    .podcast_episodes(&feed.id)
+                    .unwrap()
+                    .remove(0)
+                    .id;
+                engine
+                    .store()
+                    .podcast_progress(&id, 15000, Some(20000), false)
+                    .unwrap();
+                engine.enable_background_media().unwrap();
+                if active {
+                    engine.play_episode(&id, false, None).unwrap();
+                }
+                let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+                connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+                engine
+                    .podcast_action(Action::Mark {
+                        id: id.clone(),
+                        state: state.into(),
+                    })
+                    .unwrap();
+                let stored = engine.store().podcast_episode(&id).unwrap();
+                assert_eq!(stored.position_ms, 15000);
+                assert!(!stored.completed);
+                engine.play_episode(&id, false, None).unwrap();
+                let playing = engine.status().episode.as_ref().unwrap();
+                assert_eq!(playing.position_ms, 0, "{state}, active={active}");
+                assert!(!playing.completed);
+                connection.execute_batch("ROLLBACK").unwrap();
+                engine.shutdown().unwrap();
+                assert_eq!(engine.store().podcast_episode(&id).unwrap().position_ms, 0);
+            }
+        }
+    }
 
     #[test]
     fn replay_preserves_uncommitted_progress_for_unchanged_media() {
