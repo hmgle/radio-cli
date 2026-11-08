@@ -145,6 +145,7 @@ struct Node {
     text: String,
     base: Url,
     html: bool,
+    updated: Option<String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -274,6 +275,7 @@ pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
                         || attrs
                             .get("type")
                             .is_some_and(|t| matches!(t.as_str(), "html" | "text/html")),
+                    updated: None,
                 });
                 if !empty {
                     continue;
@@ -338,11 +340,16 @@ fn finish(
                 "title" => e.title = display_text(),
                 "guid" | "id" if !text.is_empty() => e.guid = Some(text.into()),
                 "description" | "summary" | "content" => e.description = display_text(),
-                "pubDate" | "published" | "updated" => {
+                "pubDate" | "published" => {
                     e.published = chrono::DateTime::parse_from_rfc2822(text)
                         .or_else(|_| chrono::DateTime::parse_from_rfc3339(text))
                         .ok()
                         .map(|d| d.to_utc().to_rfc3339())
+                }
+                "updated" => {
+                    stack.last_mut().unwrap().updated = chrono::DateTime::parse_from_rfc3339(text)
+                        .ok()
+                        .map(|d| d.to_utc().to_rfc3339());
                 }
                 "link" if !text.is_empty() => e.website = resolved(),
                 "duration" => e.duration_ms = duration(text),
@@ -350,7 +357,8 @@ fn finish(
             }
         }
         if parent_scope == Scope::Feed && matches!(n.name.as_str(), "item" | "entry") {
-            let e = current.take().unwrap();
+            let mut e = current.take().unwrap();
+            e.published = e.published.or(n.updated);
             if !e.url.is_empty() {
                 episodes.push(e);
             }
@@ -641,6 +649,64 @@ mod tests {
         let p=parse_xml(r#"<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://media.test/"><title>Atom</title><entry><id>x</id><title>one</title><link rel="enclosure" href="one.mp3" type="audio/mpeg"/></entry></feed>"#).unwrap();
         assert_eq!(p.episodes[0].url, "https://media.test/one.mp3");
         assert_eq!(p.episodes[0].duration_ms, None);
+    }
+    #[test]
+    fn atom_publication_dates_prefer_published_independently_of_tag_order() {
+        let published = "<published>2026-01-01T00:00:00Z</published>";
+        let updated = "<updated>2026-03-01T00:00:00Z</updated>";
+        for (dates, expected) in [
+            (format!("{published}{updated}"), "2026-01-01T00:00:00+00:00"),
+            (format!("{updated}{published}"), "2026-01-01T00:00:00+00:00"),
+            (published.into(), "2026-01-01T00:00:00+00:00"),
+            (updated.into(), "2026-03-01T00:00:00+00:00"),
+            (
+                format!("{updated}<published>invalid</published>"),
+                "2026-03-01T00:00:00+00:00",
+            ),
+            (
+                format!("<published>invalid</published>{updated}"),
+                "2026-03-01T00:00:00+00:00",
+            ),
+            (
+                format!("{published}<updated>invalid</updated>"),
+                "2026-01-01T00:00:00+00:00",
+            ),
+        ] {
+            let p = parse_xml(&format!(
+                r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Show</title>
+                <entry><id>one</id><title>One</title>{dates}<link rel="enclosure" href="one.mp3"/></entry>
+                <entry><id>two</id><title>Two</title><published>2026-02-01T00:00:00Z</published>
+                <link rel="enclosure" href="two.mp3"/></entry></feed>"#
+            )).unwrap();
+            assert_eq!(
+                p.episodes[0].published.as_deref(),
+                Some(expected),
+                "{dates}"
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::store::Store::open(&dir.path().join("radio.db")).unwrap();
+            let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+            let (page, total) = store
+                .podcast_episodes_page(
+                    &feed.id,
+                    "",
+                    &crate::cli::Page {
+                        offset: 0,
+                        limit: 1,
+                        all: false,
+                    },
+                )
+                .unwrap();
+            assert_eq!(total, 2);
+            assert_eq!(
+                page[0].guid.as_deref(),
+                Some(if expected.contains("01-01") {
+                    "two"
+                } else {
+                    "one"
+                })
+            );
+        }
     }
     #[test]
     fn atom_text_constructs_preserve_literal_markup() {
