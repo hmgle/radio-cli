@@ -57,6 +57,7 @@ git archive HEAD README.md README.zh-CN.md LICENSE CHANGELOG.md CONTRIBUTING.md 
     docs/configuration.md docs/configuration.zh-CN.md \
     docs/installation.md docs/installation.zh-CN.md \
     docs/recording.md docs/recording.zh-CN.md \
+    docs/podcasts.md docs/podcasts.zh-CN.md \
     docs/troubleshooting.md docs/troubleshooting.zh-CN.md \
     docs/json-contract.md docs/json-contract.zh-CN.md \
     locales/LICENSE.unicode | tar -x -C "$release_dir"
