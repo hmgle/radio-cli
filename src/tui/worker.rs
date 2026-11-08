@@ -60,7 +60,8 @@ pub(super) struct View {
     // Every browse has an identity, including results that are not polled.
     podcast_pending: Option<(Option<u64>, crate::podcast::Action)>,
     pub podcast_task: String,
-    podcast_poll: Option<(crate::podcast::Action, Instant)>,
+    // Retries retain the submitted identity, even before the first publication.
+    podcast_poll: Option<(crate::podcast::Action, Option<u64>, Instant)>,
     pub subtitles: crate::speech::Snapshot,
     pub artwork_station: Option<String>,
     pub track_artwork: Option<crate::engine::artwork::TrackArtwork>,
@@ -585,7 +586,7 @@ pub(super) fn execute(
                         }
                 );
                 view.lock().unwrap().podcast_poll =
-                    periodic.then(|| (action.clone(), Instant::now()));
+                    periodic.then(|| (action.clone(), podcast_request, Instant::now()));
                 let source = match &action {
                     Action::Downloads { .. } => "podcast_downloads",
                     Action::Queue { .. } => "podcast_queue",
@@ -930,10 +931,10 @@ pub(super) fn run(
             let repeat = {
                 let mut data = view.lock().unwrap();
                 if !data.podcast_browse {
-                    data.podcast_poll.as_mut().and_then(|(a, at)| {
+                    data.podcast_poll.as_mut().and_then(|(a, request, at)| {
                         if at.elapsed() >= Duration::from_secs(3) {
                             *at = Instant::now();
-                            Some(a.clone())
+                            Some((*request, a.clone()))
                         } else {
                             None
                         }
@@ -942,11 +943,11 @@ pub(super) fn run(
                     None
                 }
             };
-            if let Some(action) = repeat
+            if let Some((request, action)) = repeat
                 && engine.podcast_action(action.clone()).is_ok()
             {
                 let mut data = view.lock().unwrap();
-                data.podcast_pending = Some((data.podcast_request, action));
+                data.podcast_pending = Some((request, action));
                 data.podcast_browse = true;
             }
             if let Some(result) = engine.poll_podcast() {
@@ -1040,6 +1041,147 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_podcast_browsing_keeps_its_request_identity_on_retry() {
+        use super::super::{
+            command,
+            state::{App, Focus, Source},
+        };
+        use crate::podcast::{Episode, Feed, Preview};
+        use crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        for previous_success in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            config.settings.auto_sync_days = 0;
+            config.settings.podcasts.refresh_hours = 0;
+            let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+            store
+                .upsert(&Station {
+                    stationuuid: uuid::Uuid::new_v4().to_string(),
+                    name: "Radio".into(),
+                    active: true,
+                    ..Default::default()
+                })
+                .unwrap();
+            let preview = Preview {
+                feed: Feed {
+                    url: "https://example.test/feed".into(),
+                    ..Default::default()
+                },
+                episodes: (0..2)
+                    .map(|i| Episode {
+                        guid: Some(i.to_string()),
+                        title: format!("Episode {i}"),
+                        url: format!("https://example.test/{i}.mp3"),
+                        ..Default::default()
+                    })
+                    .collect(),
+            };
+            let feed = store
+                .podcast_subscribe(&preview, &preview.feed.url)
+                .unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let engine = Engine::new(config, stop.clone()).unwrap();
+            let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
+            let (sender, receiver) = command::channel(8);
+            let output = view.clone();
+            let flag = stop.clone();
+            let worker =
+                thread::spawn(move || run(engine, receiver, output, flag, Filter::default()));
+            let mut app = App::default();
+            app.source = Source::Podcasts;
+            app.focus = Focus::List;
+            app.podcast_feed = Some(feed.id);
+            if previous_success {
+                app.flush_search(&sender);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while view.lock().unwrap().podcast_request.is_none() {
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+            let previous = view.lock().unwrap().podcast_request;
+            // Force a query error on the real podcast worker connection, then
+            // repair the fixture before the scheduled retry can execute.
+            let episodes = store
+                .podcast_episodes(&app.podcast_feed.clone().unwrap())
+                .unwrap();
+            store
+                .conn
+                .execute("UPDATE podcast_episodes SET json='invalid json'", [])
+                .unwrap();
+            app.filter.query = "Episode".into();
+            app.flush_search(&sender);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let data = view.lock().unwrap();
+                if data.operation_error_id > 0 && !data.podcast_browse {
+                    assert_eq!(data.podcast_request, previous);
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                drop(data);
+                thread::sleep(Duration::from_millis(5));
+            }
+            for episode in episodes {
+                store
+                    .conn
+                    .execute(
+                        "UPDATE podcast_episodes SET json=?2 WHERE id=?1",
+                        rusqlite::params![episode.id, serde_json::to_string(&episode).unwrap()],
+                    )
+                    .unwrap();
+            }
+            {
+                let mut data = view.lock().unwrap();
+                data.podcast_poll.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(3);
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let recovered = loop {
+                let data = view.lock().unwrap();
+                if !data.podcast_browse && data.podcast_items.len() == 2 {
+                    break data.clone();
+                }
+                assert!(Instant::now() < deadline);
+                drop(data);
+                thread::sleep(Duration::from_millis(5));
+            };
+            stop.store(true, Ordering::Relaxed);
+            worker.join().unwrap().unwrap();
+            assert_ne!(recovered.podcast_request, previous);
+            let (sender, actions) = command::channel(8);
+            app.key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                &recovered,
+                &sender,
+            );
+            assert_eq!(app.list.selected(), Some(1));
+            app.key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &recovered,
+                &sender,
+            );
+            assert!(
+                matches!(actions.try_recv(), Ok(Command::Podcast(crate::podcast::Action::Play { id, .. })) if id == recovered.podcast_items[1].id)
+            );
+            app.rects[Focus::List.index()] = ratatui::layout::Rect::new(0, 0, 40, 5);
+            let click = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 2,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            };
+            let now = Instant::now();
+            app.mouse_at(click, &recovered, &sender, now);
+            app.mouse_at(click, &recovered, &sender, now + Duration::from_millis(100));
+            assert!(
+                matches!(actions.try_recv(), Ok(Command::Podcast(crate::podcast::Action::Play { id, .. })) if id == recovered.podcast_items[0].id)
+            );
+        }
+    }
 
     #[test]
     fn podcast_preview_confirmation_waits_for_the_latest_request() {
