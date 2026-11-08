@@ -152,12 +152,15 @@ impl Runtime {
     }
     pub(crate) fn enqueue(store: &Store, id: &str) -> Result<()> {
         store.podcast_download_transaction(id, |current| {
-            store.podcast_episode(id)?;
+            let episode = store.podcast_episode(id)?;
             let mut d = current.unwrap_or_else(|| Download {
                 episode_id: id.into(),
                 ..Default::default()
             });
-            if d.state != "complete" || !std::path::Path::new(&d.path).is_file() {
+            if d.state != "complete"
+                || !d.matches_media(&episode)
+                || !std::path::Path::new(&d.path).is_file()
+            {
                 d.generation = d.generation.saturating_add(1);
                 d.state = "queued".into();
                 d.error = None;
@@ -208,7 +211,30 @@ mod tests {
         assert_eq!(finished.state, "complete");
         assert_eq!(finished.bytes, bytes);
         assert!(std::path::Path::new(&finished.path).is_file());
-        assert_eq!(store.podcast_download(&episode.id).unwrap(), Some(finished));
+        assert_eq!(
+            store.podcast_download(&episode.id).unwrap(),
+            Some(finished.clone())
+        );
+        Runtime::enqueue(&store, &episode.id).unwrap();
+        assert_eq!(
+            store.podcast_download(&episode.id).unwrap(),
+            Some(finished.clone())
+        );
+
+        let mut refreshed = preview;
+        refreshed.episodes[0].duration_ms = Some(8000);
+        store.podcast_refresh_merge(&feed, Some(refreshed)).unwrap();
+        Runtime::enqueue(&store, &episode.id).unwrap();
+        let queued = store.podcast_download(&episode.id).unwrap().unwrap();
+        assert_eq!(queued.state, "queued");
+        assert_eq!(queued.generation, finished.generation + 1);
+        let replaced = crate::podcast::download::scheduled(
+            &config,
+            &queued,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert!(replaced.matches_media(&store.podcast_episode(&episode.id).unwrap()));
     }
 
     #[test]

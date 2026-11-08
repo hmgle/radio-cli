@@ -50,8 +50,8 @@ pub struct Episode {
     pub completed: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct EpisodeMedia {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EpisodeMedia {
     url: String,
     bytes: Option<u64>,
     duration_ms: Option<u64>,
@@ -66,7 +66,7 @@ pub(crate) struct EpisodeProgress {
 }
 
 impl Episode {
-    pub(crate) fn media(&self) -> EpisodeMedia {
+    pub fn media(&self) -> EpisodeMedia {
         EpisodeMedia {
             url: self.url.clone(),
             bytes: self.bytes,
@@ -89,6 +89,7 @@ impl Episode {
 pub struct Download {
     pub generation: u64,
     pub url: String,
+    pub media: Option<EpisodeMedia>,
     pub episode_id: String,
     pub state: String,
     pub bytes: u64,
@@ -96,6 +97,12 @@ pub struct Download {
     pub modified: Option<String>,
     pub path: String,
     pub error: Option<String>,
+}
+
+impl Download {
+    pub(crate) fn matches_media(&self, episode: &Episode) -> bool {
+        self.url == episode.url && self.media.as_ref() == Some(&episode.media())
+    }
 }
 
 pub(crate) use storage::migrate;

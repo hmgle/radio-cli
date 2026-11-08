@@ -416,6 +416,177 @@ fn finite_mp3_ends_once_without_radio_history_or_retry() {
     assert!(engine.store().podcast_episode(&e.id).unwrap().completed);
 }
 #[test]
+fn stale_downloads_are_skipped_for_playback_and_replaced_on_download() {
+    let old_audio = support::fixture("libmp3lame", "mp3");
+    let output = std::process::Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:duration=8",
+            "-c:a",
+            "libmp3lame",
+            "-f",
+            "mp3",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let new_audio = output.stdout;
+    for changed in ["url", "bytes", "duration", "legacy"] {
+        let serve_new = Arc::new(AtomicBool::new(false));
+        let flag = serve_new.clone();
+        let old = old_audio.clone();
+        let new = new_audio.clone();
+        let server = support::Server::new(move |request, stream| {
+            assert!(!request.to_ascii_lowercase().contains("range:"));
+            support::response(
+                stream,
+                200,
+                "audio/mpeg",
+                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    &new
+                } else {
+                    &old
+                },
+            );
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = support::config(dir.path());
+        config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into_owned();
+        let mut engine = Engine::new(config.clone(), Arc::new(AtomicBool::new(false))).unwrap();
+        let mut p = preview(&server.url);
+        p.episodes[0].bytes = Some(old_audio.len() as u64);
+        p.episodes[0].duration_ms = Some(4000);
+        let feed = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+        let episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+        let stop = Arc::new(AtomicBool::new(false));
+        let old_download = podcast::download(&config, &episode.id, &stop).unwrap();
+        assert_eq!(std::fs::read(&old_download.path).unwrap(), old_audio);
+        serve_new.store(true, std::sync::atomic::Ordering::Relaxed);
+        match changed {
+            "url" => p.episodes[0].url = format!("{}/new.mp3", server.url),
+            "bytes" => p.episodes[0].bytes = Some(new_audio.len() as u64),
+            "duration" => p.episodes[0].duration_ms = Some(8000),
+            "legacy" => {
+                let mut value = serde_json::to_value(&old_download).unwrap();
+                value.as_object_mut().unwrap().remove("media");
+                engine
+                    .store()
+                    .podcast_save_download(&serde_json::from_value(value).unwrap())
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        engine
+            .store()
+            .podcast_refresh_merge(&feed, Some(p))
+            .unwrap();
+        let current = engine.store().podcast_episode(&episode.id).unwrap();
+        engine.play_episode(&episode.id, false, None).unwrap();
+        assert_eq!(engine.status().source_url, current.url, "{changed}");
+        engine.stop_playback().unwrap();
+        let new_download = podcast::download(&config, &episode.id, &stop).unwrap();
+        assert_eq!(new_download.state, "complete");
+        assert_eq!(
+            std::fs::read(&new_download.path).unwrap(),
+            new_audio,
+            "{changed}"
+        );
+        engine.play_episode(&episode.id, false, None).unwrap();
+        assert_eq!(engine.status().source_url, new_download.path, "{changed}");
+        engine.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn download_restarts_stale_partial_media_even_when_the_url_is_unchanged() {
+    let audio = support::fixture("libmp3lame", "mp3");
+    let expected = audio.clone();
+    let server = support::Server::new(move |request, stream| {
+        assert!(!request.to_ascii_lowercase().contains("range:"));
+        support::response(stream, 200, "audio/mpeg", &audio);
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let mut p = preview(&server.url);
+    p.episodes[0].duration_ms = Some(4000);
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    let path = podcast::download_path(&config, &episode.id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path.with_extension("part"), &expected[..expected.len() / 2]).unwrap();
+    store
+        .podcast_save_download(&podcast::Download {
+            episode_id: episode.id.clone(),
+            state: "paused".into(),
+            url: episode.url.clone(),
+            media: Some(episode.media()),
+            bytes: expected.len() as u64 / 2,
+            etag: Some("\"same-url\"".into()),
+            path: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        })
+        .unwrap();
+    p.episodes[0].duration_ms = Some(8000);
+    store.podcast_refresh_merge(&feed, Some(p)).unwrap();
+    let download =
+        podcast::download(&config, &episode.id, &Arc::new(AtomicBool::new(false))).unwrap();
+    assert_eq!(
+        download.media,
+        Some(store.podcast_episode(&episode.id).unwrap().media())
+    );
+    assert_eq!(std::fs::read(path).unwrap(), expected);
+}
+
+#[test]
+fn download_keeps_its_original_media_snapshot_when_refreshed_in_flight() {
+    let audio = support::fixture("libmp3lame", "mp3");
+    let (ready, wait) = std::sync::mpsc::channel();
+    let (release, go) = std::sync::mpsc::channel();
+    let go = std::sync::Mutex::new(go);
+    let server = support::Server::new(move |_, stream| {
+        ready.send(()).unwrap();
+        go.lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        support::response(stream, 200, "audio/mpeg", &audio);
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.mpv = support::fake_mpv(dir.path()).to_string_lossy().into_owned();
+    let mut engine = Engine::new(config.clone(), Arc::new(AtomicBool::new(false))).unwrap();
+    let mut p = preview(&server.url);
+    p.episodes[0].duration_ms = Some(4000);
+    let feed = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+    let old = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+    let id = old.id.clone();
+    let task = std::thread::spawn(move || {
+        podcast::download(&config, &id, &Arc::new(AtomicBool::new(false))).unwrap()
+    });
+    wait.recv_timeout(Duration::from_secs(3)).unwrap();
+    p.episodes[0].duration_ms = Some(8000);
+    engine
+        .store()
+        .podcast_refresh_merge(&feed, Some(p))
+        .unwrap();
+    release.send(()).unwrap();
+    let download = task.join().unwrap();
+    assert_eq!(download.media, Some(old.media()));
+    assert_eq!(download.state, "complete");
+    engine.play_episode(&old.id, false, None).unwrap();
+    assert_eq!(engine.status().source_url, old.url);
+    assert!(!engine.store().podcast_episode(&old.id).unwrap().completed);
+    engine.shutdown().unwrap();
+}
+
+#[test]
 fn download_publishes_verified_media_and_reuses_completed_file() {
     let audio = support::fixture("libmp3lame", "mp3");
     let bytes = audio.len();
@@ -581,6 +752,7 @@ fn download_rejects_a_valid_partial_range_until_the_full_resource_is_present() {
         state: "paused".into(),
         etag: Some("\"resource\"".into()),
         url: e.url.clone(),
+        media: Some(e.media()),
         bytes: initial.len() as u64,
         ..Default::default()
     })
@@ -651,6 +823,7 @@ fn download_range_resume_validates_the_resource() {
         state: "paused".into(),
         etag: Some("\"resource\"".into()),
         url: e.url.clone(),
+        media: Some(e.media()),
         bytes: partial.len() as u64,
         ..Default::default()
     })

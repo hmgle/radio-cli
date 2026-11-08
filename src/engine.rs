@@ -1304,6 +1304,8 @@ mod tests {
                 std::fs::write(&path, b"fixture").unwrap();
                 let download = podcast::Download {
                     episode_id: episode.id.clone(),
+                    url: episode.url.clone(),
+                    media: Some(episode.media()),
                     state: "complete".into(),
                     path: path.to_string_lossy().into_owned(),
                     bytes: 7,

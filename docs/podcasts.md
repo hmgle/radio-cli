@@ -105,9 +105,13 @@ background; unfinished tasks resume at the next TUI launch. Paused, cancelled
 and failed tasks need an explicit resume. Interrupted transfers resume only
 with a resource validator and a valid Range response; otherwise they restart.
 Completed files are checked with ffprobe and published from a `.part` file.
-Downloaded media is preferred for playback; a missing file falls back to the
-public enclosure. At least 200 MiB free space is reserved. No downloads or files
-are removed automatically, including when unsubscribing.
+Downloaded media is preferred when its enclosure URL, declared size and
+duration match the current episode. Missing or outdated downloads fall back to
+the public enclosure. Downloads from older versions without a media fingerprint
+also need downloading again before local playback. An explicit download replaces
+an outdated file and restarts an outdated partial transfer. At least 200 MiB free
+space is reserved. Files are not cleaned up automatically when refreshing or
+unsubscribing.
 
 Queue entries are explicit and deduplicated. Completion consumes the current
 queue entry; automatic next playback is off by default. Enable it in the TUI

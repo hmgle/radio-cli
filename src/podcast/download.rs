@@ -53,9 +53,7 @@ fn run(
         episode_id: id.into(),
         ..Default::default()
     });
-    if d.state == "complete" && std::path::Path::new(&d.path).is_file() {
-        return Ok(d);
-    }
+    let previous_path = d.path.clone();
     d.state = "downloading".into();
     d.error = None;
     d.path = final_path.to_string_lossy().into_owned();
@@ -73,27 +71,38 @@ fn run(
             )
         })?;
         if final_path.is_file()
+            && previous_path == d.path
             && d.bytes > 0
             && fs::metadata(&final_path)?.len() == d.bytes
             && !part.exists()
         {
-            d.state = "complete".into();
-            return Ok(());
+            if d.matches_media(&e) {
+                d.state = "complete".into();
+                return Ok(());
+            }
+            // Remove our obsolete completed file before recording a new media
+            // snapshot, so a crash cannot relabel the old file as the new one.
+            fs::remove_file(&final_path)?;
         }
-        let available = fs2::available_space(final_path.parent().unwrap())?;
         let existing = fs::metadata(&part).map_or(0, |m| m.len());
-        if available
-            < (200u64 * 1024 * 1024).saturating_add(e.bytes.unwrap_or(0).saturating_sub(existing))
-        {
-            return Err(DomainError::new(ErrorCode::InsufficientSpace).into());
-        }
-        let offset = if d.url == e.url
+        let offset = if d.matches_media(&e)
             && (d.etag.as_ref().is_some_and(|v| !v.starts_with("W/")) || d.modified.is_some())
         {
             existing
         } else {
             0
         };
+        let available = fs2::available_space(final_path.parent().unwrap())?;
+        if available
+            < (200u64 * 1024 * 1024).saturating_add(e.bytes.unwrap_or(0).saturating_sub(offset))
+        {
+            return Err(DomainError::new(ErrorCode::InsufficientSpace).into());
+        }
+        if existing > 0 && !d.matches_media(&e) {
+            // Clear old bytes before publishing the new fingerprint. Otherwise
+            // a crash before truncation could resume them as the new media.
+            fs::remove_file(&part)?;
+        }
         let client = super::feed::client(config)?;
         let mut req = client
             .get(super::feed::url(&e.url, None)?)
@@ -178,6 +187,7 @@ fn run(
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
         d.url = e.url.clone();
+        d.media = Some(e.media());
         d.bytes = if append { offset } else { 0 };
         store.podcast_download_update(&d)?;
         let mut file = OpenOptions::new()
