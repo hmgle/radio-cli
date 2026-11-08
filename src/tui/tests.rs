@@ -6975,6 +6975,52 @@ fn podcast_nonpage_requests_block_old_preview_before_worker_execution() {
 }
 
 #[test]
+fn podcast_list_commands_clear_episode_search_context() {
+    for (command, source, kind) in [
+        (
+            "podcast downloads list",
+            Source::PodcastDownloads,
+            "download",
+        ),
+        ("podcast queue list", Source::PodcastQueue, "episode"),
+    ] {
+        let mut app = App::default();
+        app.source = Source::Podcasts;
+        app.podcast_feed = Some("old-feed".into());
+        app.filter.query = "old query".into();
+        app.filter.offset = 100;
+        app.list.select(Some(10));
+        let mut data = view();
+        let (sender, receiver) = command::channel(8);
+        app.mode = Mode::Command;
+        app.editor.begin(command);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert_eq!(app.source, source);
+        assert!(app.filter.query.is_empty());
+        assert_eq!(app.filter.offset, 0);
+        assert!(app.podcast_feed.is_none());
+        assert_eq!(app.list.selected(), Some(0));
+        let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+            panic!("expected list request");
+        };
+        data.podcast_page = Some(action);
+        data.podcast_request = Some(request);
+        data.podcast_items = vec![super::podcast::Item {
+            id: "new-episode".into(),
+            title: "Unrelated title".into(),
+            kind: kind.into(),
+            ..Default::default()
+        }]
+        .into();
+        assert_eq!(app.length(&data), 1);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(
+            matches!(receiver.try_recv(), Ok(Command::Podcast(crate::podcast::Action::Play { id, .. })) if id == "new-episode")
+        );
+    }
+}
+
+#[test]
 fn podcast_search_is_sent_with_the_requested_page() {
     let mut app = App::default();
     app.source = Source::Podcasts;

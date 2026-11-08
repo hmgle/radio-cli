@@ -1479,6 +1479,9 @@ impl App {
                                     action: DownloadAction::List,
                                 } => {
                                     self.source = Source::PodcastDownloads;
+                                    self.filter.query.clear();
+                                    self.filter.offset = 0;
+                                    self.podcast_feed = None;
                                     self.reset_selection();
                                     self.focus = Focus::List;
                                 }
@@ -1486,6 +1489,9 @@ impl App {
                                     action: QueueAction::List,
                                 } => {
                                     self.source = Source::PodcastQueue;
+                                    self.filter.query.clear();
+                                    self.filter.offset = 0;
+                                    self.podcast_feed = None;
                                     self.reset_selection();
                                     self.focus = Focus::List;
                                 }
