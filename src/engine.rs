@@ -119,8 +119,8 @@ impl Session {
             writer.preference(key, value)
         } else {
             if let Some(id) = key.strip_prefix("podcast_progress:") {
-                let (pos, duration, done) = serde_json::from_str(value)?;
-                self.store.podcast_progress(id, pos, duration, done)
+                self.store
+                    .podcast_save_progress(id, &serde_json::from_str(value)?)
             } else if let Some(id) = key.strip_prefix("podcast_played:") {
                 self.store.podcast_played(id)
             } else {
@@ -474,7 +474,7 @@ impl Engine {
                 }
                 self.session.save_preference(
                     &format!("podcast_progress:{id}"),
-                    &serde_json::to_string(&(e.position_ms, e.observed_duration_ms, e.completed))?,
+                    &serde_json::to_string(&e.progress())?,
                 )
             }
             Action::AutoNext { state } => self.podcast_auto_next(state == "on"),

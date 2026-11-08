@@ -49,6 +49,41 @@ pub struct Episode {
     pub observed_duration_ms: Option<u64>,
     pub completed: bool,
 }
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct EpisodeMedia {
+    url: String,
+    bytes: Option<u64>,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct EpisodeProgress {
+    pub media: EpisodeMedia,
+    pub position_ms: u64,
+    pub observed_duration_ms: Option<u64>,
+    pub completed: bool,
+}
+
+impl Episode {
+    pub(crate) fn media(&self) -> EpisodeMedia {
+        EpisodeMedia {
+            url: self.url.clone(),
+            bytes: self.bytes,
+            duration_ms: self.duration_ms,
+        }
+    }
+
+    pub(crate) fn progress(&self) -> EpisodeProgress {
+        EpisodeProgress {
+            media: self.media(),
+            position_ms: self.position_ms,
+            observed_duration_ms: self.observed_duration_ms,
+            completed: self.completed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Download {

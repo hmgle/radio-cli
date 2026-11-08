@@ -236,6 +236,126 @@ mod tests {
     use super::*;
 
     #[test]
+    fn delayed_episode_completion_cannot_overwrite_refreshed_media_progress() {
+        use crate::{
+            engine::Engine,
+            podcast::{Episode, Feed, Preview},
+        };
+        use std::sync::{atomic::AtomicBool, mpsc};
+
+        for changed in ["duration", "bytes", "url", "title", "unchanged"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            config.settings.mpv = crate::test_support::fake_mpv(dir.path())
+                .to_string_lossy()
+                .into_owned();
+            let path = config.data_dir.join("radio.db");
+            let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            let mut preview = Preview {
+                feed: Feed {
+                    url: "https://example.test/rss".into(),
+                    ..Default::default()
+                },
+                episodes: vec![Episode {
+                    guid: Some("episode".into()),
+                    url: "https://example.test/audio".into(),
+                    duration_ms: Some(20000),
+                    bytes: Some(100),
+                    ..Default::default()
+                }],
+            };
+            let feed = engine
+                .store()
+                .podcast_subscribe(&preview, &preview.feed.url)
+                .unwrap();
+            let mut episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+            let id = episode.id.clone();
+            engine
+                .store()
+                .podcast_progress(
+                    &id,
+                    15000,
+                    Some(20000),
+                    matches!(changed, "duration" | "bytes"),
+                )
+                .unwrap();
+
+            // Hold the real writer until EOF has queued its old media snapshot
+            // and the refresh has committed. No debounce timing is involved.
+            let (release, wait) = mpsc::channel();
+            engine.session.persistence = Some(
+                Writer::start_worker(engine.session._lock.clone(), move |shared| {
+                    wait.recv_timeout(Duration::from_secs(3))?;
+                    run(&path, shared, LOCK_RETRY_BUDGET)
+                })
+                .unwrap(),
+            );
+            episode.position_ms = 19000;
+            episode.observed_duration_ms = Some(20000);
+            engine.playback.episode = Some(episode);
+            engine
+                .playback
+                .save_episode(&mut engine.session, true)
+                .unwrap();
+            engine.playback.episode = None;
+
+            match changed {
+                "duration" => preview.episodes[0].duration_ms = Some(40000),
+                "bytes" => preview.episodes[0].bytes = Some(200),
+                "url" => preview.episodes[0].url = "https://example.test/new-audio".into(),
+                "title" => preview.episodes[0].title = "Updated title".into(),
+                "unchanged" => {}
+                _ => unreachable!(),
+            }
+            engine
+                .store()
+                .podcast_refresh_merge(&feed, Some(preview))
+                .unwrap();
+            assert!(!engine.store().podcast_episode(&id).unwrap().completed);
+            let writer = engine.session.persistence.take().unwrap();
+            writer.close(Instant::now() + Duration::from_secs(3));
+            release.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !writer.finished() {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(5));
+            }
+            writer.finish().unwrap();
+
+            let unchanged_media = matches!(changed, "title" | "unchanged");
+            let saved = engine.store().podcast_episode(&id).unwrap();
+            assert_eq!(saved.completed, unchanged_media, "{changed}");
+            assert_eq!(
+                saved.position_ms,
+                if unchanged_media { 19000 } else { 15000 },
+                "{changed}"
+            );
+            engine.play_episode(&id, false, None).unwrap();
+            let replay = engine.status().episode.as_ref().unwrap();
+            assert_eq!(
+                replay.position_ms,
+                if unchanged_media { 0 } else { 15000 },
+                "{changed}"
+            );
+            assert!(!replay.completed);
+            // Progress from the refreshed media still saves synchronously,
+            // even when its measured duration differs from the feed metadata.
+            let current = engine.playback.episode.as_mut().unwrap();
+            current.position_ms = 10000;
+            current.observed_duration_ms = Some(30000);
+            engine
+                .playback
+                .save_episode(&mut engine.session, true)
+                .unwrap();
+            let saved = engine.store().podcast_episode(&id).unwrap();
+            assert!(saved.completed);
+            assert_eq!(saved.position_ms, 10000);
+            assert_eq!(saved.observed_duration_ms, Some(30000));
+            engine.shutdown().unwrap();
+        }
+    }
+
+    #[test]
     fn worker_panics_publish_terminal_failure_even_with_a_poisoned_mutex() {
         let dir = tempfile::tempdir().unwrap();
         let lock = Arc::new(MediaLock::acquire(dir.path()).unwrap());

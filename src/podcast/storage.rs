@@ -246,7 +246,47 @@ impl Store {
         duration: Option<u64>,
         completed: bool,
     ) -> Result<()> {
-        self.conn.execute("INSERT INTO podcast_progress VALUES (?1,?2,?3,?4,?5) ON CONFLICT(episode_id) DO UPDATE SET position_ms=excluded.position_ms,duration_ms=COALESCE(excluded.duration_ms,duration_ms),completed=excluded.completed,updated_at=excluded.updated_at",params![id,pos.min(i64::MAX as u64),duration.map(|d|d.min(i64::MAX as u64)),completed,chrono::Utc::now().to_rfc3339()])?;
+        Self::write_progress(&self.conn, id, pos, duration, completed)
+    }
+    pub(crate) fn podcast_save_progress(&self, id: &str, progress: &EpisodeProgress) -> Result<()> {
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        Self::write_podcast_progress(&tx, id, progress)?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub(crate) fn write_podcast_progress(
+        tx: &rusqlite::Transaction<'_>,
+        id: &str,
+        progress: &EpisodeProgress,
+    ) -> Result<()> {
+        let json: Option<String> = tx
+            .query_row("SELECT json FROM podcast_episodes WHERE id=?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let Some(json) = json else { return Ok(()) };
+        let episode: Episode = serde_json::from_str(&json)?;
+        // The write transaction also excludes refreshes between this check and
+        // the UPSERT. An old playback must not undo a refresh's progress reset.
+        if episode.media() != progress.media {
+            return Ok(());
+        }
+        Self::write_progress(
+            tx,
+            id,
+            progress.position_ms,
+            progress.observed_duration_ms,
+            progress.completed,
+        )
+    }
+    fn write_progress(
+        conn: &rusqlite::Connection,
+        id: &str,
+        pos: u64,
+        duration: Option<u64>,
+        completed: bool,
+    ) -> Result<()> {
+        conn.execute("INSERT INTO podcast_progress VALUES (?1,?2,?3,?4,?5) ON CONFLICT(episode_id) DO UPDATE SET position_ms=excluded.position_ms,duration_ms=COALESCE(excluded.duration_ms,duration_ms),completed=excluded.completed,updated_at=excluded.updated_at",params![id,pos.min(i64::MAX as u64),duration.map(|d|d.min(i64::MAX as u64)),completed,chrono::Utc::now().to_rfc3339()])?;
         Ok(())
     }
     pub fn podcast_played(&self, id: &str) -> Result<()> {

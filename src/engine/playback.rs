@@ -59,7 +59,7 @@ impl PlaybackController {
             .or_else(|| self.progress.get(id))
             // A feed refresh can clear completion while preserving position.
             // Cached progress belongs to the media metadata it was saved with.
-            .filter(|p| p.url == e.url && p.bytes == e.bytes && p.duration_ms == e.duration_ms)
+            .filter(|p| p.media() == e.media())
         {
             e.position_ms = p.position_ms;
             e.observed_duration_ms = p.observed_duration_ms;
@@ -106,7 +106,7 @@ impl PlaybackController {
             self.progress.insert(e.id.clone(), e.clone());
             session.save_preference(
                 &format!("podcast_progress:{}", e.id),
-                &serde_json::to_string(&(e.position_ms, e.observed_duration_ms, completed))?,
+                &serde_json::to_string(&e.progress())?,
             )?;
             session.status.episode = Some(e.clone());
             self.last_save = Instant::now();

@@ -316,8 +316,7 @@ impl Store {
         }
         for (key, value) in preferences {
             if let Some(id) = key.strip_prefix("podcast_progress:") {
-                let (pos, duration, done): (u64, Option<u64>, bool) = serde_json::from_str(value)?;
-                tx.execute("INSERT INTO podcast_progress VALUES (?1,?2,?3,?4,?5) ON CONFLICT(episode_id) DO UPDATE SET position_ms=excluded.position_ms,duration_ms=COALESCE(excluded.duration_ms,duration_ms),completed=excluded.completed,updated_at=excluded.updated_at",params![id,pos.min(i64::MAX as u64),duration.map(|d|d.min(i64::MAX as u64)),done,chrono::Utc::now().to_rfc3339()])?;
+                Self::write_podcast_progress(&tx, id, &serde_json::from_str(value)?)?;
                 continue;
             }
             if let Some(id) = key.strip_prefix("podcast_played:") {
