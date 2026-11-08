@@ -64,14 +64,7 @@ impl PlaybackController {
             e.observed_duration_ms = p.observed_duration_ms;
             e.completed = p.completed;
         }
-        let speed = crate::podcast::valid_speed(
-            speed
-                .or(session
-                    .store
-                    .meta("podcast_speed")?
-                    .and_then(|v| v.parse().ok()))
-                .unwrap_or(1.),
-        )?;
+        let speed = crate::podcast::valid_speed(speed.unwrap_or(session.podcast_speed))?;
         let feed = session.store.podcast_feed(&e.feed_id)?;
         let input = session
             .store
@@ -103,7 +96,7 @@ impl PlaybackController {
         session.status.episode = Some(e.clone());
         session.status.speed = speed;
         self.episode = Some(e);
-        self.auto_next = session.store.meta("podcast_auto_next")?.as_deref() == Some("on");
+        self.auto_next = session.podcast_auto_next;
         Ok(())
     }
     pub(super) fn save_episode(&mut self, session: &mut Session, completed: bool) -> Result<()> {

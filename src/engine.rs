@@ -101,6 +101,9 @@ pub(crate) struct Session {
     pub store: Store,
     pub directory: Directory,
     pub status: Status,
+    // Session preferences survive playback resets and pending database writes.
+    pub podcast_speed: f64,
+    pub podcast_auto_next: bool,
     pub stop: Arc<AtomicBool>,
     pub(crate) _lock: Arc<MediaLock>,
     pub(crate) background_media: bool,
@@ -257,6 +260,11 @@ impl Engine {
         {
             config.settings.volume = volume;
         }
+        let podcast_speed = store
+            .meta("podcast_speed")?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.);
+        let podcast_auto_next = store.meta("podcast_auto_next")?.as_deref() == Some("on");
         let recovery_warnings = recorder::recover(&store)?;
         let directory = Directory::new(&config, stop.clone())?;
         let status = Status {
@@ -288,6 +296,8 @@ impl Engine {
                 store,
                 directory,
                 status,
+                podcast_speed,
+                podcast_auto_next,
                 stop,
                 _lock: Arc::new(lock),
                 background_media: false,
@@ -367,11 +377,13 @@ impl Engine {
         {
             p.request(serde_json::json!(["set_property", "speed", rate]))?;
         }
+        self.session.podcast_speed = rate;
         self.session.status.speed = rate;
         self.session
             .save_preference("podcast_speed", &rate.to_string())
     }
     pub fn podcast_auto_next(&mut self, on: bool) -> Result<()> {
+        self.session.podcast_auto_next = on;
         self.playback.auto_next = on;
         self.session
             .save_preference("podcast_auto_next", if on { "on" } else { "off" })
@@ -433,9 +445,7 @@ impl Engine {
             } => self.play_episode(&id, from_start, speed),
             Action::Queue {
                 action: QueueAction::Play { auto_next },
-            } => self.play_podcast_queue(
-                auto_next || self.store().meta("podcast_auto_next")?.as_deref() == Some("on"),
-            ),
+            } => self.play_podcast_queue(auto_next || self.session.podcast_auto_next),
             Action::Seek { time } => self.seek_episode(crate::podcast::parse_time(&time)?),
             Action::Speed { rate } => self.podcast_speed(rate),
             Action::Mark { id, state } => {
@@ -805,6 +815,116 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn podcast_preferences_apply_before_the_background_write_finishes() {
+        use crate::podcast::{Action, Episode, Feed, Preview, QueueAction};
+        for (old_speed, old_auto_next, speed, auto_next) in
+            [(1., false, 1.5, true), (1.5, true, 1.25, false)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            let mpv = crate::test_support::fake_mpv(dir.path());
+            config.settings.mpv = mpv.to_string_lossy().into_owned();
+            let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+            store
+                .set_meta("podcast_speed", &old_speed.to_string())
+                .unwrap();
+            store
+                .set_meta(
+                    "podcast_auto_next",
+                    if old_auto_next { "on" } else { "off" },
+                )
+                .unwrap();
+            let preview = Preview {
+                feed: Feed {
+                    url: "https://example.test/feed".into(),
+                    ..Default::default()
+                },
+                episodes: vec![Episode {
+                    url: "https://example.test/audio".into(),
+                    ..Default::default()
+                }],
+            };
+            let feed = store
+                .podcast_subscribe(&preview, &preview.feed.url)
+                .unwrap();
+            let id = store.podcast_episodes(&feed.id).unwrap().remove(0).id;
+            store.podcast_queue_set(std::slice::from_ref(&id)).unwrap();
+            let mut engine = Engine::new(config.clone(), Arc::new(AtomicBool::new(false))).unwrap();
+            engine.enable_background_media().unwrap();
+            let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+            connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+            engine
+                .podcast_action(Action::Speed { rate: speed })
+                .unwrap();
+            engine
+                .podcast_action(Action::AutoNext {
+                    state: if auto_next { "on" } else { "off" }.into(),
+                })
+                .unwrap();
+            assert_eq!(
+                store.meta("podcast_speed").unwrap(),
+                Some(old_speed.to_string())
+            );
+            assert_eq!(
+                store.meta("podcast_auto_next").unwrap().as_deref(),
+                Some(if old_auto_next { "on" } else { "off" })
+            );
+            engine
+                .podcast_action(Action::Queue {
+                    action: QueueAction::Play { auto_next: false },
+                })
+                .unwrap();
+            assert_eq!(engine.status().speed, speed);
+            assert_eq!(engine.playback.auto_next, auto_next);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                engine.tick().unwrap();
+                let commands =
+                    std::fs::read_to_string(mpv.with_extension("commands")).unwrap_or_default();
+                let speed_sent = commands
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .any(|value| {
+                        value["command"] == serde_json::json!(["set_property", "speed", speed])
+                    });
+                if speed_sent && engine.status().playback_state == PlaybackState::Playing {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "{:?}", engine.status());
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            engine.play("https://example.test/live").unwrap();
+            assert_eq!(engine.status().speed, 1.);
+            engine.play_episode(&id, false, Some(2.)).unwrap();
+            assert_eq!(engine.status().speed, 2.);
+            assert!(engine.podcast_speed(f64::NAN).is_err());
+            engine.play_episode(&id, false, None).unwrap();
+            assert_eq!(engine.status().speed, speed);
+            engine
+                .podcast_action(Action::Queue {
+                    action: QueueAction::Play { auto_next: true },
+                })
+                .unwrap();
+            assert!(engine.playback.auto_next);
+            connection.execute_batch("ROLLBACK").unwrap();
+            engine.shutdown().unwrap();
+            let lock = Arc::downgrade(&engine.session._lock);
+            drop(engine);
+            // Cancelled player startups finish their cleanup on detached threads.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while lock.strong_count() > 0 {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let mut restored = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            restored.play_episode(&id, false, None).unwrap();
+            assert_eq!(restored.status().speed, speed);
+            assert_eq!(restored.playback.auto_next, auto_next);
+            restored.shutdown().unwrap();
+        }
+    }
 
     #[test]
     fn podcast_marks_apply_before_the_background_write_finishes() {
