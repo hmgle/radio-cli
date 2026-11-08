@@ -146,6 +146,25 @@ struct Node {
     base: Url,
     html: bool,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Feed,
+    Episode,
+    Other,
+}
+fn scope(stack: &[Node]) -> Scope {
+    match stack {
+        [feed] if feed.name == "feed" => Scope::Feed,
+        [rss, channel] if rss.name == "rss" && channel.name == "channel" => Scope::Feed,
+        [feed, entry] if feed.name == "feed" && entry.name == "entry" => Scope::Episode,
+        [rss, channel, item]
+            if rss.name == "rss" && channel.name == "channel" && item.name == "item" =>
+        {
+            Scope::Episode
+        }
+        _ => Scope::Other,
+    }
+}
 pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
     if data.len() as u64 > LIMIT {
         return Err(error(crate::t!("podcast_limit")));
@@ -202,15 +221,19 @@ pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
                         .and_then(|v| url(v, Some(&node_base)).ok())
                         .map(|u| u.to_string())
                 };
-                if matches!(name.as_str(), "item" | "entry") {
+                let parent_scope = scope(&stack);
+                if parent_scope == Scope::Feed
+                    && ((root == "feed" && name == "entry") || (root == "rss" && name == "item"))
+                {
                     count += 1;
                     if count > 10000 || current.is_some() {
                         return Err(error(crate::t!("podcast_limit")));
                     }
                     current = Some(Episode::default());
                 }
-                if name == "enclosure"
-                    || (name == "link" && attrs.get("rel").is_some_and(|r| r == "enclosure"))
+                if parent_scope == Scope::Episode
+                    && (name == "enclosure"
+                        || (name == "link" && attrs.get("rel").is_some_and(|r| r == "enclosure")))
                 {
                     if let Some(ep) = current.as_mut() {
                         let mime = attrs.get("type").cloned().unwrap_or_default();
@@ -225,11 +248,13 @@ pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
                             ep.bytes = attrs.get("length").and_then(|v| v.parse().ok());
                         }
                     }
-                } else if name == "image"
+                } else if parent_scope == Scope::Feed
+                    && name == "image"
                     && let Some(u) = attr_url("href")
                 {
                     f.image = u;
-                } else if name == "link"
+                } else if matches!(parent_scope, Scope::Feed | Scope::Episode)
+                    && name == "link"
                     && attrs.get("rel").is_none_or(|v| v == "alternate")
                     && let Some(u) = attr_url("href")
                 {
@@ -301,41 +326,51 @@ fn finish(
         }
     };
     let parent = stack.last().map(|n| n.name.as_str()).unwrap_or("");
+    let parent_scope = scope(stack);
     let resolved = || {
         url(text, Some(&n.base))
             .map(|u| u.to_string())
             .unwrap_or_default()
     };
     if let Some(e) = current.as_mut() {
-        match n.name.as_str() {
-            "title" => e.title = display_text(),
-            "guid" | "id" if !text.is_empty() => e.guid = Some(text.into()),
-            "description" | "summary" | "content" => e.description = display_text(),
-            "pubDate" | "published" | "updated" => {
-                e.published = chrono::DateTime::parse_from_rfc2822(text)
-                    .or_else(|_| chrono::DateTime::parse_from_rfc3339(text))
-                    .ok()
-                    .map(|d| d.to_utc().to_rfc3339())
+        if parent_scope == Scope::Episode {
+            match n.name.as_str() {
+                "title" => e.title = display_text(),
+                "guid" | "id" if !text.is_empty() => e.guid = Some(text.into()),
+                "description" | "summary" | "content" => e.description = display_text(),
+                "pubDate" | "published" | "updated" => {
+                    e.published = chrono::DateTime::parse_from_rfc2822(text)
+                        .or_else(|_| chrono::DateTime::parse_from_rfc3339(text))
+                        .ok()
+                        .map(|d| d.to_utc().to_rfc3339())
+                }
+                "link" if !text.is_empty() => e.website = resolved(),
+                "duration" => e.duration_ms = duration(text),
+                _ => {}
             }
-            "link" if !text.is_empty() => e.website = resolved(),
-            "duration" => e.duration_ms = duration(text),
-            _ => {}
         }
-        if matches!(n.name.as_str(), "item" | "entry") {
+        if parent_scope == Scope::Feed && matches!(n.name.as_str(), "item" | "entry") {
             let e = current.take().unwrap();
             if !e.url.is_empty() {
                 episodes.push(e);
             }
         }
     } else {
+        let nested_feed_field = stack
+            .split_last()
+            .is_some_and(|(_, ancestors)| scope(ancestors) == Scope::Feed);
         match n.name.as_str() {
-            "title" if matches!(parent, "channel" | "feed") => f.title = display_text(),
-            "author" | "managingEditor" => f.author = display_text(),
-            "name" if parent == "author" => f.author = display_text(),
-            "description" | "subtitle" => f.description = display_text(),
-            "link" if !text.is_empty() => f.website = resolved(),
-            "url" if parent == "image" && f.image.is_empty() => f.image = resolved(),
-            "logo" | "icon" => f.image = resolved(),
+            "title" if parent_scope == Scope::Feed => f.title = display_text(),
+            "author" | "managingEditor" if parent_scope == Scope::Feed => f.author = display_text(),
+            "name" if parent == "author" && nested_feed_field => f.author = display_text(),
+            "description" | "subtitle" if parent_scope == Scope::Feed => {
+                f.description = display_text()
+            }
+            "link" if parent_scope == Scope::Feed && !text.is_empty() => f.website = resolved(),
+            "url" if parent == "image" && nested_feed_field && f.image.is_empty() => {
+                f.image = resolved()
+            }
+            "logo" | "icon" if parent_scope == Scope::Feed => f.image = resolved(),
             _ => {}
         }
     }
@@ -499,6 +534,97 @@ mod tests {
             xml.as_bytes(),
             &Url::parse("https://example.test/a/feed").unwrap(),
         )
+    }
+    #[test]
+    fn atom_source_metadata_stays_separate_from_entry_identity_and_content() {
+        for source_first in [false, true] {
+            let source = r#"<source xml:base="https://source.test/">
+                <id>shared-source</id><title>Source title</title>
+                <updated>2026-02-01T00:00:00Z</updated>
+                <link rel="alternate" href="source"/>
+                <link rel="enclosure" href="source.mp3" type="audio/mpeg"/>
+                <logo>source.jpg</logo><author><name>Source author</name></author>
+                </source>"#;
+            let entries = ["one", "two"].map(|id| {
+                let fields = format!(
+                    r#"<id>{id}</id><title>Episode {id}</title>
+                    <published>2026-01-01T00:00:00Z</published>
+                    <summary>Episode description</summary>
+                    <link rel="alternate" href="{id}"/>
+                    <link rel="enclosure" href="{id}.mp3" type="audio/mpeg"/>"#
+                );
+                if source_first {
+                    format!("<entry>{source}{fields}</entry>")
+                } else {
+                    format!("<entry>{fields}{source}</entry>")
+                }
+            });
+            let p = parse_xml(&format!(
+                r#"<feed xmlns="http://www.w3.org/2005/Atom">
+                <title>Show</title><author><name>Show author</name></author>
+                <logo>show.jpg</logo>{}</feed>"#,
+                entries.join("")
+            ))
+            .unwrap();
+            assert_eq!(p.feed.author, "Show author");
+            assert_eq!(p.feed.image, "https://example.test/a/show.jpg");
+            for (episode, id) in p.episodes.iter().zip(["one", "two"]) {
+                assert_eq!(episode.guid.as_deref(), Some(id));
+                assert_eq!(episode.title, format!("Episode {id}"));
+                assert_eq!(episode.description, "Episode description");
+                assert_eq!(
+                    episode.published.as_deref(),
+                    Some("2026-01-01T00:00:00+00:00")
+                );
+                assert_eq!(episode.website, format!("https://example.test/a/{id}"));
+                assert_eq!(episode.url, format!("https://example.test/a/{id}.mp3"));
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::store::Store::open(&dir.path().join("radio.db")).unwrap();
+            let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+            assert_eq!(store.podcast_episodes(&feed.id).unwrap().len(), 2);
+        }
+    }
+    #[test]
+    fn rss_episode_images_never_replace_or_supply_show_artwork() {
+        for show_image in ["", r#"<itunes:image href="show.jpg"/>"#] {
+            for show_first in [false, true] {
+                let episodes = r#"<item><title>One</title><enclosure url="one.mp3"/>
+                    <itunes:image href="one.jpg"/></item>
+                    <item><title>Two</title><enclosure url="two.mp3"/>
+                    <itunes:image href="two.jpg"/></item>"#;
+                let content = if show_first {
+                    format!("{show_image}{episodes}")
+                } else {
+                    format!("{episodes}{show_image}")
+                };
+                let p = parse_xml(&format!(
+                    r#"<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+                    <channel><title>Show</title>{content}</channel></rss>"#
+                ))
+                .unwrap();
+                assert_eq!(p.episodes.len(), 2);
+                assert_eq!(
+                    p.feed.image,
+                    if show_image.is_empty() {
+                        ""
+                    } else {
+                        "https://example.test/a/show.jpg"
+                    }
+                );
+            }
+        }
+        let p = parse_xml(
+            r#"<rss><channel><title>Show</title><image>
+            <title>Image title</title><url>rss.jpg</url><link>https://image.test/</link>
+            </image><link>https://show.test/</link>
+            <item><title>Episode</title><enclosure url="one.mp3"/></item>
+            </channel></rss>"#,
+        )
+        .unwrap();
+        assert_eq!(p.feed.title, "Show");
+        assert_eq!(p.feed.website, "https://show.test/");
+        assert_eq!(p.feed.image, "https://example.test/a/rss.jpg");
     }
     #[test]
     fn rss_metadata_entities_cdata_and_relative_enclosures() {
