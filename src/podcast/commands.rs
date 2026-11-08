@@ -261,36 +261,37 @@ pub fn manage(
             DownloadAction::Pause { ref id }
             | DownloadAction::Cancel { ref id }
             | DownloadAction::Remove { ref id } => {
-                let mut d = store
-                    .podcast_download(id)?
-                    .ok_or_else(|| error(crate::t!("podcast_not_found")))?;
-                let remove = matches!(action, DownloadAction::Remove { .. });
-                if remove {
-                    if d.state == "downloading" {
-                        return Err(error(crate::t!("podcast_download_busy")));
-                    }
-                    let path = if d.path.is_empty() {
-                        download_path(config, id)
-                    } else {
-                        PathBuf::from(&d.path)
-                    };
-                    for path in [path.clone(), path.with_extension("part")] {
-                        if path.exists() {
-                            std::fs::remove_file(path)?;
+                let d = store.podcast_download_transaction(id, |current| {
+                    let mut d = current.ok_or_else(|| error(crate::t!("podcast_not_found")))?;
+                    let remove = matches!(action, DownloadAction::Remove { .. });
+                    if remove {
+                        if d.state == "downloading" {
+                            return Err(error(crate::t!("podcast_download_busy")));
                         }
-                    }
-                    d.state = "removed".into();
-                    d.bytes = 0;
-                } else {
-                    d.state = if matches!(action, DownloadAction::Pause { .. }) {
-                        "paused"
+                        let path = if d.path.is_empty() {
+                            download_path(config, id)
+                        } else {
+                            PathBuf::from(&d.path)
+                        };
+                        for path in [path.clone(), path.with_extension("part")] {
+                            if path.exists() {
+                                std::fs::remove_file(path)?;
+                            }
+                        }
+                        d.state = "removed".into();
+                        d.bytes = 0;
                     } else {
-                        "cancelled"
+                        d.state = if matches!(action, DownloadAction::Pause { .. }) {
+                            "paused"
+                        } else {
+                            "cancelled"
+                        }
+                        .into();
                     }
-                    .into();
-                }
-                d.generation = d.generation.saturating_add(1);
-                store.podcast_save_download(&d)?;
+                    d.generation = d.generation.saturating_add(1);
+                    store.podcast_save_download(&d)?;
+                    Ok(d)
+                })?;
                 json!(d)
             }
         },

@@ -289,6 +289,16 @@ impl Store {
             .optional()?;
         json.map(|j| Ok(serde_json::from_str(&j)?)).transpose()
     }
+    pub(crate) fn podcast_download_transaction<T>(
+        &self,
+        id: &str,
+        update: impl FnOnce(Option<Download>) -> Result<T>,
+    ) -> Result<T> {
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let value = update(self.podcast_download(id)?)?;
+        tx.commit()?;
+        Ok(value)
+    }
     pub(crate) fn podcast_download_update(&self, d: &Download) -> Result<()> {
         let changed=self.conn.execute("UPDATE podcast_downloads SET json=?2 WHERE episode_id=?1 AND COALESCE(json_extract(json,'$.generation'),0)=?3",params![d.episode_id,serde_json::to_string(d)?,d.generation])?;
         if changed == 0 {
@@ -395,6 +405,89 @@ mod tests {
             .unwrap();
         let episodes = store.podcast_episodes(&feed.id).unwrap();
         (dir, config, episodes)
+    }
+
+    #[test]
+    fn download_controls_read_the_generation_after_a_concurrent_claim() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
+        use std::sync::mpsc;
+        for control in ["pause", "cancel", "enqueue"] {
+            let (_dir, config, episodes) = queue_fixture();
+            let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+            let snapshot = Download {
+                episode_id: episodes[0].id.clone(),
+                state: "queued".into(),
+                generation: 7,
+                ..Default::default()
+            };
+            store.podcast_save_download(&snapshot).unwrap();
+            let (ready, wait) = mpsc::channel();
+            let (release, go) = mpsc::channel();
+            let id = snapshot.episode_id.clone();
+            let config = config.clone();
+            let worker = std::thread::spawn(move || {
+                let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                let mut synchronized = false;
+                // Pause immediately before acquiring the write lock. Without
+                // a transaction this hook runs at INSERT, after the stale read.
+                store.conn.authorizer(Some(move |context: AuthContext<'_>| {
+                    if !synchronized
+                        && matches!(
+                            context.action,
+                            AuthAction::Transaction {
+                                operation: TransactionOperation::Begin
+                            } | AuthAction::Insert {
+                                table_name: "podcast_downloads"
+                            }
+                        )
+                    {
+                        synchronized = true;
+                        ready.send(()).unwrap();
+                        go.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+                    }
+                    Authorization::Allow
+                }));
+                if control == "enqueue" {
+                    Runtime::enqueue(&store, &id).unwrap();
+                } else {
+                    manage(
+                        &config,
+                        &store,
+                        Action::Downloads {
+                            action: if control == "pause" {
+                                DownloadAction::Pause { id: id.clone() }
+                            } else {
+                                DownloadAction::Cancel { id: id.clone() }
+                            },
+                        },
+                        &Arc::new(AtomicBool::new(false)),
+                    )
+                    .unwrap();
+                }
+            });
+            wait.recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+            let mut claimed = store.podcast_claim_download(&snapshot).unwrap().unwrap();
+            claimed.bytes = 123;
+            store.podcast_download_update(&claimed).unwrap();
+            release.send(()).unwrap();
+            worker.join().unwrap();
+            let current = store
+                .podcast_download(&snapshot.episode_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(current.generation, claimed.generation + 1, "{control}");
+            assert_eq!(current.bytes, 123);
+            assert_eq!(
+                current.state,
+                match control {
+                    "pause" => "paused",
+                    "cancel" => "cancelled",
+                    _ => "queued",
+                }
+            );
+            assert!(store.podcast_download_update(&claimed).is_err());
+        }
     }
 
     #[test]

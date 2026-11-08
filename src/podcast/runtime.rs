@@ -151,18 +151,20 @@ impl Runtime {
         Ok(())
     }
     pub(crate) fn enqueue(store: &Store, id: &str) -> Result<()> {
-        store.podcast_episode(id)?;
-        let mut d = store.podcast_download(id)?.unwrap_or_else(|| Download {
-            episode_id: id.into(),
-            ..Default::default()
-        });
-        if d.state != "complete" || !std::path::Path::new(&d.path).is_file() {
-            d.generation = d.generation.saturating_add(1);
-            d.state = "queued".into();
-            d.error = None;
-            store.podcast_save_download(&d)?;
-        }
-        Ok(())
+        store.podcast_download_transaction(id, |current| {
+            store.podcast_episode(id)?;
+            let mut d = current.unwrap_or_else(|| Download {
+                episode_id: id.into(),
+                ..Default::default()
+            });
+            if d.state != "complete" || !std::path::Path::new(&d.path).is_file() {
+                d.generation = d.generation.saturating_add(1);
+                d.state = "queued".into();
+                d.error = None;
+                store.podcast_save_download(&d)?;
+            }
+            Ok(())
+        })
     }
 }
 
