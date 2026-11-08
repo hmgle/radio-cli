@@ -131,7 +131,10 @@ feed. `discover` returns a URL array; `search` returns Apple directory objects
 `download` and mutating `downloads` commands return a download object;
 `downloads list` returns an array. Fields are `episode_id`, `state`, `bytes`,
 nullable `etag`/`modified`/`error`, local `path`, resource `url`, and task
-`generation`. States are `queued`, `downloading`, `paused`, `complete`,
+`generation`. Nullable `media` contains the original enclosure snapshot
+`{url,bytes,duration_ms}`; its size and duration may be `null`. Local playback
+and resume validate that snapshot against the current episode. States are
+`queued`, `downloading`, `paused`, `complete`,
 `cancelled`, `failed`, and `removed`. Queue list and mutation commands return
 an ordered episode array. `play` and `queue play` return v2 `data:null` after
 playback exits.

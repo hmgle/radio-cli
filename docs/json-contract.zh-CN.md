@@ -116,7 +116,9 @@ URL 数组；`search` 返回 Apple 目录对象数组（可能缺少 `feedUrl`�
 
 `download` 和 `downloads` 修改命令返回下载对象，`downloads list` 返回数组。
 字段为 `episode_id`、`state`、`bytes`，可空的 `etag`/`modified`/`error`，本地 `path`、
-资源 `url` 与任务 `generation`。状态为 `queued`、`downloading`、`paused`、
+资源 `url` 与任务 `generation`。可空的 `media` 保存原始媒体快照
+`{url,bytes,duration_ms}`，其中大小和时长允许为 `null`；本地播放和续传会将该快照
+与当前单集核对。状态为 `queued`、`downloading`、`paused`、
 `complete`、`cancelled`、`failed`、`removed`。队列列表和修改返回有序单集数组。
 `play`、`queue play` 在播放退出后返回 v2 `data:null`。
 
