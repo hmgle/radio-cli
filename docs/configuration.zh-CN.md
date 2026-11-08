@@ -14,6 +14,7 @@
 | 数据目录 | `${XDG_DATA_HOME:-~/.local/share}/radio-cli/` | `~/Library/Application Support/radio-cli/` |
 | 目录数据库 | `<数据目录>/radio.db` | `<数据目录>/radio.db` |
 | 录音 | `<数据目录>/recordings/` | `<数据目录>/recordings/` |
+| 播客下载 | `<数据目录>/podcasts/` | `<数据目录>/podcasts/` |
 | 命令历史 | `<数据目录>/command-history.json` | `<数据目录>/command-history.json` |
 | artwork 缓存 | `<数据目录>/artwork/` | `<数据目录>/artwork/` |
 | 运行时锁 | `<数据目录>/run/media.lock` | `<数据目录>/run/media.lock` |
@@ -23,7 +24,7 @@
 - `--config FILE` 指定配置文件。显式指定的文件不存在会报错；默认配置文件不存在时使用默认值。
 - `--data-dir DIR` 同时替换默认数据目录及其下的数据库位置。
 - `--api-url URL` 覆盖 `api_url` 配置。
-- 相对路径（包括 `recording_dir`）在启动时按工作目录解析；实际录音目录以绝对路径保存。
+- 相对路径（包括 `recording_dir` 和 `podcasts.directory`）在启动时按工作目录解析；实际录音目录以绝对路径保存。
 - 配置在命令启动时读取，程序不会改写配置文件。修改后需重新启动 radio-cli。
 
 ## 播放配置
@@ -51,6 +52,9 @@
 
 上次电台不可用时会跳过或按场景回退到首行。录音来源没有可恢复的电台选择。
 音量独立记忆，并始终恢复。
+
+如果上次成功播放的是播客单集，`true` 会续听该单集，`"selection"` 会恢复对应节目、
+分页和选择而不播放。续听要求媒体支持定位，见[播客指南](podcasts.zh-CN.md)。
 
 ### 响度均衡
 
@@ -96,6 +100,16 @@
 
 空间预检是保护措施，不是空间预留。无法得知时长或码率时，只检查配置的最低余量，
 并提示无法估算总大小。详见[录音指南](recording.zh-CN.md)。
+
+## 播客配置
+
+| 配置项 | 默认值 | 合法值与行为 |
+| --- | --- | --- |
+| `podcasts.directory` | `<数据目录>/podcasts` | 下载目录；相对路径在启动时解析。 |
+| `podcasts.refresh_hours` | `6` | 无符号 16 位整数（0–65535）；TUI 运行期间刷新到期订阅，`0` 关闭自动刷新；失败退避最多一天。 |
+
+这些配置写在 `[podcasts]` 表中。播放倍速与自动连播独立保存在 SQLite 中，使用
+`radio podcast speed` 和 `radio podcast auto-next` 设置，见[播客指南](podcasts.zh-CN.md)。
 
 ## 目录与网络配置
 

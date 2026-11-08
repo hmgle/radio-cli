@@ -1,10 +1,11 @@
 {
   "name": "@hmgle/radio-cli",
   "version": "__VERSION__",
-  "description": "Lightweight terminal radio: catalog search, favorites, playback, and local recording",
+  "description": "Lightweight terminal radio and podcast player with offline downloads and local recording",
   "keywords": [
     "radio",
     "internet-radio",
+    "podcast",
     "terminal",
     "tui",
     "mpv"

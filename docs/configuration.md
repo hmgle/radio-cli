@@ -14,6 +14,7 @@ point. Command-line options take precedence over the file.
 | Data directory | `${XDG_DATA_HOME:-~/.local/share}/radio-cli/` | `~/Library/Application Support/radio-cli/` |
 | Catalog database | `<data>/radio.db` | `<data>/radio.db` |
 | Recordings | `<data>/recordings/` | `<data>/recordings/` |
+| Podcast downloads | `<data>/podcasts/` | `<data>/podcasts/` |
 | Command history | `<data>/command-history.json` | `<data>/command-history.json` |
 | Artwork cache | `<data>/artwork/` | `<data>/artwork/` |
 | Runtime lock | `<data>/run/media.lock` | `<data>/run/media.lock` |
@@ -25,9 +26,9 @@ Resolution rules:
 - `--data-dir DIR` replaces both the default data directory and the database
   location beneath it.
 - `--api-url URL` overrides the `api_url` setting.
-- Relative paths, including `recording_dir`, are resolved against the working
-  directory at startup. The effective recording directory is stored as an
-  absolute path.
+- Relative paths, including `recording_dir` and `podcasts.directory`, are resolved
+  against the working directory at startup. The effective recording directory
+  is stored as an absolute path.
 - The config file is read when a command starts and is never rewritten. Restart
   radio-cli after editing it.
 
@@ -57,6 +58,11 @@ volume. A saved value outside the valid range falls back to the config value.
 An unavailable last station is skipped or falls back to the first row as
 appropriate. The recordings source has no station selection to restore. Volume
 is remembered independently and is always restored.
+
+If the last successfully played media was a podcast episode, `true` resumes
+that episode and `"selection"` restores its show, page and selection without
+playing. Podcast resume requires seekable media; see the
+[podcast guide](podcasts.md).
 
 ### Loudness normalization
 
@@ -111,6 +117,17 @@ bytes already discarded upstream.
 The space preflight is a guard, not a reservation. If duration or bitrate is
 unknown, radio-cli checks only the configured reserve and reports that the total
 size cannot be estimated. See the [recording guide](recording.md).
+
+## Podcast settings
+
+| Setting | Default | Valid values and behavior |
+| --- | --- | --- |
+| `podcasts.directory` | `<data>/podcasts` | Download directory; relative paths resolve at startup. |
+| `podcasts.refresh_hours` | `6` | Unsigned 16-bit integer (0–65535). Refresh due subscriptions while the TUI runs; `0` disables automatic refresh. Failures back off up to one day. |
+
+Put these settings in a `[podcasts]` table. Playback speed and automatic next
+playback are stored independently in SQLite; set them with `radio podcast speed`
+and `radio podcast auto-next`. See the [podcast guide](podcasts.md).
 
 ## Catalog and network settings
 

@@ -10,7 +10,7 @@
 
 [English](README.md) | **简体中文**
 
-面向 Linux 与 macOS 的轻量终端收音机。Rust 管理本地目录和交互，SQLite 保存收藏与历史，
+面向 Linux 与 macOS 的轻量终端收音机与播客播放器。Rust 管理本地目录和交互，SQLite 保存收藏与历史，
 mpv 负责播放，FFmpeg 以流拷贝方式录音。无需账号或 API Key。
 
 - 订阅公开播客、续听单集、下载音频和管理队列，见[播客指南](docs/podcasts.zh-CN.md)。
@@ -68,7 +68,7 @@ cargo install radio-cli --locked
 | 面板 | `1`–`5` | 聚焦来源 / 列表 / 详情 / 播放器 / 任务面板 |
 | 面板 | `h` / `l`、方向键 | 左右移动焦点，或选择、滚动 |
 | 面板 | `Ctrl-h/j/k/l`、`Ctrl` + 方向键 | 按屏幕方向移动焦点 |
-| 来源 | `[` / `]` | 上一个 / 下一个来源：电台、收藏、最近、录音 |
+| 来源 | `[` / `]` | 上一个 / 下一个来源：电台、收藏、最近、录音、地图探索、播客订阅、下载、队列 |
 | 来源 | `j` / `k`、方向键 | 聚焦来源面板时切换到下一个 / 上一个来源 |
 | 列表 | `j` / `k`、方向键 | 移动选择 |
 | 列表 | `gg` / `G`、`Home` / `End` | 首项 / 末项 |
@@ -77,7 +77,8 @@ cargo install radio-cli --locked
 | 列表 | `zt` / `zz` / `zb` | 将选中行放到视口顶部 / 中间 / 底部 |
 | 列表 | `PgUp` / `PgDn`、`Ctrl-b` / `Ctrl-f` | 上一 / 下一数据页；其他面板中滚动十行 |
 | 列表 | `Ctrl-e` / `Ctrl-y` | 视口向下 / 向上滚动一行 |
-| 播放 | `Enter` | 播放选中电台或录音；来源面板中进入列表；播放器面板中查看播放中电台详情 |
+| 播放 | `Enter` | 打开播客节目或播放选中电台、录音、单集；来源面板中进入列表；播放器面板中查看播放中电台详情 |
+| 播客 | `Esc` / `Alt-Left` / `Alt-Right` | 从单集返回节目列表 / 后退 15 秒 / 前进 15 秒 |
 | 播放 | `Space` | 暂停 / 继续 |
 | 播放 | `m` | 静音 / 取消静音 |
 | 播放 | `+` 或 `=` / `-` | 提高 / 降低音量 |
@@ -107,7 +108,7 @@ tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
 
 | 命令 | 操作 |
 | --- | --- |
-| `:sync [--accept-shrink]` / `:sync-cancel` | 启动或取消后台目录同步 |
+| `:sync [--accept-shrink]` / `:sync-cancel` | 启动后台目录同步 / 取消目录或当前播客命令 |
 | `:refresh` | 刷新当前列表 |
 | `:search [QUERY] [OPTIONS]` | 使用 CLI 搜索选项应用搜索 |
 | `:play [UUID\|URL]` | 播放选中项、指定 UUID 或临时流地址 |
@@ -125,11 +126,25 @@ tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | 运行诊断 / 移动焦点 |
 | `:subtitles on\|off\|toggle\|history\|clear\|retry` | 控制直播字幕 / 查看会话历史 |
 | `:set subtitles.model ID` | 切换当前会话字幕模型 |
+| `:podcast ...` | 订阅、播放、定位、下载、管理队列和交换 OPML，见[播客指南](docs/podcasts.zh-CN.md) |
 | `:quit` / `:q` | 收尾录音并退出 |
 
 `:help` 显示完整的上下文键盘帮助；输入 `:` 后按 `Tab` 可补全命令。
 `:record UUID` 只接受当前正在播放的电台；需要独立录音时请使用
 `radio record UUID`。
+
+### 播客
+
+```sh
+radio podcast add https://example.org/feed.xml
+radio podcast list
+radio podcast episodes FEED_ID
+radio podcast play EPISODE_ID
+```
+
+使用列表命令返回的 ID。在 TUI 来源中选择播客，或执行 `:podcast search QUERY`
+查找公开订阅源。搜索结果按 Enter 先预览，再确认订阅。
+离线下载、续听、倍速、队列、OPML 和配置见[播客指南](docs/podcasts.zh-CN.md)。
 
 ### 地图探索
 

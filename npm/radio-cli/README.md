@@ -1,8 +1,12 @@
 # @hmgle/radio-cli
 
-Terminal radio for Linux and macOS: browse the Radio Browser catalog, search and
-filter locally, play any HTTP(S) stream, keep favorites and history, and record
-streams as stream copies.
+Terminal radio and podcast player for Linux and macOS: browse the Radio Browser
+catalog, search and filter locally, play any HTTP(S) stream, keep favorites and
+history, and record streams as stream copies.
+
+Subscribe to public RSS/Atom podcasts, resume episodes, download audio, manage
+a listening queue, change playback speed, and import or export OPML. See the
+[podcast guide](https://github.com/hmgle/radio-cli/blob/main/docs/podcasts.md).
 
 ## Install
 

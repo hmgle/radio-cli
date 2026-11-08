@@ -21,6 +21,12 @@ sudo apt install mpv ffmpeg
 brew install mpv ffmpeg
 ```
 
+## 升级到 0.12
+
+首次打开数据库会自动迁移至 schema v9，加入播客存储。包括 0.11.1 在内的旧版程序
+无法再打开迁移后的数据库。如需保留降级能力，请先关闭 radio-cli 并备份整个数据目录，
+再升级。既有电台、收藏和录音在迁移后仍可使用。
+
 ## 从 npm 安装
 
 ```sh

@@ -10,9 +10,10 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A lightweight terminal radio for Linux and macOS. Rust manages the local catalog
-and interface, SQLite stores favorites and history, mpv plays audio, and FFmpeg
-records streams without re-encoding. No account or API key is required.
+A lightweight terminal radio and podcast player for Linux and macOS. Rust manages
+the local catalog and interface, SQLite stores favorites and history, mpv plays
+audio, and FFmpeg records streams without re-encoding. No account or API key is
+required.
 
 - Subscribe to public podcasts, resume episodes, download audio, and manage a
   listening queue; see the [podcast guide](docs/podcasts.md).
@@ -76,7 +77,7 @@ macOS Gatekeeper notes, and first-run behavior.
 | Panels | `1`–`5` | Focus Sources / List / Details / Player / Tasks |
 | Panels | `h` / `l`, arrows | Move focus left / right or select and scroll |
 | Panels | `Ctrl-h/j/k/l`, `Ctrl` + arrows | Move focus by screen direction |
-| Sources | `[` / `]` | Previous / next source: stations, favorites, history, recordings |
+| Sources | `[` / `]` | Previous / next source: stations, favorites, history, recordings, Explore, podcast subscriptions, downloads, queue |
 | Sources | `j` / `k`, arrows | Next / previous source while the Sources panel is focused |
 | Lists | `j` / `k`, arrows | Move the selection |
 | Lists | `gg` / `G`, `Home` / `End` | First / last item |
@@ -85,7 +86,8 @@ macOS Gatekeeper notes, and first-run behavior.
 | Lists | `zt` / `zz` / `zb` | Put the selected row at the top / middle / bottom |
 | Lists | `PgUp` / `PgDn`, `Ctrl-b` / `Ctrl-f` | Previous / next data page; scroll ten lines in other panels |
 | Lists | `Ctrl-e` / `Ctrl-y` | Scroll the viewport down / up one line |
-| Playback | `Enter` | Play the selected station or recording; in Sources, open the list; in Player, show the playing station's details |
+| Playback | `Enter` | Open a podcast show or play the selected station, recording, or episode; in Sources, open the list; in Player, show the playing station's details |
+| Podcasts | `Esc` / `Alt-Left` / `Alt-Right` | Return from episodes to shows / seek backward 15 seconds / seek forward 15 seconds |
 | Playback | `Space` | Pause / resume |
 | Playback | `m` | Mute / unmute |
 | Playback | `+` or `=` / `-` | Raise / lower volume |
@@ -121,7 +123,7 @@ truncated and reported.
 
 | Command | Action |
 | --- | --- |
-| `:sync [--accept-shrink]` / `:sync-cancel` | Start or cancel a background catalog sync |
+| `:sync [--accept-shrink]` / `:sync-cancel` | Start a background catalog sync / cancel the catalog or current podcast command |
 | `:refresh` | Refresh the current list |
 | `:search [QUERY] [OPTIONS]` | Apply a search using the CLI search options |
 | `:play [UUID\|URL]` | Play the selection, a UUID, or a temporary stream URL |
@@ -139,11 +141,27 @@ truncated and reported.
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | Run diagnostics / move focus |
 | `:subtitles on\|off\|toggle\|history\|clear\|retry` | Control live subtitles / inspect session history |
 | `:set subtitles.model ID` | Change the subtitle model for this session |
+| `:podcast ...` | Subscribe, play, seek, download, queue, or exchange OPML; see the [podcast guide](docs/podcasts.md) |
 | `:quit` / `:q` | Finalize recordings and quit |
 
 `:help` shows the full context-sensitive keyboard reference, and `:` followed by
 `Tab` completes commands. `:record UUID` only accepts the station that is
 currently playing; use `radio record UUID` for an independent recording.
+
+### Podcasts
+
+```sh
+radio podcast add https://example.org/feed.xml
+radio podcast list
+radio podcast episodes FEED_ID
+radio podcast play EPISODE_ID
+```
+
+Use the IDs returned by the list commands. In the TUI, choose Podcasts in
+Sources or use `:podcast search QUERY` to find a public feed. Enter previews
+search results before confirming a subscription. See the
+[podcast guide](docs/podcasts.md) for offline downloads, resume, speed, queue
+controls, OPML, and configuration.
 
 ### Explore map
 

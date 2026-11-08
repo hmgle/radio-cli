@@ -1,12 +1,31 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 — 2026-11-08
 
 - Add public RSS/Atom podcast subscriptions, Apple directory search and feed
   discovery, episode progress and seeking, offline downloads with validated
   resume, an explicit listening queue, OPML exchange, and playback speed.
   Expose podcast commands in the CLI and TUI with English and Chinese messages.
   Keep finite episode completion separate from live radio reconnection.
+- Restore the last episode and its page without autoplay in selection mode,
+  or resume playback with the existing playback resume setting. Keep podcast
+  subscriptions, progress, history, speed and queue independent of live radio.
+- Validate partial response ranges and download media fingerprints, retain
+  incomplete transfers for explicit resume, and replace outdated downloads
+  only when downloading again. Keep queue changes and completion atomic while
+  saving session progress and advancing playback away from media controls.
+- Include English and Chinese podcast guides in release archives.
+
+### Compatibility
+
+- Existing databases migrate atomically to schema v9 on first open, adding
+  podcast subscriptions, episodes, progress, history, downloads and queue
+  tables. Earlier binaries, including 0.11.1, cannot open an upgraded database.
+  Close radio-cli and back up the data directory before upgrading if you need
+  to retain the option of downgrading.
+- Public RSS 2.0 and Atom HTTP(S) audio feeds are supported. Private accounts,
+  paid-content access and platform account synchronization are not supported.
+  Playback and downloads still require external mpv, FFmpeg and ffprobe.
 
 ## 0.11.1 — 2026-11-06
 
