@@ -7070,6 +7070,109 @@ fn podcast_browsing_retries_after_the_command_queue_fills() {
 }
 
 #[test]
+fn podcast_double_click_uses_the_same_actions_as_enter() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    for (source, kind) in [
+        (Source::Podcasts, "episode"),
+        (Source::PodcastDownloads, "download"),
+        (Source::PodcastQueue, "episode"),
+        (Source::Podcasts, "feed"),
+        (Source::Podcasts, "url"),
+        (Source::Podcasts, "preview"),
+    ] {
+        let mut app = App::default();
+        app.source = source;
+        app.rects[Focus::List.index()] = ratatui::layout::Rect::new(10, 5, 40, 10);
+        let mut data = view();
+        data.podcast_page = Some(super::podcast::browse(source, &None, "", 0, 100));
+        data.podcast_items = vec![super::podcast::Item {
+            id: "target-id".into(),
+            url: "https://example.test/feed".into(),
+            kind: kind.into(),
+            ..Default::default()
+        }]
+        .into();
+        let (sender, receiver) = command::channel(8);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 15,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        };
+        let now = Instant::now();
+        app.mouse_at(click, &data, &sender, now);
+        assert!(receiver.try_recv().is_err());
+        app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+        match (kind, receiver.try_recv().unwrap()) {
+            ("episode" | "download", Command::Podcast(crate::podcast::Action::Play { id, .. })) => {
+                assert_eq!(id, "target-id")
+            }
+            (
+                "feed",
+                Command::PodcastRequest {
+                    action: crate::podcast::Action::Episodes { id, .. },
+                    ..
+                },
+            ) => assert_eq!(id, "target-id"),
+            (
+                "url",
+                Command::PodcastRequest {
+                    action: crate::podcast::Action::Preview { url },
+                    ..
+                },
+            )
+            | (
+                "preview",
+                Command::PodcastRequest {
+                    action: crate::podcast::Action::Add { url },
+                    ..
+                },
+            ) => assert_eq!(url, "https://example.test/feed"),
+            _ => panic!("wrong action for {source:?} {kind}"),
+        }
+    }
+}
+
+#[test]
+fn podcast_double_click_requires_a_ready_and_unchanged_page() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    for change in ["query", "request", "unpublished", "replacement"] {
+        let mut app = App::default();
+        app.source = Source::Podcasts;
+        app.rects[Focus::List.index()] = ratatui::layout::Rect::new(10, 5, 40, 10);
+        let mut data = view();
+        data.podcast_page = Some(super::podcast::browse(app.source, &None, "", 0, 100));
+        data.podcast_items = vec![super::podcast::Item {
+            id: "episode-id".into(),
+            kind: "episode".into(),
+            ..Default::default()
+        }]
+        .into();
+        let (sender, receiver) = command::channel(8);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 15,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        };
+        let now = Instant::now();
+        app.mouse_at(click, &data, &sender, now);
+        match change {
+            "query" => app.filter.query = "new query".into(),
+            "request" => {
+                app.flush_search(&sender);
+                receiver.try_recv().unwrap();
+            }
+            "unpublished" => data.podcast_page = None,
+            "replacement" => data.podcast_request = Some(5),
+            _ => unreachable!(),
+        }
+        app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
+        assert!(receiver.try_recv().is_err(), "{change}");
+    }
+}
+
+#[test]
 fn podcast_search_is_sent_with_the_requested_page() {
     let mut app = App::default();
     app.source = Source::Podcasts;

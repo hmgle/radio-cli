@@ -1054,6 +1054,40 @@ impl App {
             self.search_due = Some(Instant::now() + Duration::from_millis(200));
         }
     }
+    fn activate_podcast(&mut self, view: &View, sender: &CommandSender) {
+        if !self.list_ready(view) {
+            return;
+        }
+        if let Some(item) = self
+            .podcast_items(view)
+            .get(self.list.selected().unwrap_or(0))
+        {
+            let action = match item.kind.as_str() {
+                "feed" => {
+                    self.podcast_feed = Some(item.id.clone());
+                    self.filter.query.clear();
+                    self.filter.offset = 0;
+                    self.reset_selection();
+                    self.flush_search(sender);
+                    return;
+                }
+                "episode" | "download" => crate::podcast::Action::Play {
+                    id: item.id.clone(),
+                    from_start: false,
+                    speed: None,
+                },
+                "url" => crate::podcast::Action::Preview {
+                    url: item.url.clone(),
+                },
+                "preview" => crate::podcast::Action::Add {
+                    url: item.url.clone(),
+                },
+                _ => return,
+            };
+            self.send(sender, Command::Podcast(action));
+        }
+    }
+
     fn reset_selection(&mut self) {
         self.restore_selection = None;
         self.jump_selection = None;
@@ -1924,37 +1958,7 @@ impl App {
                 return;
             }
             if key.code == KeyCode::Enter && self.focus == Focus::List {
-                if !self.list_ready(view) {
-                    return;
-                }
-                if let Some(item) = self
-                    .podcast_items(view)
-                    .get(self.list.selected().unwrap_or(0))
-                {
-                    let action = match item.kind.as_str() {
-                        "feed" => {
-                            self.podcast_feed = Some(item.id.clone());
-                            self.filter.query.clear();
-                            self.filter.offset = 0;
-                            self.reset_selection();
-                            self.flush_search(sender);
-                            return;
-                        }
-                        "episode" | "download" => crate::podcast::Action::Play {
-                            id: item.id.clone(),
-                            from_start: false,
-                            speed: None,
-                        },
-                        "url" => crate::podcast::Action::Preview {
-                            url: item.url.clone(),
-                        },
-                        "preview" => crate::podcast::Action::Add {
-                            url: item.url.clone(),
-                        },
-                        _ => return,
-                    };
-                    self.send(sender, Command::Podcast(action));
-                }
+                self.activate_podcast(view, sender);
                 return;
             }
             if matches!(key.code, KeyCode::Char('f' | 'F' | 'r' | 'y' | 'Y')) {
@@ -2363,6 +2367,9 @@ impl App {
                         self.switch_source(source, None, sender);
                     }
                 } else if focus == Focus::List {
+                    if self.source.is_podcast() && !self.list_ready(view) {
+                        return;
+                    }
                     let rect = self.rects[focus.index()];
                     if event.row > rect.y && event.row < rect.bottom().saturating_sub(1) {
                         let index = self.list.offset() + usize::from(event.row - rect.y - 1);
@@ -2378,6 +2385,8 @@ impl App {
                                 let uuid = format!("{}:{id}", self.source.preference());
                                 let revision = if self.source == Source::Recordings {
                                     view.recordings_revision
+                                } else if self.source.is_podcast() {
+                                    view.podcast_request.unwrap_or(0)
                                 } else {
                                     view.rows_revision
                                 };
@@ -2387,14 +2396,18 @@ impl App {
                                         && id == uuid
                                         && previous_revision == revision
                                 }) {
-                                    self.send(
-                                        sender,
-                                        if self.source == Source::Recordings {
-                                            Command::PlayRecording(id)
-                                        } else {
-                                            Command::Play(id)
-                                        },
-                                    );
+                                    if self.source.is_podcast() {
+                                        self.activate_podcast(view, sender);
+                                    } else {
+                                        self.send(
+                                            sender,
+                                            if self.source == Source::Recordings {
+                                                Command::PlayRecording(id)
+                                            } else {
+                                                Command::Play(id)
+                                            },
+                                        );
+                                    }
                                 } else {
                                     self.last_click =
                                         Some((now, event.column, event.row, uuid, revision));
