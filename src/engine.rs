@@ -1,6 +1,7 @@
 pub(crate) mod artwork;
 mod persistence;
 mod playback;
+mod queue;
 mod recording;
 mod status;
 use playback::PlaybackController;
@@ -315,6 +316,7 @@ impl Engine {
                 last_save: Instant::now(),
                 queue_mode: false,
                 auto_next: false,
+                queue_completions: Default::default(),
                 generation: 0,
                 refresh_task: None,
                 click_task: None,
@@ -731,6 +733,10 @@ impl Engine {
             || self.playback.player_start.is_some()
             || self.playback.refresh_task.is_some()
             || self.playback.reconnect_due.is_some()
+            || self
+                .playback
+                .queue_completions
+                .active(self.playback.generation)
     }
 
     pub fn playback_error(&self) -> Option<&DomainError> {
@@ -755,6 +761,7 @@ impl Engine {
         // Allow normal finalization, then cancel verification if its budget
         // expires. Outstanding HTTP results never need joining.
         while (self.recording.finalizing.is_some()
+            || !self.playback.queue_completions.is_empty()
             || !self.playback.retiring.is_empty()
             || !self.recording.retiring_probes.is_empty()
             || !self.session.artwork.quiescent()
@@ -772,6 +779,9 @@ impl Engine {
             std::thread::sleep(Duration::from_millis(10));
         }
         self.recording.finalizing = None;
+        if !self.playback.queue_completions.is_empty() {
+            failure.get_or_insert_with(|| anyhow::anyhow!(crate::t!("session_save_failed")));
+        }
         if let Some(writer) = self.session.persistence.take()
             && let Err(error) = writer.finish().context(crate::t!("session_save_failed"))
         {
@@ -815,6 +825,140 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queue_completion_retries_without_blocking_or_overriding_controls() {
+        use crate::podcast::{Episode, Feed, Preview};
+        for control in ["advance", "stop", "switch", "off", "shutdown"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = crate::test_support::config(dir.path());
+            config.settings.mpv = crate::test_support::fake_mpv(dir.path())
+                .to_string_lossy()
+                .into_owned();
+            let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+            let preview = Preview {
+                feed: Feed {
+                    url: "https://example.test/feed".into(),
+                    ..Default::default()
+                },
+                episodes: ["episode-eof", "audio"]
+                    .into_iter()
+                    .map(|name| Episode {
+                        guid: Some(name.into()),
+                        url: format!("https://example.test/{name}"),
+                        ..Default::default()
+                    })
+                    .collect(),
+            };
+            let feed = engine
+                .store()
+                .podcast_subscribe(&preview, &preview.feed.url)
+                .unwrap();
+            let episodes = engine.store().podcast_episodes(&feed.id).unwrap();
+            let first = episodes
+                .iter()
+                .find(|e| e.guid.as_deref() == Some("episode-eof"))
+                .unwrap();
+            let next = episodes
+                .iter()
+                .find(|e| e.guid.as_deref() == Some("audio"))
+                .unwrap();
+            engine
+                .store()
+                .podcast_queue_set(&[first.id.clone(), next.id.clone()])
+                .unwrap();
+            engine.enable_background_media().unwrap();
+            engine.play_podcast_queue(true).unwrap();
+            let connection = rusqlite::Connection::open(dir.path().join("radio.db")).unwrap();
+            connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while engine.playback.queue_completions.is_empty() {
+                let started = Instant::now();
+                engine.tick().unwrap();
+                assert!(
+                    started.elapsed() < Duration::from_millis(250),
+                    "EOF blocked controls"
+                );
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let deadline = Instant::now() + Duration::from_millis(350);
+            while Instant::now() < deadline {
+                let started = Instant::now();
+                engine.tick().unwrap();
+                engine.volume(-1).unwrap();
+                assert!(
+                    started.elapsed() < Duration::from_millis(250),
+                    "queue retry blocked controls"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(engine.store().podcast_queue().unwrap().len(), 2);
+            assert!(!engine.playback.queue_completions.is_empty());
+            if control == "shutdown" {
+                let release = std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(200));
+                    connection.execute_batch("ROLLBACK").unwrap();
+                });
+                engine.shutdown().unwrap();
+                release.join().unwrap();
+                assert!(engine.playback.queue_completions.is_empty());
+                assert_eq!(engine.status().playback_state, PlaybackState::Idle);
+                assert_eq!(engine.store().podcast_queue().unwrap()[0].id, next.id);
+                assert!(engine.store().podcast_episode(&first.id).unwrap().completed);
+                continue;
+            }
+            match control {
+                "stop" => {
+                    engine.stop_playback().unwrap();
+                    assert!(!engine.playback_active());
+                }
+                "switch" => {
+                    engine.play("https://example.test/live").unwrap();
+                }
+                "off" => engine.podcast_auto_next(false).unwrap(),
+                _ => assert!(engine.playback_active()),
+            }
+            connection.execute_batch("ROLLBACK").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                engine.tick().unwrap();
+                if engine.playback.queue_completions.is_empty()
+                    && (matches!(control, "stop" | "off")
+                        || engine.status().playback_state == PlaybackState::Playing)
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{control}: {:?}",
+                    engine.status()
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                engine
+                    .store()
+                    .podcast_queue()
+                    .unwrap()
+                    .iter()
+                    .map(|e| &e.id)
+                    .collect::<Vec<_>>(),
+                vec![&next.id]
+            );
+            match control {
+                "advance" => assert_eq!(engine.status().episode.as_ref().unwrap().id, next.id),
+                "stop" | "off" => assert_eq!(engine.status().playback_state, PlaybackState::Idle),
+                "switch" => {
+                    assert!(engine.status().episode.is_none());
+                    assert_eq!(engine.status().source_url, "https://example.test/live");
+                }
+                _ => unreachable!(),
+            }
+            engine.shutdown().unwrap();
+            assert!(engine.store().podcast_episode(&first.id).unwrap().completed);
+        }
+    }
 
     #[test]
     fn podcast_preferences_apply_before_the_background_write_finishes() {

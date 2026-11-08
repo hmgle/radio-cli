@@ -18,6 +18,7 @@ pub(super) struct PlaybackController {
     pub(super) last_save: Instant,
     pub(super) queue_mode: bool,
     pub(super) auto_next: bool,
+    pub(super) queue_completions: super::queue::Completions,
     pub(super) generation: u64,
     pub(super) refresh_task: Option<(u64, String, Background<Option<Station>>)>,
     pub(super) click_task: Option<Background<()>>,
@@ -660,20 +661,7 @@ impl PlaybackController {
                                 self.stop_playback(session, recording)?;
                                 session.status.message = crate::t!("podcast_finished").into();
                                 if queue_mode {
-                                    let next = session
-                                        .store
-                                        .podcast_queue_update(
-                                            crate::podcast::QueueAction::Remove { id },
-                                        )?
-                                        .into_iter()
-                                        .next();
-                                    if advance && let Some(next) = next {
-                                        self.play_episode(
-                                            session, recording, &next.id, false, None,
-                                        )?;
-                                        self.queue_mode = true;
-                                        self.auto_next = true;
-                                    }
+                                    self.queue_completions.push(id, self.generation, advance);
                                 }
                                 break;
                             }
@@ -837,6 +825,18 @@ impl PlaybackController {
         recording: &mut RecordingController,
     ) -> Result<()> {
         self.retiring.retain(|task| task.poll().is_none());
+        if let Some(completed) = self.queue_completions.poll(
+            &session.config.data_dir.join("radio.db"),
+            session._lock.clone(),
+        )? && completed.generation == self.generation
+            && completed.advance
+            && self.auto_next
+            && let Some(next) = completed.next
+        {
+            self.play_episode(session, recording, &next.id, false, None)?;
+            self.queue_mode = true;
+            self.auto_next = true;
+        }
         if let Some(result) = self
             .player_start
             .as_ref()
