@@ -1,5 +1,5 @@
 //! Extract track text from the RadioInfo documents used as HLS/ID3 titles.
-use quick_xml::{Reader, events::Event};
+use quick_xml::{Reader, XmlVersion, events::Event};
 
 // Parse the complete document before the display limit is applied, while
 // bounding work on metadata supplied by an external stream.
@@ -47,8 +47,8 @@ impl Track {
     }
 }
 
-/// Unknown, malformed or excessive documents keep the normal text fallback.
-/// A valid RadioInfo document without track fields explicitly clears the title.
+/// Unknown schemas, detected XML errors or excessive input use the text fallback.
+/// A parsed RadioInfo document without track fields explicitly clears the title.
 /// Select the first nonempty direct Table in document order. Later records
 /// cannot complete a partial title from an earlier record.
 pub(super) fn title(text: &str) -> Option<String> {
@@ -65,6 +65,15 @@ pub(super) fn title(text: &str) -> Option<String> {
     loop {
         match reader.read_event().ok()? {
             Event::Start(element) => {
+                // The reader parses tag boundaries, but attributes are checked
+                // lazily. Inspect even ignored nodes and later records so an
+                // attribute error cannot silently turn XML into a track title.
+                for attribute in element.attributes() {
+                    attribute
+                        .ok()?
+                        .normalized_value(XmlVersion::Implicit1_0)
+                        .ok()?;
+                }
                 let name = element.name().as_ref().to_owned();
                 if stack.is_empty() {
                     if root || name != "RadioInfo" {

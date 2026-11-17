@@ -1082,6 +1082,38 @@ mod tests {
     }
 
     #[test]
+    fn radioinfo_titles_reject_invalid_attributes_anywhere_in_the_document() {
+        for attrs in [
+            "broken",
+            "key=unquoted",
+            "key='one' key='two'",
+            "key='&unknown;'",
+            "key='&unterminated'",
+        ] {
+            for title in [
+                format!(
+                    "<RadioInfo {attrs}><Table><DB_SONG_NAME>Song</DB_SONG_NAME></Table></RadioInfo>"
+                ),
+                format!(
+                    "<RadioInfo><Table {attrs}><DB_SONG_NAME>Song</DB_SONG_NAME></Table></RadioInfo>"
+                ),
+                format!(
+                    "<RadioInfo><Table><DB_SONG_NAME {attrs}>Song</DB_SONG_NAME></Table></RadioInfo>"
+                ),
+                format!(
+                    "<RadioInfo><Table><DB_SONG_NAME>Song</DB_SONG_NAME></Table><Other {attrs}/></RadioInfo>"
+                ),
+            ] {
+                for key in ["title", "icy-title"] {
+                    assert_eq!(metadata_title(&json!({key: title})), title);
+                }
+            }
+        }
+        let title = "<RadioInfo key='&amp;' other=\"value\"><Table key='one'><DB_SONG_NAME key='&#x2665;'>Song</DB_SONG_NAME></Table><Other key='two'/></RadioInfo>";
+        assert_eq!(metadata_title(&json!({"title": title})), "Song");
+    }
+
+    #[test]
     fn radioinfo_titles_preserve_unknown_or_malformed_metadata_as_text() {
         for title in [
             "Artist - <Live>",
