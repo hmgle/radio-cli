@@ -1023,6 +1023,65 @@ mod tests {
     }
 
     #[test]
+    fn radioinfo_titles_select_the_first_nonempty_table_without_mixing_records() {
+        let artist = "<DB_DALET_ARTIST_NAME>Artist A</DB_DALET_ARTIST_NAME>";
+        let song = "<DB_SONG_NAME>Song B</DB_SONG_NAME>";
+        let complete = "<DB_DALET_ARTIST_NAME>Artist B</DB_DALET_ARTIST_NAME><DB_SONG_NAME>Song B</DB_SONG_NAME>";
+        for (tables, expected) in [
+            (
+                format!("<Table>{artist}</Table><Table>{complete}</Table>"),
+                "Artist A",
+            ),
+            (
+                format!("<Table>{song}</Table><Table>{artist}</Table>"),
+                "Song B",
+            ),
+            (
+                format!("<Table/><Table>{complete}</Table>"),
+                "Artist B - Song B",
+            ),
+            (
+                format!(
+                    "<Table><DB_RADIO_NAME>Cidade</DB_RADIO_NAME></Table><Table>{complete}</Table>"
+                ),
+                "Artist B - Song B",
+            ),
+            (
+                format!("<Table>{complete}</Table><Table>{artist}</Table>"),
+                "Artist B - Song B",
+            ),
+            (
+                format!("<Table><Table>{artist}</Table>{song}</Table>"),
+                "Song B",
+            ),
+            (
+                format!("<Other><Table>{artist}</Table></Other><Table>{complete}</Table>"),
+                "Artist B - Song B",
+            ),
+        ] {
+            let title = format!("<RadioInfo>{tables}</RadioInfo>");
+            for key in ["title", "icy-title"] {
+                assert_eq!(metadata_title(&json!({key: title})), expected, "{title}");
+            }
+        }
+    }
+
+    #[test]
+    fn radioinfo_titles_check_the_document_after_selecting_a_table() {
+        for tail in [
+            "<Table><DB_SONG_NAME>Unclosed",
+            "<Other></Broken>",
+            "<Other>&unknown;</Other>",
+            "<Other>",
+        ] {
+            let title = format!(
+                "<RadioInfo><Table><DB_SONG_NAME>Song</DB_SONG_NAME></Table>{tail}</RadioInfo>"
+            );
+            assert_eq!(metadata_title(&json!({"title": title})), title);
+        }
+    }
+
+    #[test]
     fn radioinfo_titles_preserve_unknown_or_malformed_metadata_as_text() {
         for title in [
             "Artist - <Live>",

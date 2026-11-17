@@ -5,6 +5,7 @@
 - Extract artist and song names from RadioInfo XML in HLS/ID3 and ICY titles,
   including Cidade streams. Keep station announcements and partial titles
   readable instead of displaying the XML document in playback and recordings.
+  Select the first record with track text without combining different records.
 
 ## 0.12.0 — 2026-11-08
 

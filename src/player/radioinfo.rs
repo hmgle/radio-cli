@@ -49,6 +49,8 @@ impl Track {
 
 /// Unknown, malformed or excessive documents keep the normal text fallback.
 /// A valid RadioInfo document without track fields explicitly clears the title.
+/// Select the first nonempty direct Table in document order. Later records
+/// cannot complete a partial title from an earlier record.
 pub(super) fn title(text: &str) -> Option<String> {
     let xml = text.trim().trim_start_matches('\u{feff}').trim_start();
     if !xml.starts_with('<') || xml.len() > XML_LIMIT {
@@ -58,7 +60,8 @@ pub(super) fn title(text: &str) -> Option<String> {
     reader.config_mut().expand_empty_elements = true;
     let mut stack: Vec<(String, String)> = Vec::new();
     let mut root = false;
-    let mut track = Track::default();
+    let mut track: Option<Track> = None;
+    let mut selected = None;
     loop {
         match reader.read_event().ok()? {
             Event::Start(element) => {
@@ -72,6 +75,9 @@ pub(super) fn title(text: &str) -> Option<String> {
                 if stack.len() >= DEPTH_LIMIT {
                     return None;
                 }
+                if stack.len() == 1 && name == "Table" {
+                    track = Some(Track::default());
+                }
                 stack.push((name, String::new()));
             }
             Event::End(_) => {
@@ -79,7 +85,13 @@ pub(super) fn title(text: &str) -> Option<String> {
                 // Programme titles, hosts and unrelated nested fields must
                 // never be mistaken for the current song.
                 if stack.len() == 2 && stack[1].0 == "Table" {
-                    track.field(&name, &value);
+                    track.as_mut()?.field(&name, &value);
+                }
+                if stack.len() == 1 && name == "Table" {
+                    let title = track.take()?.display();
+                    if selected.is_none() && !title.is_empty() {
+                        selected = Some(title);
+                    }
                 }
             }
             Event::Text(value) => {
@@ -100,5 +112,5 @@ pub(super) fn title(text: &str) -> Option<String> {
             _ => {}
         }
     }
-    (root && stack.is_empty()).then(|| track.display())
+    (root && stack.is_empty()).then(|| selected.unwrap_or_default())
 }
