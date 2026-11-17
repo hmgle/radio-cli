@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Extract artist and song names from RadioInfo XML in HLS/ID3 and ICY titles,
+  including Cidade streams. Keep station announcements and partial titles
+  readable instead of displaying the XML document in playback and recordings.
+
 ## 0.12.0 — 2026-11-08
 
 - Add public RSS/Atom podcast subscriptions, Apple directory search and feed

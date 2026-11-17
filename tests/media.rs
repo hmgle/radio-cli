@@ -644,6 +644,82 @@ fn mpv_ipc_reads_icy_titles_and_reaps_child() {
 }
 
 #[test]
+fn mpv_ipc_extracts_radioinfo_titles_from_icy() {
+    exercise_icy_player(
+        false,
+        include_str!("fixtures/radioinfo-cidade.xml")
+            .trim()
+            .as_bytes(),
+        "Taylor Swift - The Fate of Ophelia",
+    );
+}
+
+#[test]
+fn mpv_ipc_extracts_radioinfo_titles_from_hls_id3() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(config) = mpv_config(dir.path()) else {
+        return;
+    };
+    let title = include_str!("fixtures/radioinfo-cidade.xml").trim();
+    // Reproduce the observed ID3v2.4 TIT2 tag with synthetic AAC audio, so
+    // this regression exercises the real HLS demuxer without public servers.
+    let synchsafe = |size: usize| [21, 14, 7, 0].map(|shift| ((size >> shift) & 0x7f) as u8);
+    let mut frame = b"TIT2".to_vec();
+    frame.extend_from_slice(&synchsafe(title.len() + 2));
+    frame.extend_from_slice(&[0, 0, 3]); // flags, UTF-8 text encoding
+    frame.extend_from_slice(title.as_bytes());
+    frame.push(0);
+    let mut segment = b"ID3\x04\0\0".to_vec();
+    segment.extend_from_slice(&synchsafe(frame.len()));
+    segment.extend_from_slice(&frame);
+    segment.extend_from_slice(&support::fixture("aac", "adts"));
+    let playlist = format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:4,{title}\nsegment.aac\n#EXT-X-ENDLIST\n"
+    );
+    let server = Server::new(move |request, stream| {
+        if request.starts_with("GET /index.m3u8 ") {
+            response(
+                stream,
+                200,
+                "application/vnd.apple.mpegurl",
+                playlist.as_bytes(),
+            );
+        } else if request.starts_with("GET /segment.aac ") {
+            response(stream, 200, "audio/aac", &segment);
+        } else {
+            response(stream, 404, "text/plain", b"");
+        }
+    });
+    let mut player = Player::start(
+        &config,
+        &format!("{}/index.m3u8", server.url),
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut playing = false;
+    let mut song = false;
+    while !(playing && song) {
+        for event in player.poll().unwrap() {
+            match event {
+                Event::Playing => playing = true,
+                Event::Title(title) => {
+                    assert!(
+                        title.is_empty() || title == "Taylor Swift - The Fate of Ophelia",
+                        "{title}"
+                    );
+                    song |= title == "Taylor Swift - The Fate of Ophelia";
+                }
+                _ => {}
+            }
+        }
+        assert!(Instant::now() < deadline, "HLS playback/title missing");
+        thread::sleep(Duration::from_millis(10));
+    }
+    drop(player);
+}
+
+#[test]
 fn normalization_preserves_real_mpv_metadata_volume_and_mute() {
     exercise_icy_player(true, b"Local test", "Local test");
 }

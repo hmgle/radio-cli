@@ -22,6 +22,7 @@ use std::{
 };
 
 pub(crate) mod asiafm;
+mod radioinfo;
 
 #[derive(Debug)]
 pub enum Event {
@@ -112,9 +113,14 @@ fn supports_normalization(config: &Config, stop: &Arc<AtomicBool>) -> Result<boo
 
 fn metadata_title(metadata: &Value) -> String {
     let Some(title) = metadata["icy-title"].as_str() else {
-        return crate::clean_text(metadata["title"].as_str().unwrap_or(""));
+        return display_title(metadata["title"].as_str().unwrap_or(""));
     };
     icy_title(&repair_mpv_gbk_runs(title))
+}
+
+fn display_title(title: &str) -> String {
+    let parsed = radioinfo::title(title);
+    crate::clean_text(parsed.as_deref().unwrap_or(title))
 }
 
 fn repair_mpv_gbk_runs(title: &str) -> String {
@@ -211,7 +217,7 @@ pub(crate) fn icy_title(title: &str) -> String {
         }
     }
     repaired.push_str(&repair_latin1_run(&title[start..], utf8_han));
-    crate::clean_text(&repaired)
+    display_title(&repaired)
 }
 
 pub(crate) fn icy_title_bytes(bytes: &[u8]) -> String {
@@ -951,6 +957,113 @@ mod tests {
             "File title"
         );
         assert_eq!(metadata_title(&json!(null)), "");
+    }
+
+    #[test]
+    fn radioinfo_titles_extract_the_captured_hls_song_before_truncation() {
+        // Cidade sends this document in both EXTINF and ID3v2 TIT2. It is
+        // longer than clean_text's limit, so parsing must precede sanitizing.
+        let title = include_str!("../tests/fixtures/radioinfo-cidade.xml").trim();
+        assert!(title.chars().count() > 1024);
+        for key in ["title", "icy-title"] {
+            assert_eq!(
+                metadata_title(&json!({key: title})),
+                "Taylor Swift - The Fate of Ophelia"
+            );
+        }
+        assert_eq!(
+            icy_title_bytes(title.as_bytes()),
+            "Taylor Swift - The Fate of Ophelia"
+        );
+    }
+
+    #[test]
+    fn radioinfo_titles_decode_entities_and_cdata_without_using_program_fields() {
+        let title = "\u{feff} <RadioInfo><AnimadorInfo>\
+            <DB_DALET_ARTIST_NAME>Host</DB_DALET_ARTIST_NAME><TITLE>Show</TITLE>\
+            </AnimadorInfo><Table><DB_DALET_ARTIST_NAME>Bj&#246;rk &amp; Friends</DB_DALET_ARTIST_NAME>\
+            <DB_DALET_TITLE_NAME><![CDATA[ Jóga <Live>\n ]]>&#x2665;</DB_DALET_TITLE_NAME>\
+            <DB_SONG_NAME>Other song</DB_SONG_NAME><DB_LEAD_ARTIST_NAME>Other artist</DB_LEAD_ARTIST_NAME>\
+            </Table></RadioInfo>";
+        assert_eq!(
+            metadata_title(&json!({"title": title})),
+            "Björk & Friends - Jóga <Live> ♥"
+        );
+    }
+
+    #[test]
+    fn radioinfo_titles_keep_partial_tracks_and_station_announcements() {
+        for (fields, expected) in [
+            (
+                "<DB_DALET_TITLE_NAME>CIDADE FM-So se quiseres</DB_DALET_TITLE_NAME><DB_SONG_ID>0</DB_SONG_ID>",
+                "CIDADE FM-So se quiseres",
+            ),
+            (
+                "<DB_DALET_ARTIST_NAME> </DB_DALET_ARTIST_NAME><DB_DALET_TITLE_NAME/><DB_LEAD_ARTIST_NAME>Artist</DB_LEAD_ARTIST_NAME><DB_SONG_NAME>Song</DB_SONG_NAME>",
+                "Artist - Song",
+            ),
+            (
+                "<DB_DALET_ARTIST_NAME>Artist</DB_DALET_ARTIST_NAME>",
+                "Artist",
+            ),
+            ("<DB_SONG_NAME>Song</DB_SONG_NAME>", "Song"),
+            ("<DB_RADIO_NAME>Cidade</DB_RADIO_NAME>", ""),
+        ] {
+            let title = format!(
+                "<RadioInfo><Table>{fields}</Table><AnimadorInfo><TITLE>Show</TITLE></AnimadorInfo></RadioInfo>"
+            );
+            assert_eq!(metadata_title(&json!({"title": title})), expected);
+        }
+        assert_eq!(
+            metadata_title(
+                &json!({"icy-title": "", "title": include_str!("../tests/fixtures/radioinfo-cidade.xml")})
+            ),
+            ""
+        );
+    }
+
+    #[test]
+    fn radioinfo_titles_preserve_unknown_or_malformed_metadata_as_text() {
+        for title in [
+            "Artist - <Live>",
+            "<song><title>Song</title></song>",
+            "<Other><RadioInfo><Table><DB_SONG_NAME>Song</DB_SONG_NAME></Table></RadioInfo></Other>",
+            "<RadioInfo><Table><DB_SONG_NAME>Song</DB_SONG_NAME></Table>",
+            "<RadioInfo><Table><DB_SONG_NAME>Song</DB_SONG_NAME></Other></RadioInfo>",
+            "<RadioInfo><Table><DB_SONG_NAME>&unknown;</DB_SONG_NAME></Table></RadioInfo>",
+            "<!DOCTYPE RadioInfo [<!ENTITY song 'Song'>]><RadioInfo><Table><DB_SONG_NAME>&song;</DB_SONG_NAME></Table></RadioInfo>",
+            "<RadioInfo/><RadioInfo/>",
+            "<RadioInfo/>trailing text",
+        ] {
+            assert_eq!(metadata_title(&json!({"title": title})), title);
+        }
+    }
+
+    #[test]
+    fn radioinfo_titles_bound_parsing_and_sanitize_extracted_text() {
+        let title = format!(
+            "<RadioInfo><Table><DB_SONG_NAME>{}</DB_SONG_NAME></Table></RadioInfo>",
+            "中".repeat(1100)
+        );
+        assert_eq!(metadata_title(&json!({"title": title})), "中".repeat(1024));
+        for title in [
+            format!(
+                "<RadioInfo><Table><DB_SONG_NAME>Song</DB_SONG_NAME></Table><Extra>{}</Extra></RadioInfo>",
+                "x".repeat(64 * 1024)
+            ),
+            format!(
+                "<RadioInfo>{}<Table><DB_SONG_NAME>Song</DB_SONG_NAME></Table>{}</RadioInfo>",
+                "<nested>".repeat(32),
+                "</nested>".repeat(32)
+            ),
+        ] {
+            assert_eq!(
+                metadata_title(&json!({"title": title})),
+                crate::clean_text(&title)
+            );
+        }
+        let title = "<RadioInfo><Table><DB_SONG_NAME><![CDATA[Song\x1b[31m]]></DB_SONG_NAME></Table></RadioInfo>";
+        assert_eq!(metadata_title(&json!({"title": title})), "Song[31m");
     }
 
     #[test]
