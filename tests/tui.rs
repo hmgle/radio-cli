@@ -126,7 +126,33 @@ impl Tui {
     fn wait(&mut self, mut condition: impl FnMut() -> bool) {
         self.wait_output(|_| condition());
     }
+    #[track_caller]
     fn wait_output(&mut self, mut condition: impl FnMut(&[u8]) -> bool) {
+        self.wait_for_output(|_, output| condition(output));
+    }
+    #[track_caller]
+    fn wait_screen_text(&mut self, expected: &[&str]) {
+        let redraw_interval = Duration::from_millis(250);
+        let mut next_redraw = Instant::now() + redraw_interval;
+        let mut width = 120;
+        self.wait_for_output(|tui, output| {
+            // The terminal can emit only the changed cells, and a resize can
+            // reach the application before the key that changes pages.
+            let text = String::from_utf8_lossy(output);
+            if expected.iter().all(|word| text.contains(word)) {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= next_redraw {
+                width = if width == 120 { 119 } else { 120 };
+                tui.resize(width, 30);
+                next_redraw = now + redraw_interval;
+            }
+            false
+        });
+    }
+    #[track_caller]
+    fn wait_for_output(&mut self, mut condition: impl FnMut(&mut Self, &[u8]) -> bool) {
         // Real-terminal cases spawn the TUI, start playback and load details
         // while the suite runs in parallel; the slowest CI runner needs far
         // more than a fast machine's sub-second round trip.
@@ -140,7 +166,7 @@ impl Tui {
                 }
                 output.extend_from_slice(&buffer[..n]);
             }
-            if condition(&output) {
+            if condition(self, &output) {
                 return;
             }
             assert!(
@@ -200,25 +226,18 @@ fn podcast_discovery_and_category_back_navigation_work_in_real_terminal() {
     let server = Server::new(|_, stream| response(stream, 200, "application/json", b"[]"));
     let dir = tempfile::tempdir().unwrap();
     let mut tui = Tui::start(dir.path(), &server.url);
-    let discovery_ready = |output: &[u8]| {
-        let text = String::from_utf8_lossy(output);
-        text.contains("Surprise") && text.contains("region")
-    };
+    let discovery_rows = ["Surprise", "region"];
     tui.wait_output(|o| String::from_utf8_lossy(o).contains("NORMAL"));
     tui.send(":podcast browse --country CN\r");
-    tui.wait_output(discovery_ready);
+    tui.wait_screen_text(&discovery_rows);
     tui.send("j\r");
-    tui.wait_output(|o| String::from_utf8_lossy(o).contains("Arts"));
+    tui.wait_screen_text(&["Arts"]);
     tui.send("\x1b");
-    // Resizing forces a complete frame. Diff output alone can omit unchanged
-    // letters or split a word across cursor-position escapes.
-    tui.resize(119, 30);
-    tui.wait_output(discovery_ready);
+    tui.wait_screen_text(&discovery_rows);
     tui.send(":podcast categories --country CN\r");
-    tui.wait_output(|o| String::from_utf8_lossy(o).contains("Arts"));
+    tui.wait_screen_text(&["Arts"]);
     tui.send("D");
-    tui.resize(120, 30);
-    tui.wait_output(discovery_ready);
+    tui.wait_screen_text(&discovery_rows);
     tui.send("\x03");
     tui.wait_for_exit();
 }
