@@ -20,7 +20,7 @@ requests are welcome.
 
 ## Local development
 
-See the README for prerequisites (Rust 1.88+, mpv, FFmpeg). Typical loop:
+See the README for prerequisites (Rust 1.89+, mpv, FFmpeg). Typical loop:
 
 ```sh
 cargo fmt --check

@@ -118,7 +118,7 @@ pub(super) struct Worker {
 impl Worker {
     pub fn start(path: &Path, view: &Arc<Mutex<View>>) -> Result<Self> {
         // The owner has already initialized/migrated the database.
-        let store = Store::open_reader(path)?;
+        let mut store = Store::open_reader(path)?;
         let shared = Arc::new(Shared {
             pending: Mutex::new(Pending::default()),
             ready: Condvar::new(),
@@ -132,7 +132,7 @@ impl Worker {
             cancellation
                 .upgrade()
                 .is_none_or(|s| s.stop.load(Ordering::Acquire))
-        });
+        })?;
         let state = shared.clone();
         let view = Arc::downgrade(view);
         let handle = thread::Builder::new()
@@ -334,7 +334,7 @@ impl Reader {
     }
 }
 
-fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
+fn run(mut store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
     let mut reader = Reader::default();
     loop {
         let request = {
@@ -368,7 +368,7 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
         if shared.stop.load(Ordering::Acquire) {
             return;
         }
-        store.cancel_queries_when(request.cancellation(Arc::downgrade(&shared)));
+        let cancellation = store.cancel_queries_when(request.cancellation(Arc::downgrade(&shared)));
         match request {
             Request::Map(generation, request) => {
                 let cached_land = view.upgrade().and_then(|v| {
@@ -383,8 +383,10 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                         })
                         .map(|i| i.land.clone())
                 });
-                let result = reader.map(&store, &request, cached_land, || {
-                    map_cancelled(&shared, generation)
+                let result = cancellation.and_then(|()| {
+                    reader.map(&store, &request, cached_land, || {
+                        map_cancelled(&shared, generation)
+                    })
                 });
                 let Some(view) = view.upgrade() else {
                     return;
@@ -416,7 +418,7 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
             }
 
             Request::Page(generation, page) => {
-                let result = reader.page(&store, &page.filter);
+                let result = cancellation.and_then(|()| reader.page(&store, &page.filter));
                 let Some(view) = view.upgrade() else {
                     return;
                 };
@@ -464,13 +466,17 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
             }
             Request::Locate(generation, uuid, request, limit, episode) => {
                 if episode {
-                    let result = store.read_snapshot(|store| {
-                        let e = store.podcast_episode(&uuid)?;
-                        let position = store
-                            .podcast_episode_position(&e.feed_id, &e.id)?
-                            .ok_or_else(|| crate::podcast::error(crate::t!("podcast_not_found")))?;
-                        let limit = limit.clamp(1, 1000);
-                        Ok((e.feed_id, position / limit * limit))
+                    let result = cancellation.and_then(|()| {
+                        store.read_snapshot(|store| {
+                            let e = store.podcast_episode(&uuid)?;
+                            let position = store
+                                .podcast_episode_position(&e.feed_id, &e.id)?
+                                .ok_or_else(|| {
+                                    crate::podcast::error(crate::t!("podcast_not_found"))
+                                })?;
+                            let limit = limit.clamp(1, 1000);
+                            Ok((e.feed_id, position / limit * limit))
+                        })
                     });
                     let Some(view) = view.upgrade() else {
                         return;
@@ -490,12 +496,14 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                     limit: limit.clamp(1, 1000),
                     ..Filter::default()
                 };
-                let result = store.station_position(&uuid, &filter).and_then(|position| {
-                    let position =
-                        position.ok_or_else(|| anyhow::anyhow!(crate::t!("jump_unavailable")))?;
-                    filter.offset = position / filter.limit * filter.limit;
-                    Ok(filter)
-                });
+                let result = cancellation
+                    .and_then(|()| store.station_position(&uuid, &filter))
+                    .and_then(|position| {
+                        let position = position
+                            .ok_or_else(|| anyhow::anyhow!(crate::t!("jump_unavailable")))?;
+                        filter.offset = position / filter.limit * filter.limit;
+                        Ok(filter)
+                    });
                 let Some(view) = view.upgrade() else {
                     return;
                 };
@@ -514,7 +522,7 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
             }
             Request::Facets(generation, selected, prefix) => {
                 let kind = [FacetKind::Country, FacetKind::Language, FacetKind::Tag][selected];
-                let result = store.facets_limited(kind, &prefix, 100);
+                let result = cancellation.and_then(|()| store.facets_limited(kind, &prefix, 100));
                 let Some(view) = view.upgrade() else {
                     return;
                 };
@@ -802,7 +810,7 @@ mod tests {
             store.upsert(&s).unwrap();
             rows.push(s);
         }
-        let reader_store = Store::open_reader(&path).unwrap();
+        let mut reader_store = Store::open_reader(&path).unwrap();
         let mut reader = Reader::default();
         let mut filter = Filter {
             limit: 1,
@@ -814,7 +822,7 @@ mod tests {
         // count() makes accidental recounting fail even on this small fixture.
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         reader_store
-            .test_connection()
+            .test_connection_mut()
             .authorizer(Some(|context: AuthContext<'_>| {
                 if matches!(
                     context.action,
@@ -826,13 +834,15 @@ mod tests {
                 } else {
                     Authorization::Allow
                 }
-            }));
+            }))
+            .unwrap();
         filter.offset = 1;
         filter.sort = Sort::Name;
         assert_eq!(reader.page(&reader_store, &filter).unwrap().total, 3);
         reader_store
-            .test_connection()
-            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+            .test_connection_mut()
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
         rows[0].active = false;
         store.upsert(&rows[0]).unwrap();
         filter.offset = 8;
@@ -1039,8 +1049,8 @@ mod tests {
             )
             .unwrap();
             engine
-                .store()
-                .test_connection()
+                .test_store_mut()
+                .test_connection_mut()
                 .authorizer(Some(|context: AuthContext<'_>| {
                     if matches!(
                         context.action,
@@ -1053,12 +1063,14 @@ mod tests {
                     } else {
                         Authorization::Allow
                     }
-                }));
+                }))
+                .unwrap();
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             engine
-                .store()
-                .test_connection()
-                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+                .test_store_mut()
+                .test_connection_mut()
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+                .unwrap();
             let retry_at = view.lock().unwrap().page_retry_at;
             assert!(retry_at.is_some());
             // A facet query queued behind the blocked reader acts as a barrier:
@@ -1274,8 +1286,8 @@ mod tests {
             // Isolate retry intent from the preference write's revision change.
             view.lock().unwrap().store_revision = Some(revision);
             engine
-                .store()
-                .test_connection()
+                .test_store_mut()
+                .test_connection_mut()
                 .authorizer(Some(|context: AuthContext<'_>| {
                     if matches!(
                         context.action,
@@ -1288,7 +1300,8 @@ mod tests {
                     } else {
                         Authorization::Allow
                     }
-                }));
+                }))
+                .unwrap();
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
             assert!(view.lock().unwrap().page_error(&filter).is_some());
             let retry_state = {
@@ -1314,9 +1327,10 @@ mod tests {
                 );
             }
             engine
-                .store()
-                .test_connection()
-                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+                .test_store_mut()
+                .test_connection_mut()
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+                .unwrap();
             assert_eq!(engine.store().list_revision(&filter).unwrap(), revision);
             let logs = view.lock().unwrap().logs.len();
             worker::refresh_if_needed(&engine, &filter, &view, false).unwrap();
@@ -1429,7 +1443,7 @@ mod map_tests {
     #[test]
     fn urgent_request_interrupts_an_active_map_sql_scan() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
         // A temporary view supplies a long scan without a large disk fixture.
         store.test_connection().execute_batch(
             "CREATE TEMP VIEW stations AS
@@ -1445,13 +1459,15 @@ mod map_tests {
         });
         let cancellation = shared.clone();
         let mut callbacks = 0;
-        store.cancel_queries_when(move || {
-            callbacks += 1;
-            if callbacks == 10 {
-                cancellation.pending.lock().unwrap().facets = Some((1, 0, String::new()));
-            }
-            map_cancelled(&cancellation, 0)
-        });
+        store
+            .cancel_queries_when(move || {
+                callbacks += 1;
+                if callbacks == 10 {
+                    cancellation.pending.lock().unwrap().facets = Some((1, 0, String::new()));
+                }
+                map_cancelled(&cancellation, 0)
+            })
+            .unwrap();
         let request = super::super::super::map::Request {
             filter: Filter {
                 language: Some("english".into()),
@@ -1478,7 +1494,7 @@ mod map_tests {
     fn country_counts_are_read_only_when_requested_and_follow_catalog_revisions() {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let mut store = Store::open(&dir.path().join("radio.db")).unwrap();
         let mut reader = Reader::default();
         let mut request = super::super::super::map::Request {
             filter: Filter::default(),
@@ -1488,7 +1504,7 @@ mod map_tests {
             countries: false,
         };
         store
-            .test_connection()
+            .test_connection_mut()
             .authorizer(Some(|context: AuthContext<'_>| {
                 if matches!(
                     context.action,
@@ -1501,7 +1517,8 @@ mod map_tests {
                 } else {
                     Authorization::Allow
                 }
-            }));
+            }))
+            .unwrap();
         assert!(
             reader
                 .map(&store, &request, None, || false)
@@ -1512,8 +1529,9 @@ mod map_tests {
         request.countries = true;
         assert!(reader.map(&store, &request, None, || false).is_err());
         store
-            .test_connection()
-            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+            .test_connection_mut()
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
         assert!(
             reader
                 .map(&store, &request, None, || false)

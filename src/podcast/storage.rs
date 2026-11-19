@@ -636,28 +636,31 @@ mod tests {
                 let (release, go) = mpsc::channel();
                 let id = episode.id.clone();
                 let worker = std::thread::spawn(move || {
-                    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                    let mut store = Store::open(&config.data_dir.join("radio.db")).unwrap();
                     let mut synchronized = false;
                     // Mark has read its media snapshot before requesting the
                     // write transaction. The INSERT hook catches the old path
                     // which bypassed that transaction and its media guard.
-                    store.conn.authorizer(Some(move |context: AuthContext<'_>| {
-                        if !synchronized
-                            && matches!(
-                                context.action,
-                                AuthAction::Transaction {
-                                    operation: TransactionOperation::Begin
-                                } | AuthAction::Insert {
-                                    table_name: "podcast_progress"
-                                }
-                            )
-                        {
-                            synchronized = true;
-                            ready.send(()).unwrap();
-                            go.recv_timeout(Duration::from_secs(3)).unwrap();
-                        }
-                        Authorization::Allow
-                    }));
+                    store
+                        .conn
+                        .authorizer(Some(move |context: AuthContext<'_>| {
+                            if !synchronized
+                                && matches!(
+                                    context.action,
+                                    AuthAction::Transaction {
+                                        operation: TransactionOperation::Begin
+                                    } | AuthAction::Insert {
+                                        table_name: "podcast_progress"
+                                    }
+                                )
+                            {
+                                synchronized = true;
+                                ready.send(()).unwrap();
+                                go.recv_timeout(Duration::from_secs(3)).unwrap();
+                            }
+                            Authorization::Allow
+                        }))
+                        .unwrap();
                     manage(
                         &config,
                         &store,
@@ -715,27 +718,30 @@ mod tests {
             let id = snapshot.episode_id.clone();
             let config = config.clone();
             let worker = std::thread::spawn(move || {
-                let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                let mut store = Store::open(&config.data_dir.join("radio.db")).unwrap();
                 let mut synchronized = false;
                 // Pause immediately before acquiring the write lock. Without
                 // a transaction this hook runs at INSERT, after the stale read.
-                store.conn.authorizer(Some(move |context: AuthContext<'_>| {
-                    if !synchronized
-                        && matches!(
-                            context.action,
-                            AuthAction::Transaction {
-                                operation: TransactionOperation::Begin
-                            } | AuthAction::Insert {
-                                table_name: "podcast_downloads"
-                            }
-                        )
-                    {
-                        synchronized = true;
-                        ready.send(()).unwrap();
-                        go.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
-                    }
-                    Authorization::Allow
-                }));
+                store
+                    .conn
+                    .authorizer(Some(move |context: AuthContext<'_>| {
+                        if !synchronized
+                            && matches!(
+                                context.action,
+                                AuthAction::Transaction {
+                                    operation: TransactionOperation::Begin
+                                } | AuthAction::Insert {
+                                    table_name: "podcast_downloads"
+                                }
+                            )
+                        {
+                            synchronized = true;
+                            ready.send(()).unwrap();
+                            go.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+                        }
+                        Authorization::Allow
+                    }))
+                    .unwrap();
                 if control == "enqueue" {
                     Runtime::enqueue(&store, &id).unwrap();
                 } else {
@@ -791,24 +797,27 @@ mod tests {
                 let id = e.id.clone();
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
-                    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                    let mut store = Store::open(&config.data_dir.join("radio.db")).unwrap();
                     let mut synchronized = false;
                     // Align the first write transactions. Reading before BEGIN
                     // makes both workers overwrite the same old queue snapshot.
-                    store.conn.authorizer(Some(move |context: AuthContext<'_>| {
-                        if !synchronized
-                            && matches!(
-                                context.action,
-                                AuthAction::Transaction {
-                                    operation: TransactionOperation::Begin
-                                }
-                            )
-                        {
-                            synchronized = true;
-                            barrier.wait();
-                        }
-                        Authorization::Allow
-                    }));
+                    store
+                        .conn
+                        .authorizer(Some(move |context: AuthContext<'_>| {
+                            if !synchronized
+                                && matches!(
+                                    context.action,
+                                    AuthAction::Transaction {
+                                        operation: TransactionOperation::Begin
+                                    }
+                                )
+                            {
+                                synchronized = true;
+                                barrier.wait();
+                            }
+                            Authorization::Allow
+                        }))
+                        .unwrap();
                     manage(
                         &config,
                         &store,

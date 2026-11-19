@@ -8,7 +8,7 @@
 - Linux 或 macOS；Linux 为主要目标平台。
 - `mpv`。
 - `ffmpeg` 与 `ffprobe`。
-- 仅从源码构建时需要 Rust 1.88 或更新版本。
+- 仅从源码构建时需要 Rust 1.89 或更新版本。
 
 SQLite 已编入可执行文件，不需要额外安装 SQLite 命令行工具。可用包管理器
 安装媒体工具，例如：
@@ -77,7 +77,7 @@ macOS 发行包未经 Developer ID 签名或公证。若 Gatekeeper 阻止运行
 cargo install radio-cli --locked
 ```
 
-`cargo install` 会从源码构建，因此需要 Rust 1.88 或更新版本的工具链，
+`cargo install` 会从源码构建，因此需要 Rust 1.89 或更新版本的工具链，
 并把 `radio` 安装到 `~/.cargo/bin`。运行时仍需要 `mpv`、`ffmpeg` 和
 `ffprobe`。
 

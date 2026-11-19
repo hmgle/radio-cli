@@ -162,6 +162,11 @@ impl Engine {
         &self.session.store
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_store_mut(&mut self) -> &mut Store {
+        &mut self.session.store
+    }
+
     pub fn subtitles(&self) -> &crate::speech::Snapshot {
         &self.session.subtitles.snapshot
     }

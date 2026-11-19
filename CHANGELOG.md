@@ -45,9 +45,11 @@
 - Extract artist and track names from RadioInfo XML carried by HLS/ID3 or
   ICY streams, including Cidade. Use readable titles in playback and recording
   metadata while retaining station announcements and partial track names.
+- Update bundled SQLite to 3.54.1 for RUSTSEC-2026-0459.
 
 ### Compatibility
 
+- Building from source now requires Rust 1.89 or newer.
 - Opening a database migrates it to schema v10, adding listening-library tables
   and revision tracking while preserving existing subscriptions, progress,
   downloads and queues. Version 0.12.0 and earlier cannot reopen the upgraded

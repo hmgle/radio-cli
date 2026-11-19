@@ -4,7 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
 [![Crates.io](https://img.shields.io/crates/v/radio-cli.svg?logo=rust)](https://crates.io/crates/radio-cli)
 [![npm](https://img.shields.io/npm/v/@hmgle/radio-cli.svg?logo=npm)](https://www.npmjs.com/package/@hmgle/radio-cli)
-[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
+[![Rust 1.89+](https://img.shields.io/badge/Rust-1.89%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
 [![Linux and macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#requirements)
 [![MIT license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 

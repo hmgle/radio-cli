@@ -34,6 +34,11 @@ impl Store {
         &self.conn
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_connection_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     pub(crate) fn open_reader(path: &Path) -> Result<Self> {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         crate::podcast::register_functions(&conn)?;
@@ -46,8 +51,11 @@ impl Store {
         self.conn.get_interrupt_handle()
     }
 
-    pub(crate) fn cancel_queries_when(&self, cancel: impl FnMut() -> bool + Send + 'static) {
-        self.conn.progress_handler(1000, Some(cancel));
+    pub(crate) fn cancel_queries_when(
+        &mut self,
+        cancel: impl FnMut() -> bool + Send + 'static,
+    ) -> Result<()> {
+        Ok(self.conn.progress_handler(1000, Some(cancel))?)
     }
 
     pub(crate) fn read_snapshot<T>(&self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
@@ -1332,22 +1340,28 @@ mod tests {
         let attempted = Arc::new(AtomicBool::new(false));
         let succeeded = Arc::new(AtomicBool::new(false));
         let (attempt, success) = (attempted.clone(), succeeded.clone());
-        store.conn.progress_handler(
-            1000,
-            Some(move || {
-                if !attempt.swap(true, Ordering::SeqCst) {
-                    success.store(
-                        writer
-                            .execute("INSERT INTO meta VALUES ('concurrent','write')", [])
-                            .is_ok(),
-                        Ordering::SeqCst,
-                    );
-                }
-                false
-            }),
-        );
+        store
+            .conn
+            .progress_handler(
+                1000,
+                Some(move || {
+                    if !attempt.swap(true, Ordering::SeqCst) {
+                        success.store(
+                            writer
+                                .execute("INSERT INTO meta VALUES ('concurrent','write')", [])
+                                .is_ok(),
+                            Ordering::SeqCst,
+                        );
+                    }
+                    false
+                }),
+            )
+            .unwrap();
         store.refresh_search_stats().unwrap();
-        store.conn.progress_handler(0, None::<fn() -> bool>);
+        store
+            .conn
+            .progress_handler(0, None::<fn() -> bool>)
+            .unwrap();
         assert!(attempted.load(Ordering::SeqCst));
         assert!(succeeded.load(Ordering::SeqCst));
         let actual: usize = store
