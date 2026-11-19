@@ -90,7 +90,7 @@ playback_timeout = "Playback start timed out"
 playback_reconnecting = "Reconnecting · {attempt}/{total} · {delay}s: {reason}"
 
 jump_unavailable = "The current station is unavailable in the local catalog; use :current for details"
-jump_loading = "Locating the current station…"
+jump_loading = "Locating the current playback…"
 jump_not_playing = "No station is currently playing"
 jump_failed = "Playback failed; showing the last requested station (nothing was replayed)"
 ephemeral_recording = "Add this stream with station add before recording it"
@@ -260,7 +260,7 @@ station_details = "{name}{context}\n{origin}\n\nCatalog\nCountry:\t{country}\nLa
 # Help section bodies hold one entry per line: "keys<TAB>description" is an
 # item, "keys<TAB>" with no description is a usage-only item, and a line
 # without a tab is a note. Both catalogs keep the same order and line kinds.
-help_jump = "Locate the playing station, or the last requested one after a failure (keybindings.jump_to_playing configures this key)"
+help_jump = "Locate the playing station or podcast episode; Esc returns (keybindings.jump_to_playing configures this key)"
 help_nav_title = "Navigation"
 help_nav = """
 Tab / Shift-Tab\tSwitch panels
@@ -279,6 +279,8 @@ zt / zz / zb\tPlace the selected list row at the top/middle/bottom
 Ctrl-u / Ctrl-d\tMove ten items
 Ctrl-e / Ctrl-y\tScroll the viewport down / up one line; keep the selected row visible
 PgUp / PgDn, Ctrl-b / Ctrl-f\tList: previous/next database page · other panels: scroll ten lines
+v (Details)\tSwitch subtitles/information; End follows captions again
+p / P\tPodcast actions: playing / selected episode
 """
 help_play_title = "Playback"
 help_play = """
@@ -344,7 +346,10 @@ help_commands = """
 :set language en|zh-CN\tSwitch UI language
 :set mouse true|false\tCapture the mouse; false allows terminal selection
 The last 100 commands persist in command-history.json in the data directory
-:subtitles on|off|toggle|history|clear|retry\tControl live subtitles and session history
+:subtitles [on|off|toggle|history|clear|retry|panel|follow]\tControl subtitles and their Details view
+:subtitles transcribe|fetch|cancel\tPrepare or cancel captions for the playing episode
+:subtitles import FILE\tImport captions for the playing episode
+:podcast / :subtitles\tOpen the podcast action menu
 :set subtitles.model ID\tChange the session subtitle model
 :doctor\tCheck media tools and directory permissions
 :focus sources|list|details|player|activity|map\t
@@ -453,7 +458,7 @@ subtitle_local = "Live subtitles do not support local recordings"
 subtitle_history = "Subtitle history · capture time"
 subtitle_empty = "No speech recognized yet"
 subtitle_interrupted = "Capture interrupted"
-subtitle_usage = "Usage: :subtitles on|off|toggle|history|clear|retry"
+subtitle_usage = "Usage: :subtitles [on|off|toggle|history|clear|retry|panel|follow|fetch|transcribe|cancel] or :subtitles import FILE"
 subtitle_decoding = "Recognizing speech · delayed subtitles"
 subtitle_connection = "Subtitle connection ended; use :subtitles retry"
 
@@ -495,17 +500,138 @@ podcast_busy = "A podcast operation is already running"
 podcast_source = "Podcasts"
 podcast_downloads = "Podcast downloads"
 podcast_queue = "Podcast queue"
-podcast_empty = "No podcast entries. Use :podcast add URL or :podcast search QUERY"
-podcast_hint = "Enter open/play · Esc back · :podcast for actions"
-podcast_confirm = "Subscribe to this podcast? Use :podcast add URL to confirm"
+podcast_empty = "No podcast entries. Press D to discover podcasts, or :podcast add URL"
+podcast_hint = "Enter open/play · D discover · p playing / P selected · Esc back"
+podcast_browse = "Discover podcasts"
+podcast_region = "Change discovery region"
+podcast_directory_hint = "Enter open · R shuffle charts · D discover · F5 refresh · Esc back"
+podcast_charts = "Popular podcasts"
+podcast_categories = "Browse categories"
+podcast_surprise = "Surprise me"
+podcast_random_scope = "A random selection from this region/category's top 100; open a show to preview before subscribing."
+podcast_subscriptions = "My subscriptions"
+podcast_subscribed = "Subscribed"
+podcast_invalid_category = "Unknown podcast category; use podcast categories to list category IDs and slugs"
+podcast_invalid_country = "Podcast region must be a two-letter country code, such as CN or US"
+podcast_confirm = "Subscribe to this podcast? Enter to confirm, Esc to return"
 podcast_download_busy = "Pause or cancel this download before removing it"
 podcast_download_in_use = "Stop playback before removing the downloaded file"
 
 podcast_operation_done = "Podcast operation finished"
+podcast_operation_items = "Podcast operation finished: {count} episodes"
+podcast_refresh_summary = "Podcast refresh: {success} succeeded, {failed} failed"
 podcast_operation_cancelled = "Podcast operation cancelled"
 
 podcast_rate_limited = "Podcast directory rate limit reached; retry after the server delay"
 
 podcast_no_public_feed = "No public feed URL is available for this directory result"
 
-podcast_tasks = "Podcasts: {downloads} downloads · network: {network}"
+podcast_tasks = "Podcasts: {downloads} downloads · task active: {network}"
+
+podcast_subtitle_invalid = "Invalid timed subtitles; use a UTF-8 VTT or SRT file"
+podcast_subtitle_changed = "Episode audio changed during transcription; generate subtitles again"
+podcast_subtitle_missing = "No supplied subtitles. Press p to generate or import captions."
+podcast_subtitle_loading = "Loading episode subtitles"
+podcast_subtitle_synced = "Episode subtitles · synchronized to playback"
+podcast_subtitle_failed = "Episode subtitles failed: {detail}"
+podcast_subtitle_history = "Episode subtitles · media time"
+subtitle_panel_title = "Details · Subtitles · v: info"
+subtitle_panel_manual_title = "Manual reading · v: info"
+subtitle_manual_hint = "Manual reading · 3 then End to follow"
+subtitle_panel_hint = "3: details · v: subtitles/info · End: follow"
+
+subtitle_info_title = "Details · v: subtitles"
+
+podcast_subtitle_progress = "Transcribing episode · {seconds}s of audio processed"
+
+podcast_current_required = "Play a podcast first, or select an episode and press P for actions"
+podcast_subtitle_busy = "A subtitle task is running or stopping; use :subtitles cancel or wait"
+podcast_subtitle_downloading = "Preparing subtitles · downloading episode audio"
+podcast_subtitle_done = "Subtitles ready for {title} · {count} segments"
+podcast_menu_title = "Podcast actions"
+podcast_menu_current = "Currently playing"
+podcast_menu_selected = "Selected episode"
+podcast_menu_show = "Show subtitles"
+podcast_menu_play_show = "Play with subtitles"
+podcast_menu_generate = "Generate subtitles while listening"
+podcast_menu_import = "Import subtitle file…"
+podcast_menu_download = "Download audio"
+podcast_menu_queue = "Add to listening queue"
+podcast_menu_restart = "Play from beginning"
+podcast_menu_cancel = "Cancel subtitle task"
+podcast_menu_keys = "1–9 / j/k Enter · Esc close"
+podcast_import_for = "Import subtitles for {title}: enter a file path"
+podcast_action_for = "Action submitted for {title}"
+podcast_current_hint = "p actions · Space pause · Alt-Left/Right seek · :podcast current locate"
+
+podcast_episode_unknown = "Unknown episode"
+podcast_player = "{state} · {title} · Volume {volume}"
+podcast_download_queued = "Queued"
+podcast_download_downloading = "Downloading"
+podcast_download_paused = "Paused"
+podcast_download_cancelled = "Cancelled"
+podcast_download_failed = "Failed"
+podcast_download_complete = "Complete"
+podcast_download_removed = "Removed"
+podcast_download_retry = "Download will retry at {time}; Ctrl-C pauses it"
+podcast_subtitle_generating = "Generating subtitles · following playback"
+podcast_subtitle_window_failed = "Cannot read this audio window; cancel captions, download the episode, then retry"
+podcast_subtitle_window_progress = "Generating episode captions · audio position {position}"
+
+podcast_task_active = "running"
+podcast_task_idle = "idle"
+
+podcast_menu_locate = "Go to episode in podcast"
+podcast_menu_played = "Mark played"
+podcast_menu_unplayed = "Mark unplayed"
+podcast_menu_unqueue = "Remove from queue"
+podcast_download_resume = "Resume download"
+
+podcast_save = "Save for later"
+podcast_unsave = "Remove saved episode"
+podcast_all = "All episodes"
+podcast_inbox = "Inbox"
+podcast_continue = "Continue listening"
+podcast_history = "Listening history"
+podcast_saved = "Saved episodes"
+
+podcast_invalid_setting = "Invalid podcast setting; use a supported key and value"
+
+podcast_chapters = "Chapters"
+podcast_bookmarks = "Bookmarks"
+podcast_bookmark_add = "Bookmark current position"
+podcast_sleep_30 = "Sleep in 30 minutes"
+podcast_sleep_end = "Sleep at episode end"
+podcast_sleep_off = "Cancel sleep timer"
+podcast_queue_next = "Play next"
+podcast_auto_on = "Continuous playback on"
+podcast_auto_off = "Continuous playback off"
+podcast_speed_prompt = "Change speed"
+
+podcast_refresh_show = "Refresh podcast"
+podcast_settings_show = "Podcast settings"
+podcast_unsubscribe_show = "Unsubscribe"
+podcast_filter_prompt = "Filter episodes"
+podcast_queue_up = "Move up in queue"
+podcast_queue_down = "Move down in queue"
+podcast_download_cancel = "Cancel download"
+podcast_download_remove = "Delete audio file"
+podcast_queue_clear = "Clear queue"
+podcast_import_prompt = "Import OPML"
+podcast_export_prompt = "Export OPML"
+podcast_search_prompt = "Search directory"
+podcast_add_prompt = "Add RSS URL"
+podcast_refresh_all = "Refresh subscriptions"
+podcast_unsubscribe_scope = "Unsubscribe; keep episodes, progress and downloaded audio"
+podcast_remove_scope = "Delete downloaded audio; keep progress and bookmarks"
+podcast_clear_scope = "Remove all queued episodes; keep the playing audio"
+
+podcast_ambiguous = "Ambiguous title; use one of these IDs"
+
+podcast_url_conflict = "Feed migration conflicts with another subscription; original URL retained"
+
+podcast_bulk_scope = "Mark the listed episodes; unplayed also resets their saved positions"
+podcast_bulk_count = "Selected episodes: {count}"
+
+podcast_bookmark_edit = "Edit bookmark note"
+podcast_bookmark_remove = "Delete bookmark"

@@ -1,6 +1,6 @@
 //! Retain EOF events until their queue transactions commit off the media thread.
 use crate::{
-    podcast::{Episode, QueueAction},
+    podcast::Episode,
     process::{Background, MediaLock},
     store::Store,
 };
@@ -19,6 +19,7 @@ struct Completion {
     retry_at: Instant,
     reported: bool,
     removed: bool,
+    earlier: Vec<String>,
 }
 
 pub(super) struct Finished {
@@ -30,8 +31,9 @@ pub(super) struct Finished {
 #[derive(Default)]
 pub(super) struct Completions {
     pending: VecDeque<Completion>,
-    task: Option<Background<(Option<Episode>, u64)>>,
+    task: Option<Background<Candidate>>,
 }
+type Candidate = (Option<Episode>, u64, Vec<String>);
 
 impl Completions {
     pub fn push(&mut self, id: String, generation: u64, advance: bool) {
@@ -42,6 +44,7 @@ impl Completions {
             retry_at: Instant::now(),
             reported: false,
             removed: false,
+            earlier: vec![],
         });
     }
 
@@ -62,9 +65,10 @@ impl Completions {
         if let Some(result) = self.task.as_ref().and_then(|task| task.poll()) {
             self.task = None;
             match result {
-                Ok((next, revision)) => {
+                Ok((next, revision, earlier)) => {
                     let pending = self.pending.front_mut().unwrap();
                     pending.removed = true;
+                    pending.earlier = earlier;
                     // Queue edits can commit after the completion task finishes.
                     // Refresh only the candidate; removal must not run twice.
                     if store.podcast_queue_revision()? == revision {
@@ -102,15 +106,23 @@ impl Completions {
             let path = path.to_owned();
             let id = pending.id.clone();
             let removed = pending.removed;
+            let earlier = pending.earlier.clone();
             self.task = Some(Background::start("radio-podcast-complete", move |_| {
                 let _lock = lock;
                 let store = Store::open_writer(&path)?;
-                let (items, revision) = if removed {
-                    store.podcast_queue_snapshot()?
+                let (items, revision, earlier) = if removed {
+                    let (items, revision) = store.podcast_queue_snapshot()?;
+                    (items, revision, earlier)
                 } else {
-                    store.podcast_queue_update_revision(QueueAction::Remove { id })?
+                    store.podcast_queue_complete(&id)?
                 };
-                Ok((items.into_iter().next(), revision))
+                Ok((
+                    items
+                        .into_iter()
+                        .find(|e| e.id != id && !earlier.contains(&e.id)),
+                    revision,
+                    earlier,
+                ))
             })?);
         }
         Ok(None)

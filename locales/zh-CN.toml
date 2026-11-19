@@ -88,7 +88,7 @@ playback_timeout = "起播超时"
 playback_reconnecting = "重连中 · {attempt}/{total} · {delay}s: {reason}"
 
 jump_unavailable = "当前电台不在本地可浏览目录中；可用 :current 查看详情"
-jump_loading = "正在定位当前播放电台…"
+jump_loading = "正在定位当前播放项…"
 jump_not_playing = "当前没有正在播放的电台"
 jump_failed = "播放失败：已定位到最后请求的电台（未重新播放）"
 ephemeral_recording = "请先用 station add 保存此流地址，再开始录音"
@@ -259,7 +259,7 @@ current_request_url = "当前播放请求地址:\t{url}\n"
 station_details = "{name}{context}\n{origin}\n\n目录\n国家/地区:\t{country}\n语言:\t{language}\n州/省/区域:\t{subdivision}\n码率:\t{bitrate}（目录）\n编码:\t{codec}（目录）\nHLS:\t{hls}\n标签:\t{tags}\n收藏:\t{favorite} · 目录: {catalog}\n\n地址\nUUID:\t{uuid}\n流地址:\t{url}\n备用地址:\t{backups}\n{request}官网:\t{homepage}"
 # 帮助各段正文每行一条：“键名<TAB>说明”为条目，“键名<TAB>”（无说明）为仅用法条目，
 # 不含制表符的行为备注。两种语言保持相同的顺序与行类型。
-help_jump = "定位当前播放电台；播放失败后定位最后请求的电台（可在 keybindings.jump_to_playing 配置）"
+help_jump = "定位当前电台或播客单集；Esc 返回（可在 keybindings.jump_to_playing 配置）"
 help_nav_title = "导航"
 help_nav = """
 Tab / Shift-Tab\t切换面板
@@ -278,6 +278,8 @@ zt / zz / zb\t将选中列表项置于视口顶部/中间/底部
 Ctrl-u / Ctrl-d\t移动十项
 Ctrl-e / Ctrl-y\t视口向下/向上滚动一行，仅在选中项将移出屏幕时调整选择
 PgUp / PgDn, Ctrl-b / Ctrl-f\t列表：上/下一数据页 · 其他面板：滚动十行
+v（详情面板）\t切换字幕/信息；End 恢复跟随字幕
+p / P\t播客操作：当前播放 / 选中单集
 """
 help_play_title = "播放"
 help_play = """
@@ -343,7 +345,10 @@ help_commands = """
 :set language en|zh-CN\t切换界面语言
 :set mouse true|false\t鼠标捕获；false 可用终端选择文本
 命令历史持久保存最近 100 条（数据目录 command-history.json）
-:subtitles on|off|toggle|history|clear|retry\t控制直播字幕与会话历史
+:subtitles [on|off|toggle|history|clear|retry|panel|follow]\t控制直播字幕与会话历史
+:subtitles transcribe|fetch|cancel\t为当前播放单集准备字幕或取消任务
+:subtitles import 文件\t为当前播放单集导入字幕
+:podcast / :subtitles\t打开播客操作菜单
 :set subtitles.model ID\t切换会话字幕模型
 :doctor\t检查音频依赖与目录权限
 :focus sources|list|details|player|activity|map\t
@@ -452,7 +457,7 @@ subtitle_local = "直播字幕暂不支持本地录音"
 subtitle_history = "字幕历史 · 采集时间"
 subtitle_empty = "尚未识别到语音"
 subtitle_interrupted = "采集已中断"
-subtitle_usage = "用法：:subtitles on|off|toggle|history|clear|retry"
+subtitle_usage = "用法：:subtitles [on|off|toggle|history|clear|retry|panel|follow|fetch|transcribe|cancel] 或 :subtitles import 文件"
 subtitle_decoding = "正在识别语音 · 字幕有延迟"
 subtitle_connection = "字幕连接已结束；可用 :subtitles retry 重试"
 
@@ -494,17 +499,138 @@ podcast_busy = "已有播客操作正在运行"
 podcast_source = "播客"
 podcast_downloads = "播客下载"
 podcast_queue = "播客队列"
-podcast_empty = "暂无播客条目。使用 :podcast add URL 或 :podcast search QUERY"
-podcast_hint = "Enter 打开/播放 · Esc 返回 · :podcast 执行操作"
-podcast_confirm = "订阅此播客？使用 :podcast add URL 确认"
+podcast_empty = "暂无播客条目。按 D 发现播客，或使用 :podcast add URL"
+podcast_hint = "Enter 打开／播放 · D 发现 · p 当前 / P 选中 · Esc 返回"
+podcast_browse = "发现播客"
+podcast_region = "切换发现地区"
+podcast_directory_hint = "Enter 打开 · R 随机榜单 · D 发现 · F5 刷新 · Esc 返回"
+podcast_charts = "热门播客"
+podcast_categories = "按分类浏览"
+podcast_surprise = "随便看看"
+podcast_random_scope = "从当前地区／分类的前 100 名热门播客中随机抽取；打开节目预览后再决定是否订阅。"
+podcast_subscriptions = "我的订阅"
+podcast_subscribed = "已订阅"
+podcast_invalid_category = "未知播客分类；使用 podcast categories 查看分类 ID 和名称"
+podcast_invalid_country = "播客地区须为两位国家代码，例如 CN 或 US"
+podcast_confirm = "订阅此播客？Enter 确认，Esc 返回"
 podcast_download_busy = "请先暂停或取消下载再删除文件"
 podcast_download_in_use = "删除下载文件前请先停止播放"
 
 podcast_operation_done = "播客操作已完成"
+podcast_operation_items = "播客操作已完成：{count} 集"
+podcast_refresh_summary = "播客刷新：{success} 个成功，{failed} 个失败"
 podcast_operation_cancelled = "播客操作已取消"
 
 podcast_rate_limited = "播客目录请求已限流；请等待服务器要求的时间后重试"
 
 podcast_no_public_feed = "此目录结果未提供公开订阅源地址"
 
-podcast_tasks = "播客：{downloads} 个下载 · 网络任务：{network}"
+podcast_tasks = "播客：{downloads} 个下载 · 后台任务：{network}"
+
+podcast_subtitle_invalid = "时间轴字幕无效；请使用 UTF-8 编码的 VTT 或 SRT 文件"
+podcast_subtitle_changed = "转写期间单集音频已变更；请重新生成字幕"
+podcast_subtitle_missing = "暂无现成字幕。按 p 可生成或导入字幕。"
+podcast_subtitle_loading = "正在加载单集字幕"
+podcast_subtitle_synced = "单集字幕 · 跟随播放进度"
+podcast_subtitle_failed = "单集字幕加载失败：{detail}"
+podcast_subtitle_history = "单集字幕 · 音频时间"
+subtitle_panel_title = "详情 · 字幕 · v：信息"
+subtitle_panel_manual_title = "手动阅读 · v：信息"
+subtitle_manual_hint = "手动阅读 · 3 后按 End 恢复跟随"
+subtitle_panel_hint = "3：详情 · v：字幕/信息 · End：跟随"
+
+subtitle_info_title = "详情 · v：字幕"
+
+podcast_subtitle_progress = "正在转写单集 · 已处理 {seconds} 秒音频"
+
+podcast_current_required = "请先播放播客，或在单集列表选择后按 P 打开操作"
+podcast_subtitle_busy = "字幕任务正在运行或停止；可用 :subtitles cancel 取消或稍后重试"
+podcast_subtitle_downloading = "正在准备字幕 · 下载单集音频"
+podcast_subtitle_done = "《{title}》字幕已就绪 · {count} 个句段"
+podcast_menu_title = "播客操作"
+podcast_menu_current = "当前播放"
+podcast_menu_selected = "选中的单集"
+podcast_menu_show = "显示字幕"
+podcast_menu_play_show = "播放并显示字幕"
+podcast_menu_generate = "生成字幕（边播边显示）"
+podcast_menu_import = "导入字幕文件…"
+podcast_menu_download = "下载音频"
+podcast_menu_queue = "加入收听队列"
+podcast_menu_restart = "从头播放"
+podcast_menu_cancel = "取消字幕任务"
+podcast_menu_keys = "1–9 / j/k Enter · Esc 关闭"
+podcast_import_for = "为《{title}》导入字幕：请输入文件路径"
+podcast_action_for = "已提交《{title}》的操作"
+podcast_current_hint = "p 操作 · Space 暂停 · Alt-左/右 跳转 · :podcast current 定位"
+
+podcast_episode_unknown = "未知单集"
+podcast_player = "{state} · {title} · 音量 {volume}"
+podcast_download_queued = "等待下载"
+podcast_download_downloading = "正在下载"
+podcast_download_paused = "已暂停"
+podcast_download_cancelled = "已取消"
+podcast_download_failed = "下载失败"
+podcast_download_complete = "已完成"
+podcast_download_removed = "已移除"
+podcast_download_retry = "下载将在 {time} 重试；Ctrl-C 暂停下载"
+podcast_subtitle_generating = "正在生成字幕 · 跟随播放进度"
+podcast_subtitle_window_failed = "无法读取此音频片段；请取消字幕任务，下载单集后重试"
+podcast_subtitle_window_progress = "正在生成单集字幕 · 音频位置 {position}"
+
+podcast_task_active = "运行中"
+podcast_task_idle = "空闲"
+
+podcast_menu_locate = "前往单集所在节目"
+podcast_menu_played = "标记已听"
+podcast_menu_unplayed = "标记未听"
+podcast_menu_unqueue = "移出队列"
+podcast_download_resume = "继续下载"
+
+podcast_save = "稍后收听"
+podcast_unsave = "移出稍后收听"
+podcast_all = "全部单集"
+podcast_inbox = "新单集收件箱"
+podcast_continue = "继续收听"
+podcast_history = "收听历史"
+podcast_saved = "稍后收听列表"
+
+podcast_invalid_setting = "播客设置无效，请检查设置名称和值"
+
+podcast_chapters = "章节"
+podcast_bookmarks = "书签"
+podcast_bookmark_add = "保存当前位置书签"
+podcast_sleep_30 = "30 分钟后暂停"
+podcast_sleep_end = "本集结束后暂停"
+podcast_sleep_off = "取消睡眠定时"
+podcast_queue_next = "下一集播放"
+podcast_auto_on = "开启连播"
+podcast_auto_off = "关闭连播"
+podcast_speed_prompt = "调整倍速"
+
+podcast_refresh_show = "刷新节目"
+podcast_settings_show = "节目设置"
+podcast_unsubscribe_show = "取消订阅"
+podcast_filter_prompt = "筛选单集"
+podcast_queue_up = "队列上移"
+podcast_queue_down = "队列下移"
+podcast_download_cancel = "取消下载"
+podcast_download_remove = "删除音频文件"
+podcast_queue_clear = "清空队列"
+podcast_import_prompt = "导入 OPML"
+podcast_export_prompt = "导出 OPML"
+podcast_search_prompt = "搜索播客目录"
+podcast_add_prompt = "添加 RSS 地址"
+podcast_refresh_all = "刷新全部订阅"
+podcast_unsubscribe_scope = "取消订阅，保留单集、进度和已下载音频"
+podcast_remove_scope = "删除下载音频，保留收听进度和书签"
+podcast_clear_scope = "移除所有队列项目，保留当前播放"
+
+podcast_ambiguous = "标题重名，请使用以下 ID 之一"
+
+podcast_url_conflict = "节目迁移地址与另一订阅冲突，已保留原地址"
+
+podcast_bulk_scope = "批量修改列出的单集状态；标记未听会清零进度"
+podcast_bulk_count = "已选中 {count} 集"
+
+podcast_bookmark_edit = "修改书签备注"
+podcast_bookmark_remove = "删除书签"

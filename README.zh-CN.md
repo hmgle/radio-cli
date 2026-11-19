@@ -124,9 +124,10 @@ tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
 | `:help [COMMAND]` | 打开键盘帮助或命令用法 |
 | `:set language en\|zh-CN` / `:set mouse true\|false` | 修改当前会话设置 |
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | 运行诊断 / 移动焦点 |
-| `:subtitles on\|off\|toggle\|history\|clear\|retry` | 控制直播字幕 / 查看会话历史 |
+| `:subtitles on\|off\|toggle\|history\|clear\|retry\|panel\|follow` | 控制字幕 / 切换详情视图 / 跟随字幕 |
 | `:set subtitles.model ID` | 切换当前会话字幕模型 |
-| `:podcast ...` | 订阅、播放、定位、下载、管理队列和交换 OPML，见[播客指南](docs/podcasts.zh-CN.md) |
+| `p` / `P`、`:podcast` | 打开当前播放 / 选中单集的操作菜单，见[播客指南](docs/podcasts.zh-CN.md) |
+| `:subtitles transcribe` / `:subtitles import 文件` | 为当前单集生成或导入字幕 |
 | `:quit` / `:q` | 收尾录音并退出 |
 
 `:help` 显示完整的上下文键盘帮助；输入 `:` 后按 `Tab` 可补全命令。

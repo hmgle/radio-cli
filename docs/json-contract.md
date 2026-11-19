@@ -113,6 +113,17 @@ Station objects include nullable `geo_lat` and `geo_long` coordinates. Older rec
 
 ## Podcast results
 
+`podcast browse` and `podcast categories` return `{items,total,feed_title}`.
+Category rows include stable `id`/`slug`, localized `title`, `kind` and `command`.
+`podcast charts` returns `{items,total,country,category,random,source,feed_title}`;
+`category` is a category ID or `null`. Rows include string `collectionId`,
+`collectionName`, `artistName`, `collectionViewUrl`, `primaryGenreName`,
+`description` and `chartRank`. Ranks retain the original order before sampling.
+`total` is the returned candidate count; these directories have no further pages.
+Search/chart rows may include `local_feed_id` when a subscription is matched by
+its address. Titles alone never establish identity. Previews also return
+`subscription_url`, retaining the selected address for subscription confirmation.
+
 `podcast list` and `podcast episodes` return the existing page object. IDs are
 local UUID strings. Feed fields include `id`, `url`, `title`, `author`,
 `description`, `image`, `website`, `subscribed`, nullable `etag`, `modified`,
@@ -144,3 +155,46 @@ OPML `import --dry-run` returns `{urls:[...]}`; import returns per-source
 `{speed:N}` and `auto-next` returns `{auto_next:BOOL}`. Seeking requires a TUI
 session. Podcast operation failures use `podcast_failed` with a `detail`
 parameter (exit 1); cancellation retains `cancelled`. Do not parse error text.
+
+Episode objects also include `transcripts`, an array of `{url,mime,language}`
+links declared in the feed; `language` is nullable, and older episodes default
+to an empty array. `podcast subtitles ID [--file FILE | --transcribe]` returns
+`{id,segments}`, where `segments` counts cached timed captions. Progress goes to
+stderr. Invalid captions use `podcast_failed`; local
+runtime/model errors retain the subtitle codes. Cancellation retains
+`cancelled`. Caption commands do not emit a transcription stream.
+
+Download-list objects additionally include nullable `title` for display; the
+`episode_id` remains their identity.
+`--transcribe` checks the local speech runtime/model, downloads missing audio,
+and then generates captions. TUI generation publishes partial captions while
+reading bounded audio windows; CLI output remains a single final result.
+CLI still requires an explicit ID; only TUI
+commands can inherit a playing episode.
+
+`podcast library` returns the same page shape as `episodes`, with decorated
+rows containing `author`, `feed_title`, `queued`, `saved` and optional
+`download_state`. `list` adds `unplayed_count` and the configured `sort`.
+Feed objects add nullable `new_feed_url`. Episodes add nullable `source_order`,
+nullable `chapters_url`, and `chapters:[{title,position_ms}]`. Old records use
+empty chapter arrays and null optional fields. Refresh outcomes may add `title`.
+Download objects add nullable `total_bytes`, `retry_at`, `enqueued_at`, integer
+`bytes_per_second` and `retries` (additional attempts already scheduled, 0–3).
+Download-list rows also carry episode display fields. Unknown totals remain null.
+`downloads stats` returns `{downloads,bytes,completed,available_bytes}`; free
+space is nullable when the directory is unavailable.
+
+`save` returns `{id,saved}`, `dismiss` returns `{id,dismissed}`, and `mark-batch`
+returns `{marked}`. `settings` returns the complete per-show settings object
+listed in [Podcasts](podcasts.md#per-podcast-settings-and-download-policies).
+`chapters` returns `{items,total,episode_id}`; each item has
+`{id,title,kind:"chapter",position_ms}`. `bookmarks` returns `{items,total}`;
+items have `{id,bookmark_id,title,position_ms,kind:"bookmark"}`, where `id` is
+the episode and `title` is the note. `bookmark` returns
+`{id,episode_id,position_ms,note}` with the bookmark UUID as `id`;
+`bookmark-edit` returns `{id,removed}`. `resume` and `queue start` share the
+playback result contract. `current`, `sleep`, and relative seek controls are
+interactive TUI operations; the CLI has no remote control channel into a TUI.
+IDs remain the stable script interface; exact show titles and qualified
+`Show::Episode` titles are accepted for interactive convenience. Ambiguous
+titles fail with candidate IDs rather than choosing a match.

@@ -567,12 +567,14 @@ mod tests {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PodcastSettings {
+    pub country: Option<String>,
     pub directory: Option<PathBuf>,
     pub refresh_hours: u16,
 }
 impl Default for PodcastSettings {
     fn default() -> Self {
         Self {
+            country: None,
             directory: None,
             refresh_hours: 6,
         }

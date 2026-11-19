@@ -1,0 +1,24 @@
+╭ radio · 4 Player · Current station ──────────────────────────────────────────╮
+│Current Station · ▶ Playing · 80%                                             │
+│Song title · Recording idle                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭ 1 Sources ───────────────────────────────────────────────────────────────────╮
+│>All       Saved     Recent   Files     Map       Podcasts  Podcast  Podcast q│
+╰──────────────────────────────────────────────────────────────────────────────╯
+┏ ▶ Details · Subtitles · v: info ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃Current Station                                                               ┃
+┃Episode subtitles · synchronized to playback                                  ┃
+┃[0:00] We can prepare a transcript before playing a podcast.                  ┃
+┃                                                                              ┃
+┃[0:05] The highlighted sentence follows the audio when you pause, seek or     ┃
+┃change speed.                                                                 ┃
+┃                                                                              ┃
+┃[0:10] Use the Details panel to read the surrounding sentences without losing ┃
+┃your place.                                                                   ┃
+┃                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+5 Catalog ready · Playing                                                       
+Episode subtitles · synchronized to playback · 3: details · v: subtitles/info · 
+ NORMAL · Details /  All countries All languages All tags ≥0k            [Clear]
+j/k / PgUp/PgDn scroll details                                                  
+Tab/1-5 panels · [ / ] source · / search · F filter · : · ? help · q quit       

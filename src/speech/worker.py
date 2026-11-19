@@ -81,6 +81,64 @@ def read_pcm(source, pcm, origin, emit):
         offset += len(samples)
 
 
+def run_file(source, vad, recognizer, emit, np, announce=True):
+    """Backpressure retains every sample, independent of wall clock or speed."""
+    def drain():
+        while not vad.empty():
+            item = vad.front
+            samples = item.samples.copy()
+            start = item.start
+            vad.pop()
+            # VAD may include a short tail beyond max_speech_duration.
+            for cut in range(0, len(samples), 20 * RATE):
+                chunk = samples[cut:cut + 20 * RATE]
+                emit("decoding")
+                stream = recognizer.create_stream()
+                stream.accept_waveform(RATE, chunk)
+                recognizer.decode_stream(stream)
+                text = stream.result.text.strip()
+                if text:
+                    emit("segment", start_ms=(start + cut) * 1000 // RATE,
+                         end_ms=(start + cut + len(chunk)) * 1000 // RATE,
+                         text=text, lag_ms=0)
+                emit("listening")
+
+    if announce:
+        emit("ready")
+    while True:
+        data = source.read(WINDOW * 4)
+        if not data:
+            break
+        if len(data) % 4:
+            raise ValueError("truncated PCM sample")
+        samples = array.array("f")
+        samples.frombytes(data)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if not all(math.isfinite(s) for s in samples):
+            raise ValueError("invalid PCM sample")
+        vad.accept_waveform(np.pad(samples, (0, WINDOW - len(samples))))
+        drain()
+    vad.flush()
+    drain()
+    emit("done")
+
+
+def run_chunks(source, vad, recognizer, emit, np):
+    """Keep the model warm across bounded, independently seekable PCM windows."""
+    emit("ready")
+    for line in source:
+        if len(line) > 16384:
+            raise ValueError("invalid chunk request")
+        request = json.loads(line)
+        path = request["path"]
+        if os.path.getsize(path) > 32 * RATE * 4:
+            raise ValueError("oversized PCM chunk")
+        vad.reset()
+        with open(path, "rb") as audio:
+            run_file(audio, vad, recognizer, emit, np, announce=False)
+
+
 def emit_event(epoch, kind, **fields):
     # ASCII NDJSON remains writable under isolated Python's locale encoding.
     print(json.dumps(dict(v=1, epoch=epoch, type=kind, **fields),
@@ -122,6 +180,12 @@ def run(args):
     config.sample_rate = RATE
     config.num_threads = 1
     vad = sherpa.VoiceActivityDetector(config, buffer_size_in_seconds=40)
+    if args.get("chunks", False):
+        run_chunks(sys.stdin.buffer, vad, recognizer, emit, np)
+        return
+    if args.get("offline", False):
+        run_file(sys.stdin.buffer, vad, recognizer, emit, np)
+        return
     pcm = AudioQueue(30 * RATE)
     speech = AudioQueue(20 * RATE)
     origin = [None]

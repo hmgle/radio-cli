@@ -123,6 +123,7 @@ size cannot be estimated. See the [recording guide](recording.md).
 | Setting | Default | Valid values and behavior |
 | --- | --- | --- |
 | `podcasts.directory` | `<data>/podcasts` | Download directory; relative paths resolve at startup. |
+| `podcasts.country` | Interface language | Apple directory region: explicit `--country` takes priority, then this value, otherwise CN for Chinese and US for English. |
 | `podcasts.refresh_hours` | `6` | Unsigned 16-bit integer (0–65535). Refresh due subscriptions while the TUI runs; `0` disables automatic refresh. Failures back off up to one day. |
 
 Put these settings in a `[podcasts]` table. Playback speed and automatic next
@@ -307,9 +308,11 @@ values for concurrent manual sessions.
 
 ## Live subtitles
 
-Subtitles are optional, disabled by default, and available only in the TUI for
-live HTTP(S) streams. Recognition stays on your machine. Install
-[uv](https://docs.astral.sh/uv/getting-started/installation/) first, then run:
+Subtitles are optional and disabled by default. Live recognition supports
+HTTP(S) streams in the TUI and stays on your machine. Podcast captions use a
+separate media timeline; see [synchronized subtitles](podcasts.md#synchronized-subtitles).
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first,
+then run:
 
 ```sh
 radio subtitles setup
@@ -335,13 +338,11 @@ subtitles, and `Esc` closes the popup. `:subtitles clear` clears the history;
 `:subtitles retry` retries a failed recognizer. The history holds at most 500
 segments and is discarded on station changes or program exit.
 
-The subtitle strip uses three rows in terminals at least 24 rows tall, or one
-row showing the status and latest segment in shorter terminals. It sits above
-the command bar and reduces panel height without changing the layout mode.
-The three-row strip reserves one row for each of the two latest segments;
-status messages wrap within the remaining rows. Segment text and the one-row
-strip are clipped to the terminal width; open history to read full segments.
-Press `?` to read persistent recognition failures in full.
+Subtitles use the Details panel with wrapped text and current-segment emphasis.
+Press `3` to focus it, `v` to switch captions/information, and `End` to resume
+following after scrolling. `:subtitles panel` switches views;
+`:subtitles follow` opens captions and follows playback. One bottom row shows
+status. Press `?` to read persistent recognition failures in full.
 
 `setup` explicitly installs managed Python 3.12 and hash-locked sherpa-onnx
 2.0.1 / NumPy 2.2.6 wheels in `<data>/speech/`. Linux glibc x86_64 and macOS
@@ -410,7 +411,7 @@ uv = "uv"
 
 | Setting | Default | Behavior |
 | --- | --- | --- |
-| `enabled` | `false` | Start subtitles when TUI live playback begins. |
+| `enabled` | `false` | Start live recognition or load episode captions during TUI playback. |
 | `model` | `"sensevoice-small-int8"` | This model, `"sensevoice-small-yue-int8"`, or `"qwen3-asr-0.6b-int8"`; must already be installed. |
 | `language` | `"auto"` | SenseVoice: `auto`, `zh`, `yue`, `en`, `ja`, `ko`; only `sensevoice-small-int8` follows this setting. Qwen3 requires `auto`. |
 | `threads` | `0` | Automatic: half the logical cores, limited to 1–4; explicit values: 1–32. |
@@ -421,7 +422,7 @@ uv = "uv"
 `:set subtitles.model ID` changes the session model and restarts recognition;
 `:subtitles toggle` changes the session switch. Neither rewrites your config.
 
-Subtitles use a separate FFmpeg connection to the current playback URL. Audio
+Live subtitles use a separate FFmpeg connection to the current playback URL. Audio
 is not delayed to wait for recognition, and the subtitle time ranges refer to
 capture, not mpv's playback position. HLS offsets, network buffering and pauses
 can make captions describe a different live position. Pause stops capture;
@@ -439,6 +440,6 @@ Subtitle failure does not stop playback or recording. Recording adds its usual
 connection; some stations restrict listener connections. Track artwork probing
 yields while subtitles are enabled, including loading, retry waits and failures.
 
-This first version provides session-only transcription, without translation,
+Live recognition provides session-only transcription, without translation,
 recording transcription, export, or cloud recognition. ASR text can be wrong,
 especially over music or noise; model benchmarks are not guarantees for radio.

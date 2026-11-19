@@ -101,6 +101,15 @@ Station 对象新增可空的 `geo_lat`、`geo_long` 经纬度字段。旧数据
 
 ## 播客结果
 
+`podcast browse` 和 `podcast categories` 返回 `{items,total,feed_title}`；分类行包含
+稳定的 `id`、`slug`，以及本地化 `title`、`kind` 和可供 TUI 执行的 `command`。
+`podcast charts` 返回 `{items,total,country,category,random,source,feed_title}`；
+`category` 为分类 ID 或 `null`。榜单行有 `collectionId`（字符串）、`collectionName`、
+`artistName`、`collectionViewUrl`、`primaryGenreName`、`description` 和 `chartRank`。
+`chartRank` 为随机抽取前的原排名。`total` 是本次返回的候选数，无额外分页。
+匹配到已有订阅的搜索／榜单行可附带 `local_feed_id`；不得仅凭同名节目推断。
+预览额外返回 `subscription_url`，保留用户选择的目录地址供确认订阅时使用。
+
 `podcast list`、`podcast episodes` 沿用分页对象。ID 为本地 UUID。
 节目包含 `id`、`url`、`title`、`author`、`description`、`image`、`website`、
 `subscribed`，可空的 `etag`、`modified`、`refreshed_at`、`error`，以及刷新用的
@@ -126,3 +135,36 @@ OPML `import --dry-run` 返回 `{urls:[...]}`，导入返回逐源 `{id?,ok,erro
 导出返回 `{exported:N}`。`speed` 返回 `{speed:N}`，`auto-next` 返回
 `{auto_next:BOOL}`，定位操作需在 TUI 会话执行。播客操作失败使用 `podcast_failed`，
 参数为 `detail`，退出码为 1；取消保留 `cancelled`。不要解析错误消息文本。
+
+单集对象还包含 `transcripts` 数组，元素为源声明的 `{url,mime,language}`；
+`language` 可为 `null`，旧单集默认空数组。
+`podcast subtitles ID [--file FILE | --transcribe]` 返回 `{id,segments}`，
+`segments` 为缓存的时间轴句段数。进度写入 stderr。字幕无效使用
+`podcast_failed`；本地运行时和模型错误保留字幕错误码，取消保留 `cancelled`。
+字幕命令不输出转写流。
+
+下载列表对象额外包含可为 `null` 的 `title`，用于显示；身份仍由 `episode_id`
+确定。`--transcribe` 先检查本地语音运行时/模型，再按需下载音频并生成
+字幕。TUI 改为按片段读取并逐句显示，CLI 仍只输出一次最终结果。
+CLI 仍需显式 ID；仅 TUI 命令可使用当前播放上下文。
+
+`podcast library` 返回与 `episodes` 相同的分页结构；行额外包含 `author`、
+`feed_title`、`queued`、`saved` 和可选的 `download_state`。节目列表增加
+`unplayed_count` 和配置的 `sort`。节目对象增加可空 `new_feed_url`；单集增加
+可空 `source_order`、`chapters_url` 和 `chapters:[{title,position_ms}]`。
+旧数据的章节默认为空数组，可选字段为 null。刷新结果可额外包含 `title`。
+下载增加可空 `total_bytes`、`retry_at`、`enqueued_at`，以及整数
+`bytes_per_second`、`retries`（已经安排的额外重试次数，0–3）。下载列表同时携带
+单集展示字段；未知总量保持 null。`downloads stats` 返回
+`{downloads,bytes,completed,available_bytes}`，目录不可用时可用空间为 null。
+
+`save` 返回 `{id,saved}`，`dismiss` 返回 `{id,dismissed}`，`mark-batch` 返回
+`{marked}`。`settings` 返回[播客文档](podcasts.zh-CN.md#节目设置与下载策略)中的
+完整节目设置对象。`chapters` 返回 `{items,total,episode_id}`，每项为
+`{id,title,kind:"chapter",position_ms}`；`bookmarks` 返回 `{items,total}`，每项为
+`{id,bookmark_id,title,position_ms,kind:"bookmark"}`，其中 `id` 是单集 ID，
+`title` 为备注。`bookmark` 返回 `{id,episode_id,position_ms,note}`，其中 `id`
+为书签 UUID；`bookmark-edit` 返回 `{id,removed}`。`resume` 和 `queue start`
+沿用播放命令的结果合同。`current`、`sleep` 和相对定位是 TUI 交互操作；独立 CLI
+没有控制另一个 TUI 会话的远程通道。脚本应继续使用稳定 ID；精确节目标题和
+`节目::单集` 标题提供交互便利，重名会报错并给出候选 ID。

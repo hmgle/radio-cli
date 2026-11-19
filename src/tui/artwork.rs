@@ -54,7 +54,8 @@ pub(super) fn station<'a>(app: &App, view: &'a View) -> Option<&'a Station> {
 
 pub(super) fn area(app: &App, view: &View, screen: Rect) -> Option<Rect> {
     let rect = app.rects[Focus::Details.index()];
-    if (app.source == Source::Explore && app.focus != Focus::Details)
+    if super::render::subtitle_details_visible(app, view)
+        || (app.source == Source::Explore && app.focus != Focus::Details)
         || app.theme == Theme::Mono
         || screen.width < 100
         || screen.height < 24
@@ -62,6 +63,7 @@ pub(super) fn area(app: &App, view: &View, screen: Rect) -> Option<Rect> {
         || app.help
         || app.filter_edit.is_some()
         || app.confirmation.is_some()
+        || app.podcast_menu.is_some()
     {
         return None;
     }

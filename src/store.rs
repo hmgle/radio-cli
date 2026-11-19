@@ -69,10 +69,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 9 {
+        if version > 10 {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 9 {
+        if version < 10 {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -102,7 +102,7 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2..=9 => {},
+                2..=10 => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             if version < 3 {
@@ -176,7 +176,10 @@ impl Store {
             if version < 9 {
                 crate::podcast::migrate(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 9)?;
+            if version < 10 {
+                crate::podcast::migrate_library(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 10)?;
             tx.commit()?;
         }
         Ok(Self { conn })

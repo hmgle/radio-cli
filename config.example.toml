@@ -74,4 +74,5 @@ uv = "uv"
 # Public podcast downloads and TUI refresh interval (0 disables refresh).
 [podcasts]
 # directory = "/path/to/podcasts"
+# country = "CN" # Apple directory region; otherwise CN for Chinese, US for English
 refresh_hours = 6

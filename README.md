@@ -139,9 +139,10 @@ truncated and reported.
 | `:help [COMMAND]` | Open keyboard help or a command's usage |
 | `:set language en\|zh-CN` / `:set mouse true\|false` | Change session settings |
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | Run diagnostics / move focus |
-| `:subtitles on\|off\|toggle\|history\|clear\|retry` | Control live subtitles / inspect session history |
+| `:subtitles on\|off\|toggle\|history\|clear\|retry\|panel\|follow` | Control subtitles / switch Details view / follow captions |
 | `:set subtitles.model ID` | Change the subtitle model for this session |
-| `:podcast ...` | Subscribe, play, seek, download, queue, or exchange OPML; see the [podcast guide](docs/podcasts.md) |
+| `p` / `P`, `:podcast` | Open actions for the playing / selected episode; see the [podcast guide](docs/podcasts.md) |
+| `:subtitles transcribe` / `:subtitles import FILE` | Generate or import captions for the current episode |
 | `:quit` / `:q` | Finalize recordings and quit |
 
 `:help` shows the full context-sensitive keyboard reference, and `:` followed by

@@ -22,13 +22,14 @@ sudo apt install mpv ffmpeg
 brew install mpv ffmpeg
 ```
 
-## Upgrade to 0.12
+## Database upgrades
 
-The first open migrates existing databases to schema v9 for podcast storage.
-Earlier binaries, including 0.11.1, cannot open that database afterwards. If you
-need the option of downgrading, close radio-cli and back up the entire data
-directory before upgrading. Existing stations, favorites and recordings remain
-available after migration.
+The first open migrates existing databases to schema v10. Schema v9 introduced
+podcast storage; v10 adds listening-library tables, indexes and revision tracking
+for existing podcast databases. Earlier binaries, including 0.12.0, cannot open
+that database afterwards. If you need the option of downgrading, close radio-cli
+and back up the entire data directory before upgrading. Existing stations,
+favorites and recordings remain available after migration.
 
 ## Install from npm
 

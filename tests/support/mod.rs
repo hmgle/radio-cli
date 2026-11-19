@@ -94,6 +94,34 @@ pub fn config(dir: &std::path::Path) -> radio_cli::config::Config {
     config_with_api(dir, "http://127.0.0.1:1")
 }
 
+pub fn downgrade_podcast_schema_to_v9(conn: &rusqlite::Connection) {
+    // Released v9 has subscriptions and playback, but no listening library
+    // or revision counter. Preserve its existing podcast rows.
+    let triggers = conn
+        .prepare(
+            "SELECT name FROM sqlite_schema WHERE type='trigger' AND name LIKE 'changed_podcast_%'",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    for trigger in triggers {
+        conn.execute_batch(&format!("DROP TRIGGER {trigger}"))
+            .unwrap();
+    }
+    conn.execute_batch(
+        "DROP TABLE podcast_bookmarks;
+         DROP TABLE podcast_saved;
+         DROP TABLE podcast_inbox;
+         DROP TABLE podcast_revision;
+         DROP INDEX podcast_episode_dates;
+         DROP INDEX podcast_history_episode;
+         PRAGMA user_version=9;",
+    )
+    .unwrap();
+}
+
 pub fn config_with_api(dir: &std::path::Path, api: &str) -> radio_cli::config::Config {
     std::fs::create_dir_all(dir).unwrap();
     // A data directory override does not disable the developer's config file.

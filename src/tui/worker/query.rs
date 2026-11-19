@@ -23,7 +23,7 @@ struct Page {
 #[derive(Default)]
 struct Pending {
     page: Option<(u64, Page)>,
-    locate: Option<(u64, String, u64, usize)>,
+    locate: Option<(u64, String, u64, usize, bool)>,
     facets: Option<(u64, usize, String)>,
     map: Option<(u64, super::super::map::Request)>,
     map_generation: u64,
@@ -88,9 +88,17 @@ impl Sender {
     }
 
     pub fn locate(&self, uuid: String, request: u64, limit: usize) {
+        self.locate_target(uuid, request, limit, false);
+    }
+
+    pub fn locate_episode(&self, id: String, request: u64, limit: usize) {
+        self.locate_target(id, request, limit, true);
+    }
+
+    fn locate_target(&self, uuid: String, request: u64, limit: usize, episode: bool) {
         let mut pending = self.0.pending.lock().unwrap();
         pending.locate_generation += 1;
-        pending.locate = Some((pending.locate_generation, uuid, request, limit));
+        pending.locate = Some((pending.locate_generation, uuid, request, limit, episode));
         self.0.ready.notify_one();
     }
 
@@ -156,7 +164,7 @@ impl Drop for Worker {
 enum Request {
     Map(u64, super::super::map::Request),
     Page(u64, Page),
-    Locate(u64, String, u64, usize),
+    Locate(u64, String, u64, usize, bool),
     Facets(u64, usize, String),
 }
 
@@ -335,8 +343,8 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                 if shared.stop.load(Ordering::Acquire) {
                     return;
                 }
-                if let Some((g, uuid, r, limit)) = pending.locate.take() {
-                    break Request::Locate(g, uuid, r, limit);
+                if let Some((g, uuid, r, limit, episode)) = pending.locate.take() {
+                    break Request::Locate(g, uuid, r, limit, episode);
                 }
                 if let Some((g, page)) = pending.page.take() {
                     break Request::Page(g, page);
@@ -454,7 +462,30 @@ fn run(store: Store, shared: Arc<Shared>, view: Weak<Mutex<View>>) {
                 data.revision += 1;
                 data.immediate_revision += 1;
             }
-            Request::Locate(generation, uuid, request, limit) => {
+            Request::Locate(generation, uuid, request, limit, episode) => {
+                if episode {
+                    let result = store.read_snapshot(|store| {
+                        let e = store.podcast_episode(&uuid)?;
+                        let position = store
+                            .podcast_episode_position(&e.feed_id, &e.id)?
+                            .ok_or_else(|| crate::podcast::error(crate::t!("podcast_not_found")))?;
+                        let limit = limit.clamp(1, 1000);
+                        Ok((e.feed_id, position / limit * limit))
+                    });
+                    let Some(view) = view.upgrade() else {
+                        return;
+                    };
+                    let mut data = view.lock().unwrap();
+                    if shared.stop.load(Ordering::Acquire)
+                        || shared.pending.lock().unwrap().locate_generation != generation
+                    {
+                        continue;
+                    }
+                    data.located_episode = Some((request, result.map_err(|e| format!("{e:#}"))));
+                    data.revision += 1;
+                    data.immediate_revision += 1;
+                    continue;
+                }
                 let mut filter = Filter {
                     limit: limit.clamp(1, 1000),
                     ..Filter::default()
@@ -524,6 +555,10 @@ mod tests {
 
     fn status() -> crate::engine::Status {
         crate::engine::Status {
+            sleep_remaining: None,
+            podcast_auto_next: false,
+            skip_back: 15,
+            skip_forward: 15,
             episode: None,
             seekable: false,
             speed: 1.,
