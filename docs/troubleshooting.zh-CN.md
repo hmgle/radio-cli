@@ -195,7 +195,7 @@ macOS 归档未经 Developer ID 签名或公证。先用 `SHA256SUMS` 校验归�
 xattr -d com.apple.quarantine ./radio
 ```
 
-另见 [Apple 的说明](https://support.apple.com/en-us/102445)。也可使用 Rust 1.88
+另见 [Apple 的说明](https://support.apple.com/en-us/102445)。也可使用 Rust 1.89
 或更新版本从源码构建。
 
 ## 语言不是预期值

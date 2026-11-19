@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.13.0 — 2026-11-19
+
+- Fix Enter doing nothing on Apple podcast search results. Convert the
+  directory's media type into an actionable TUI row so results open their RSS
+  preview and can be confirmed or revisited with Esc.
+
+- Add podcast discovery with regional charts, 19 categories and random chart
+  candidates in the CLI and TUI. Press D to discover and R to shuffle a chart.
+  Resolve public feeds on selection, show known subscriptions, and keep directory
+  refreshes in their current context with caching and rate-limit feedback.
+- Restore podcast search, chart and preview results with their cursor and scroll
+  on Esc, including after jumping to playback. Show playback state on the parent
+  podcast independently of the user's selection.
+
+- Add saved episodes, inbox and history views, bookmarks, chapters and
+  per-show listening preferences. Restore the current episode across browsing
+  views and keep failed browse requests from leaving the list loading.
+
+- Generate TUI podcast captions incrementally from seekable audio windows.
+  Publish each segment immediately, prioritize the playing position after seeks,
+  keep the model warm, and resume saved partial coverage after cancellation.
+  Full episode downloads are no longer required for TUI generation.
+
+- Add podcast action menus for the playing or selected episode. Default common
+  TUI commands to the player, show titles instead of IDs in download lists,
+  and offer explicit local caption generation.
+  Keep caption tasks running while browsing and bind imports to their named
+  episode even when playback advances.
+
+- Synchronize podcast VTT/SRT captions to playback, including resume, seeking,
+  pause and speed changes. Fetch feed captions, import local files, or generate
+  and cache speech segments from downloaded episodes using local models.
+- Display wrapped subtitles with context in Details, highlight the active
+  segment, and support manual scrolling, follow mode and an information toggle.
+  Reduce the bottom subtitle strip to one status row.
+- Restore the previous panel focus on Esc after locating the playing episode.
+  Preserve the chosen view and caption reading mode across podcast navigation
+  and Alt+Left/Right seeks. New playback sessions restore following.
+- Label manual caption reading in Details and the bottom strip. Keep the
+  shortcut to resume following visible on narrow terminals and show failures
+  first when captions fail.
+
+- Extract artist and track names from RadioInfo XML carried by HLS/ID3 or
+  ICY streams, including Cidade. Use readable titles in playback and recording
+  metadata while retaining station announcements and partial track names.
+- Update bundled SQLite to 3.54.1 for RUSTSEC-2026-0459.
+
+### Compatibility
+
+- Building from source now requires Rust 1.89 or newer.
+- Opening a database migrates it to schema v10, adding listening-library tables
+  and revision tracking while preserving existing subscriptions, progress,
+  downloads and queues. Version 0.12.0 and earlier cannot reopen the upgraded
+  database. To retain the option of downgrading, close radio-cli and back up
+  the entire data directory before upgrading.
+
 ## 0.12.0 — 2026-11-08
 
 - Add public RSS/Atom podcast subscriptions, Apple directory search and feed

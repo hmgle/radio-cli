@@ -9,9 +9,83 @@ use std::{
 };
 #[derive(Debug, Clone, Subcommand)]
 pub enum Action {
+    Chapters {
+        id: String,
+    },
+    Bookmarks {
+        id: String,
+    },
+    Bookmark {
+        id: String,
+        #[arg(long)]
+        time: Option<String>,
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    BookmarkEdit {
+        id: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    Settings {
+        id: String,
+        key: Option<String>,
+        value: Option<String>,
+    },
+    Jump {
+        id: String,
+        time: String,
+    },
+    Sleep {
+        #[arg(default_value = "30")]
+        value: String,
+    },
+    Library {
+        #[command(flatten)]
+        options: LibraryQuery,
+    },
+    Save {
+        id: String,
+        #[arg(long)]
+        remove: bool,
+    },
+    Dismiss {
+        id: String,
+    },
+    MarkBatch {
+        #[arg(required = true)]
+        ids: Vec<String>,
+        #[arg(long)]
+        unplayed: bool,
+    },
+    Resume,
+    Relative {
+        seconds: f64,
+    },
+    /// Open the discovery page without requiring a search term.
+    Browse {
+        #[arg(long, default_value = "")]
+        country: String,
+    },
+    /// List categories available for regional charts.
+    Categories {
+        #[arg(long, default_value = "")]
+        country: String,
+    },
+    /// Browse Apple Podcasts' regional charts, optionally in random order.
+    Charts {
+        #[arg(long, default_value = "")]
+        country: String,
+        #[arg(long, value_parser = directory::category_id)]
+        category: Option<String>,
+        #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u16).range(1..=100))]
+        limit: u16,
+        #[arg(long)]
+        random: bool,
+    },
     Search {
         query: String,
-        #[arg(long, default_value = "CN")]
+        #[arg(long, default_value = "")]
         country: String,
         #[arg(long,default_value_t=25,value_parser=clap::value_parser!(u16).range(1..=200))]
         limit: u16,
@@ -56,6 +130,14 @@ pub enum Action {
         #[arg(value_parser=["played","unplayed"])]
         state: String,
     },
+    /// Fetch, import, or locally generate timed episode captions.
+    Subtitles {
+        id: String,
+        #[arg(long, conflicts_with = "transcribe")]
+        file: Option<PathBuf>,
+        #[arg(long)]
+        transcribe: bool,
+    },
     Download {
         id: String,
     },
@@ -91,6 +173,7 @@ pub enum Action {
 #[derive(Debug, Clone, Subcommand)]
 pub enum DownloadAction {
     List,
+    Stats,
     Pause { id: String },
     Resume { id: String },
     Cancel { id: String },
@@ -98,6 +181,16 @@ pub enum DownloadAction {
 }
 #[derive(Debug, Clone, Subcommand)]
 pub enum QueueAction {
+    Start {
+        id: String,
+        #[arg(long)]
+        auto_next: bool,
+    },
+    Next {
+        id: String,
+        #[arg(skip)]
+        after: Option<String>,
+    },
     List,
     Add {
         id: String,
@@ -115,6 +208,63 @@ pub enum QueueAction {
         auto_next: bool,
     },
 }
+impl Action {
+    pub(crate) fn is_query(&self) -> bool {
+        matches!(
+            self,
+            Self::Chapters { .. }
+                | Self::Bookmarks { .. }
+                | Self::Library { .. }
+                | Self::List { .. }
+                | Self::Episodes { .. }
+                | Self::Search { .. }
+                | Self::Browse { .. }
+                | Self::Categories { .. }
+                | Self::Charts { .. }
+                | Self::Discover { .. }
+                | Self::Preview { .. }
+                | Self::Downloads {
+                    action: DownloadAction::List
+                }
+                | Self::Queue {
+                    action: QueueAction::List
+                }
+        )
+    }
+
+    /// Only actions that target a single episode may inherit the TUI player.
+    pub(crate) fn episode_id_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Self::Jump { id, .. }
+            | Self::Chapters { id }
+            | Self::Bookmarks { id }
+            | Self::Bookmark { id, .. }
+            | Self::Save { id, .. }
+            | Self::Dismiss { id }
+            | Self::Play { id, .. }
+            | Self::Mark { id, .. }
+            | Self::Subtitles { id, .. }
+            | Self::Download { id } => Some(id),
+            Self::Queue {
+                action:
+                    QueueAction::Add { id }
+                    | QueueAction::Remove { id }
+                    | QueueAction::Start { id, .. }
+                    | QueueAction::Next { id, .. }
+                    | QueueAction::Move { id, .. },
+            } => Some(id),
+            Self::Downloads {
+                action:
+                    DownloadAction::Pause { id }
+                    | DownloadAction::Resume { id }
+                    | DownloadAction::Cancel { id }
+                    | DownloadAction::Remove { id },
+            } => Some(id),
+            _ => None,
+        }
+    }
+}
+
 pub fn valid_speed(rate: f64) -> Result<f64> {
     if !rate.is_finite() || !(0.5..=3.).contains(&rate) {
         return Err(error(crate::t!("podcast_invalid_speed")));
@@ -146,7 +296,7 @@ fn page<T: Serialize>(items: &[T], p: crate::cli::Page) -> Value {
         p,
     )
 }
-fn page_result<T: Serialize>(items: &[T], total: usize, p: crate::cli::Page) -> Value {
+pub(super) fn page_result<T: Serialize>(items: &[T], total: usize, p: crate::cli::Page) -> Value {
     json!({"items":items,"total":total,"offset":p.offset,"limit":if p.all {None}else{Some(p.limit)},"has_more":p.offset.saturating_add(items.len())<total})
 }
 pub fn refresh(
@@ -163,53 +313,204 @@ pub fn refresh(
     } else {
         store.podcast_feeds()?
     };
+    refresh_feeds(config, store, &feeds, stop)
+}
+pub(super) fn refresh_feeds(
+    config: &Config,
+    store: &Store,
+    feeds: &[Feed],
+    stop: &Arc<AtomicBool>,
+) -> Result<Value> {
     let mut results = vec![];
-    for f in feeds {
-        if stop.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(DomainError::new(ErrorCode::Cancelled).into());
-        }
-        match fetch(config, &f.url, Some(&f), stop) {
-            Ok(p) => {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err(DomainError::new(ErrorCode::Cancelled).into());
-                }
-                store.podcast_refresh_merge(&f, p)?;
-                results.push(json!({"id":f.id,"ok":true}));
+    for batch in feeds.chunks(4) {
+        let fetched = std::thread::scope(|scope| {
+            let tasks: Vec<_> = batch
+                .iter()
+                .map(|f| scope.spawn(move || fetch(config, &f.url, Some(f), stop)))
+                .collect();
+            tasks
+                .into_iter()
+                .map(|t| {
+                    t.join()
+                        .unwrap_or_else(|_| Err(error(crate::t!("podcast_network"))))
+                })
+                .collect::<Vec<_>>()
+        });
+        for (f, fetched) in batch.iter().cloned().zip(fetched) {
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(DomainError::new(ErrorCode::Cancelled).into());
             }
-            Err(e) => {
-                if e.downcast_ref::<DomainError>()
-                    .is_some_and(|e| e.code == ErrorCode::Cancelled)
-                {
-                    return Err(e);
-                }
+            let result = fetched.and_then(|p| {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(DomainError::new(ErrorCode::Cancelled).into());
                 }
-                let mut f = f;
-                f.error = Some(e.to_string());
-                f.failures = f.failures.saturating_add(1);
-                f.refreshed_at = Some(chrono::Utc::now().to_rfc3339());
-                store.podcast_refresh_error(&f)?;
-                results.push(json!({"id":f.id,"ok":false,"error":e.to_string()}));
+                store.podcast_refresh_merge(&f, p)
+            });
+            match result {
+                Ok(()) => {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(DomainError::new(ErrorCode::Cancelled).into());
+                    }
+                    results.push(json!({"id":f.id,"title":f.title,"ok":true}));
+                }
+                Err(e) => {
+                    if e.downcast_ref::<DomainError>()
+                        .is_some_and(|e| e.code == ErrorCode::Cancelled)
+                    {
+                        return Err(e);
+                    }
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(DomainError::new(ErrorCode::Cancelled).into());
+                    }
+                    let mut f = f;
+                    f.error = Some(e.to_string());
+                    f.failures = f.failures.saturating_add(1);
+                    f.refreshed_at = Some(chrono::Utc::now().to_rfc3339());
+                    store.podcast_refresh_error(&f)?;
+                    results
+                        .push(json!({"id":f.id,"title":f.title,"ok":false,"error":e.to_string()}));
+                }
             }
         }
     }
     Ok(json!(results))
 }
+pub(super) fn episode_value(store: &Store, e: &Episode) -> Result<Value> {
+    let mut value = json!(e);
+    let feed = store.podcast_feed(&e.feed_id)?;
+    value["author"] = json!(feed.author);
+    value["feed_title"] = json!(feed.title);
+    value["saved"] = json!(store.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM podcast_saved WHERE episode_id=?1)",
+        [&e.id],
+        |r| r.get::<_, bool>(0)
+    )?);
+    value["queued"] = json!(store.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM podcast_queue WHERE episode_id=?1)",
+        [&e.id],
+        |r| r.get::<_, bool>(0)
+    )?);
+    if let Some(d) = store.podcast_download(&e.id)? {
+        value["download_state"] = json!(d.state);
+    }
+    Ok(value)
+}
 pub fn manage(
     config: &Config,
     store: &Store,
-    action: Action,
+    mut action: Action,
     stop: &Arc<AtomicBool>,
 ) -> Result<Value> {
+    if let Some(id) = action.episode_id_mut() {
+        *id = store.podcast_episode_id(id)?;
+    }
     Ok(match action {
+        Action::Chapters { id } => {
+            super::extras::chapters(config, &store.podcast_episode(&id)?, stop)?
+        }
+        Action::Bookmarks { id } => {
+            let rows: Vec<_> = store.podcast_bookmarks(&id)?.iter().map(|b| json!({"id":b.episode_id,"bookmark_id":b.id,"title":b.note,"position_ms":b.position_ms,"kind":"bookmark"})).collect();
+            json!({"items":rows,"total":rows.len()})
+        }
+        Action::Bookmark { id, time, note } => json!(
+            store.podcast_add_bookmark(
+                &id,
+                parse_time(
+                    time.as_deref()
+                        .ok_or_else(|| error(crate::t!("podcast_invalid_time")))?
+                )?,
+                &note
+            )?
+        ),
+        Action::BookmarkEdit { id, note } => {
+            store.podcast_edit_bookmark(&id, note.as_deref())?;
+            json!({"id":id,"removed":note.is_none()})
+        }
+        Action::Settings { id, key, value } => match (key, value) {
+            (None, None) => json!(store.podcast_settings(&id)?),
+            (Some(key), Some(value)) => json!(store.podcast_set_setting(&id, &key, &value)?),
+            _ => return Err(error(crate::t!("podcast_invalid_setting"))),
+        },
+        Action::Jump { .. } | Action::Sleep { .. } => {
+            return Err(error(crate::t!("podcast_playback_only")));
+        }
+        Action::Library { options } => store.podcast_library(&options)?,
+        Action::Save { id, remove } => {
+            store.podcast_save_episode(&id, remove)?;
+            json!({"id":id,"saved":!remove})
+        }
+        Action::Dismiss { id } => {
+            store.podcast_dismiss_inbox(&id)?;
+            json!({"id":id,"dismissed":true})
+        }
+        Action::MarkBatch { ids, unplayed } => {
+            let tx = rusqlite::Transaction::new_unchecked(
+                &store.conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            for id in &ids {
+                let e = store.podcast_episode(id)?;
+                let mut progress = e.progress();
+                progress.position_ms = if unplayed {
+                    0
+                } else {
+                    e.observed_duration_ms
+                        .or(e.duration_ms)
+                        .unwrap_or(e.position_ms)
+                };
+                progress.completed = !unplayed;
+                Store::write_podcast_progress(&tx, &e.id, &progress)?;
+            }
+            tx.commit()?;
+            json!({"marked":ids.len()})
+        }
+        Action::Resume | Action::Relative { .. } => {
+            return Err(error(crate::t!("podcast_playback_only")));
+        }
+        Action::Browse { country } => directory::home(&directory::country(config, &country)?),
+        Action::Categories { country } => {
+            directory::categories(&directory::country(config, &country)?)
+        }
+        Action::Charts {
+            country,
+            category,
+            limit,
+            random,
+        } => directory::charts(
+            config,
+            store,
+            &directory::country(config, &country)?,
+            category.as_deref(),
+            limit,
+            random,
+            stop,
+        )?,
         Action::Search {
             query,
             country,
             limit,
-        } => json!(search(config, &query, &country, limit.into(), stop)?),
+        } => {
+            let country = directory::country(config, &country)?;
+            let mut rows = search(config, &query, &country, limit.into(), stop)?;
+            directory::annotate_subscriptions(store, &mut rows)?;
+            json!(rows)
+        }
         Action::Discover { url } => json!(discover(config, &url, stop)?),
-        Action::Preview { url } => json!(fetch(config, &url, None, stop)?),
+        Action::Preview { url } => {
+            let subscription_url = url.clone();
+            let resolved = if feed::is_apple_url(&url) {
+                let urls = discover(config, &url, stop)?;
+                if urls.len() != 1 {
+                    return Err(error(crate::t!("podcast_no_public_feed")));
+                }
+                urls[0].clone()
+            } else {
+                url
+            };
+            let mut value = json!(fetch(config, &resolved, None, stop)?);
+            value["subscription_url"] = json!(subscription_url);
+            value
+        }
         Action::Add { url } => {
             let urls = discover(config, &url, stop)?;
             if urls.len() != 1 {
@@ -229,11 +530,24 @@ pub fn manage(
                 .into_iter()
                 .filter(|feed| feed.title.to_lowercase().contains(&query))
                 .collect();
-            page(&feeds, p)
+            let mut rows = Vec::new();
+            for feed in feeds {
+                let mut value = json!(feed);
+                value["unplayed_count"] = json!(store.podcast_unplayed_count(&feed.id)?);
+                value["sort"] = json!(store.podcast_settings(&feed.id)?.sort);
+                rows.push(value);
+            }
+            page(&rows, p)
         }
         Action::Episodes { id, query, page: p } => {
             let (items, total) = store.podcast_episodes_page(&id, &query, &p)?;
-            page_result(&items, total, p)
+            let items = items
+                .iter()
+                .map(|e| episode_value(store, e))
+                .collect::<Result<Vec<_>>>()?;
+            let mut value = page_result(&items, total, p);
+            value["feed_title"] = json!(store.podcast_feed(&id)?.title);
+            value
         }
         Action::Refresh { id } => refresh(config, store, id.as_deref(), stop)?,
         Action::Unsubscribe { id } => {
@@ -254,10 +568,41 @@ pub fn manage(
             )?;
             json!(store.podcast_episode(&id)?)
         }
-        Action::Download { id } => json!(download(config, &id, stop)?),
+        Action::Subtitles {
+            id,
+            file,
+            transcribe,
+        } => {
+            super::transcript::manage(config, store, &id, file.as_deref(), transcribe, stop, None)?
+        }
+        Action::Download { id } => json!(super::download::foreground(config, store, &id, stop)?),
         Action::Downloads { action } => match action {
-            DownloadAction::List => json!(store.podcast_downloads()?),
-            DownloadAction::Resume { id } => json!(download(config, &id, stop)?),
+            DownloadAction::Stats => {
+                let rows = store.podcast_downloads()?;
+                let bytes: u64 = rows.iter().map(|d| d.bytes).sum();
+                let directory = config
+                    .settings
+                    .podcasts
+                    .directory
+                    .clone()
+                    .unwrap_or_else(|| config.data_dir.join("podcasts"));
+                json!({"downloads":rows.len(),"bytes":bytes,"completed":rows.iter().filter(|d| d.state=="complete").count(),"available_bytes":fs2::available_space(directory).ok()})
+            }
+            DownloadAction::List => {
+                let mut rows = Vec::new();
+                for d in store.podcast_downloads()? {
+                    let mut value = episode_value(store, &store.podcast_episode(&d.episode_id)?)?;
+                    value
+                        .as_object_mut()
+                        .unwrap()
+                        .extend(json!(d).as_object().unwrap().clone());
+                    rows.push(value);
+                }
+                json!(rows)
+            }
+            DownloadAction::Resume { id } => {
+                json!(super::download::foreground(config, store, &id, stop)?)
+            }
             DownloadAction::Pause { ref id }
             | DownloadAction::Cancel { ref id }
             | DownloadAction::Remove { ref id } => {
@@ -295,6 +640,9 @@ pub fn manage(
                 json!(d)
             }
         },
+        Action::Queue {
+            action: QueueAction::Start { .. },
+        } => return Err(error(crate::t!("podcast_playback_only"))),
         Action::Queue { action } => {
             json!(store.podcast_queue_update(action)?)
         }
@@ -337,30 +685,45 @@ pub fn manage(
                 json!({"urls":urls})
             } else {
                 let mut results = vec![];
-                for u in urls {
-                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Err(DomainError::new(ErrorCode::Cancelled).into());
-                    }
-                    match fetch(config, &u, None, stop).and_then(|p| {
+                for batch in urls.chunks(4) {
+                    let fetched = std::thread::scope(|scope| {
+                        let tasks: Vec<_> = batch
+                            .iter()
+                            .map(|u| scope.spawn(move || fetch(config, u, None, stop)))
+                            .collect();
+                        tasks
+                            .into_iter()
+                            .map(|t| {
+                                t.join()
+                                    .unwrap_or_else(|_| Err(error(crate::t!("podcast_network"))))
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    for (u, fetched) in batch.iter().zip(fetched) {
                         if stop.load(std::sync::atomic::Ordering::Relaxed) {
                             return Err(DomainError::new(ErrorCode::Cancelled).into());
                         }
-                        store.podcast_subscribe(
-                            &p.ok_or_else(|| error(crate::t!("podcast_invalid_feed")))?,
-                            &u,
-                        )
-                    }) {
-                        Ok(f) => results.push(json!({"id":f.id,"ok":true})),
-                        Err(e) => {
-                            if e.downcast_ref::<DomainError>()
-                                .is_some_and(|e| e.code == ErrorCode::Cancelled)
-                            {
-                                return Err(e);
-                            }
+                        match fetched.and_then(|p| {
                             if stop.load(std::sync::atomic::Ordering::Relaxed) {
                                 return Err(DomainError::new(ErrorCode::Cancelled).into());
                             }
-                            results.push(json!({"ok":false,"error":e.to_string()}));
+                            store.podcast_subscribe(
+                                &p.ok_or_else(|| error(crate::t!("podcast_invalid_feed")))?,
+                                u,
+                            )
+                        }) {
+                            Ok(f) => results.push(json!({"id":f.id,"ok":true})),
+                            Err(e) => {
+                                if e.downcast_ref::<DomainError>()
+                                    .is_some_and(|e| e.code == ErrorCode::Cancelled)
+                                {
+                                    return Err(e);
+                                }
+                                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                                    return Err(DomainError::new(ErrorCode::Cancelled).into());
+                                }
+                                results.push(json!({"ok":false,"error":e.to_string()}));
+                            }
                         }
                     }
                 }

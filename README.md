@@ -4,7 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
 [![Crates.io](https://img.shields.io/crates/v/radio-cli.svg?logo=rust)](https://crates.io/crates/radio-cli)
 [![npm](https://img.shields.io/npm/v/@hmgle/radio-cli.svg?logo=npm)](https://www.npmjs.com/package/@hmgle/radio-cli)
-[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
+[![Rust 1.89+](https://img.shields.io/badge/Rust-1.89%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
 [![Linux and macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#requirements)
 [![MIT license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -15,8 +15,9 @@ the local catalog and interface, SQLite stores favorites and history, mpv plays
 audio, and FFmpeg records streams without re-encoding. No account or API key is
 required.
 
-- Subscribe to public podcasts, resume episodes, download audio, and manage a
-  listening queue; see the [podcast guide](docs/podcasts.md).
+- Discover and subscribe to public podcasts, manage your listening queue and
+  downloads, and follow synchronized captions in the TUI. See the
+  [podcast guide](docs/podcasts.md).
 - Browse a catalog from [Radio Browser](https://www.radio-browser.info/), search
   locally, filter by country, language, tag, and bitrate, and play a random match.
 - Use the keyboard-first TUI or script the CLI, with legacy `--json` and stable
@@ -139,9 +140,10 @@ truncated and reported.
 | `:help [COMMAND]` | Open keyboard help or a command's usage |
 | `:set language en\|zh-CN` / `:set mouse true\|false` | Change session settings |
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | Run diagnostics / move focus |
-| `:subtitles on\|off\|toggle\|history\|clear\|retry` | Control live subtitles / inspect session history |
+| `:subtitles on\|off\|toggle\|history\|clear\|retry\|panel\|follow` | Control subtitles / switch Details view / follow captions |
 | `:set subtitles.model ID` | Change the subtitle model for this session |
-| `:podcast ...` | Subscribe, play, seek, download, queue, or exchange OPML; see the [podcast guide](docs/podcasts.md) |
+| `p` / `P`, `:podcast` | Open actions for the playing / selected episode; see the [podcast guide](docs/podcasts.md) |
+| `:subtitles transcribe` / `:subtitles import FILE` | Generate or import captions for the current episode |
 | `:quit` / `:q` | Finalize recordings and quit |
 
 `:help` shows the full context-sensitive keyboard reference, and `:` followed by

@@ -451,6 +451,38 @@ impl Confirmation {
                     crate::t!("confirm_station_scope")
                 },
             ),
+            Command::Podcast(crate::podcast::Action::MarkBatch { ids, .. }) => {
+                return Some(Self {
+                    command: command.clone(),
+                    id: ids
+                        .iter()
+                        .take(8)
+                        .map(|id| {
+                            view.podcast_items
+                                .iter()
+                                .find(|i| i.id == *id)
+                                .map(|i| i.title.as_str())
+                                .unwrap_or(id)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    summary: crate::t!("podcast_bulk_count", "count" => ids.len()),
+                    scope: crate::t!("podcast_bulk_scope"),
+                    error: String::new(),
+                });
+            }
+            Command::Podcast(crate::podcast::Action::BookmarkEdit { id, note: None }) => {
+                (id.clone(), None, crate::t!("podcast_bookmark_remove"))
+            }
+            Command::Podcast(crate::podcast::Action::Unsubscribe { id }) => {
+                (id.clone(), None, crate::t!("podcast_unsubscribe_scope"))
+            }
+            Command::Podcast(crate::podcast::Action::Downloads {
+                action: crate::podcast::DownloadAction::Remove { id },
+            }) => (id.clone(), None, crate::t!("podcast_remove_scope")),
+            Command::Podcast(crate::podcast::Action::Queue {
+                action: crate::podcast::QueueAction::Clear,
+            }) => (String::new(), None, crate::t!("podcast_clear_scope")),
             _ => return None,
         };
         Some(Self {
@@ -481,10 +513,32 @@ struct SourcePosition {
     selected_id: Option<String>,
 }
 
+#[derive(Clone)]
+struct PlaybackOrigin {
+    source: Source,
+    feed: Option<String>,
+    filter: Filter,
+    selected_id: Option<String>,
+    list: ListState,
+    collection: Option<crate::podcast::LibraryQuery>,
+    snapshot: Option<super::podcast::Snapshot>,
+}
 pub(super) struct App {
+    pending_podcast_jump: Option<(u64, String)>,
+    playback_origin: Option<(PlaybackOrigin, Focus)>,
     pub podcast_feed: Option<String>,
+    pub podcast_selected: std::collections::BTreeSet<String>,
+    podcast_selected_titles: std::collections::HashMap<String, String>,
+    podcast_stack: Vec<PlaybackOrigin>,
+    podcast_positions: std::collections::HashMap<
+        String,
+        (Filter, ListState, Option<crate::podcast::LibraryQuery>),
+    >,
+    pub podcast_collection: Option<crate::podcast::LibraryQuery>,
     // Updated at submission so queued commands already invalidate old rows.
     podcast_request: Option<u64>,
+    podcast_directory: Option<crate::podcast::Action>,
+    podcast_directory_input: bool,
     pub map: super::map::State,
     last_click: Option<(Instant, u16, u16, String, u64)>,
     pub jump_binding: String,
@@ -501,6 +555,8 @@ pub(super) struct App {
     pub details_cache: std::cell::RefCell<super::render::DetailsCache>,
     pub recording_error_expanded: bool,
     pub confirmation: Option<Confirmation>,
+    pub podcast_menu: Option<super::podcast::Menu>,
+    pub podcast_input_target: Option<(String, String)>,
     pub focus: Focus,
     pub source: Source,
     pub mode: Mode,
@@ -525,6 +581,10 @@ pub(super) struct App {
     pub help_scroll: u16,
     pub popup: ScrollExtent,
     pub details_scroll: u16,
+    pub subtitle_details: bool,
+    pub subtitle_details_follow: bool,
+    pub subtitle_scroll: usize,
+    pub subtitle_cache: std::cell::RefCell<super::render::SubtitleCache>,
     pub inspect_info: bool,
     pub inspect_playing: bool,
     pub info_request: u64,
@@ -552,6 +612,8 @@ impl Default for App {
         let mut list = ListState::default();
         list.select(Some(0));
         Self {
+            pending_podcast_jump: None,
+            playback_origin: None,
             map: Default::default(),
             last_click: None,
             jump_binding: "''".into(),
@@ -564,13 +626,22 @@ impl Default for App {
             clipboard: None,
             filter_input: Editor::default(),
             confirmation: None,
+            podcast_menu: None,
+            podcast_input_target: None,
             theme: crate::config::Theme::Default,
             artwork: Default::default(),
             details_cache: Default::default(),
             recording_error_expanded: false,
             focus: Focus::List,
             podcast_feed: None,
+            podcast_selected: Default::default(),
+            podcast_selected_titles: Default::default(),
+            podcast_collection: None,
+            podcast_stack: Vec::new(),
+            podcast_positions: Default::default(),
             podcast_request: None,
+            podcast_directory: None,
+            podcast_directory_input: false,
             source: Source::Stations,
             mode: Mode::Normal,
             filter: Filter {
@@ -597,6 +668,10 @@ impl Default for App {
             help_scroll: 0,
             popup: ScrollExtent::default(),
             details_scroll: 0,
+            subtitle_details: true,
+            subtitle_details_follow: true,
+            subtitle_scroll: 0,
+            subtitle_cache: Default::default(),
             inspect_info: false,
             inspect_playing: false,
             info_request: 0,
@@ -697,6 +772,7 @@ impl App {
             && self.confirmation.is_none()
             && self.filter_edit.is_none()
             && self.pending_jump.is_none()
+            && self.pending_podcast_jump.is_none()
             && self.jump_selection.is_none();
         if self.message.is_empty() || !visible {
             self.message_clock = None;
@@ -728,6 +804,7 @@ impl App {
         self.too_small = width < 40 || height < 16;
         if self.too_small {
             self.confirmation = None;
+            self.podcast_menu = None;
             self.message.clear();
             // Preserve editor/filter drafts and deferred searches until visible.
             self.pending_nav = None;
@@ -785,7 +862,13 @@ impl App {
                         Action::Search { .. }
                         | Action::Discover { .. }
                         | Action::Preview { .. }
-                        | Action::Add { .. },
+                        | Action::Add { .. }
+                        | Action::Chapters { .. }
+                        | Action::Bookmarks { .. },
+                    ) => self.podcast_feed.is_none(),
+                    (
+                        Source::Podcasts,
+                        Action::Browse { .. } | Action::Categories { .. } | Action::Charts { .. },
                     ) => self.podcast_feed.is_none(),
                     (Source::Podcasts, action) => {
                         super::podcast::page_matches(action, &self.podcast_feed, &self.filter)
@@ -810,13 +893,51 @@ impl App {
         }
     }
     pub fn reconcile(&mut self, view: &View) {
+        if let Some((request, id)) = self.pending_podcast_jump.clone()
+            && let Some((response, result)) = &view.located_episode
+            && request == *response
+        {
+            self.pending_podcast_jump = None;
+            match result {
+                Ok((feed, offset)) => {
+                    self.source = Source::Podcasts;
+                    self.podcast_collection = None;
+                    self.podcast_directory = None;
+                    self.podcast_feed = Some(feed.clone());
+                    self.filter = Filter {
+                        limit: self.filter.limit,
+                        offset: *offset,
+                        ..Default::default()
+                    };
+                    self.reset_selection();
+                    self.restore_selection = Some(id);
+                    self.focus = Focus::List;
+                    self.search_due = Some(Instant::now());
+                }
+                Err(error) => self.message = crate::clean_text(error),
+            }
+        }
         if self.source.is_podcast() {
+            // Pending navigation must not clamp a restored cursor to old rows.
+            if self.podcast_request.is_some() && !self.list_ready(view) {
+                return;
+            }
             if view.podcast_page.as_ref().is_some_and(|action| {
                 super::podcast::page_matches(action, &self.podcast_feed, &self.filter)
+                    || super::podcast::is_transient(action) && self.list_ready(view)
             }) && let Some(id) = self.restore_selection.take()
             {
+                self.selected_id = Some(id.clone());
                 self.list
                     .select(view.podcast_items.iter().position(|item| item.id == id));
+                if self.message == crate::t!("jump_loading") {
+                    self.message.clear();
+                }
+            }
+            if let Some(id) = self.selected_id.as_ref()
+                && let Some(index) = view.podcast_items.iter().position(|i| &i.id == id)
+            {
+                self.list.select(Some(index));
             }
             let len = self.length(view);
             self.list.select(if len == 0 {
@@ -824,6 +945,9 @@ impl App {
             } else {
                 Some(self.list.selected().unwrap_or(0).min(len - 1))
             });
+            if self.list_ready(view) {
+                self.selected_id = self.selection_id(view);
+            }
             return;
         }
         if view.page.as_ref().is_some_and(|p| {
@@ -918,6 +1042,9 @@ impl App {
             return self
                 .podcast_items(view)
                 .get(self.list.selected().unwrap_or(0))
+                // Search and discovery rows have no local ID. Preserve their
+                // index rather than restoring every row to the first empty ID.
+                .filter(|item| !item.id.is_empty())
                 .map(|i| i.id.clone());
         }
         if self.source == Source::Recordings {
@@ -1004,15 +1131,18 @@ impl App {
         self.info_request = self.info_request.wrapping_add(1);
         self.inspect_info = self.send(sender, Command::Info(uuid, self.info_request));
         self.inspect_playing = playing;
+        self.subtitle_details = false;
         self.focus = Focus::Details;
         self.details_scroll = 0;
     }
     fn send(&mut self, sender: &CommandSender, command: Command) -> bool {
         let mut podcast_request = None;
+        let mut directory = None;
         let command = match command {
             Command::Podcast(action) if super::podcast::is_browse(&action) => {
                 let request = self.podcast_request.unwrap_or(0).wrapping_add(1);
                 podcast_request = Some(request);
+                directory = Some(super::podcast::is_transient(&action).then(|| action.clone()));
                 Command::PodcastRequest { action, request }
             }
             command => command,
@@ -1021,6 +1151,9 @@ impl App {
             Ok(()) => {
                 if let Some(request) = podcast_request {
                     self.podcast_request = Some(request);
+                }
+                if let Some(directory) = directory {
+                    self.podcast_directory = directory;
                 }
                 true
             }
@@ -1031,18 +1164,32 @@ impl App {
         }
     }
     pub fn flush_search(&mut self, sender: &CommandSender) {
+        self.pending_podcast_jump = None;
         if self.too_small {
             return;
         }
         self.pending_jump = None;
         let command = if self.source.is_podcast() {
-            Command::Podcast(super::podcast::browse(
-                self.source,
-                &self.podcast_feed,
-                &self.filter.query,
-                self.filter.offset,
-                self.filter.limit,
-            ))
+            if let Some(action) = self
+                .podcast_directory
+                .clone()
+                .filter(|_| self.source == Source::Podcasts && self.podcast_feed.is_none())
+            {
+                Command::Podcast(action)
+            } else if let Some(mut options) = self.podcast_collection.clone() {
+                options.query = self.filter.query.clone();
+                options.page.offset = self.filter.offset;
+                options.page.limit = self.filter.limit as u16;
+                Command::Podcast(crate::podcast::Action::Library { options })
+            } else {
+                Command::Podcast(super::podcast::browse(
+                    self.source,
+                    &self.podcast_feed,
+                    &self.filter.query,
+                    self.filter.offset,
+                    self.filter.limit,
+                ))
+            }
         } else if self.source == Source::Recordings {
             Command::Recordings(self.filter.clone())
         } else {
@@ -1054,6 +1201,486 @@ impl App {
             self.search_due = Some(Instant::now() + Duration::from_millis(200));
         }
     }
+    fn open_podcast_menu(&mut self, view: &View, selected: bool) {
+        if selected
+            && self.source.is_podcast()
+            && self.list_ready(view)
+            && let Some(item) = self
+                .podcast_items(view)
+                .get(self.list.selected().unwrap_or(0))
+                .copied()
+            && item.kind == "bookmark"
+        {
+            self.podcast_menu = Some(super::podcast::Menu {
+                id: item.id.clone(),
+                title: item.title.clone(),
+                current: false,
+                selected: 0,
+                rows: vec![],
+                actions: vec![44, 45],
+                bookmark_id: item.bookmark_id.clone(),
+                feed_id: None,
+            });
+            return;
+        }
+        let target = if !selected && view.status.playing() {
+            view.status
+                .episode
+                .as_ref()
+                .map(|e| (e.id.clone(), e.title.clone(), true))
+        } else {
+            None
+        };
+        let target = target.or_else(|| {
+            if !self.source.is_podcast() || !self.list_ready(view) {
+                return None;
+            }
+            self.podcast_items(view)
+                .get(self.list.selected().unwrap_or(0))
+                .filter(|i| matches!(i.kind.as_str(), "episode" | "download"))
+                .map(|i| (i.id.clone(), i.title.clone(), false))
+        });
+        if let Some((id, title, current)) = target {
+            let item = view.podcast_items.iter().find(|i| i.id == id);
+            let mut actions: Vec<_> = (0..44)
+                .filter(|n| ![30, 31, 32].contains(n))
+                .chain(46..49)
+                .collect();
+            if let Some(item) = item {
+                actions.retain(|n| match n {
+                    3 => !matches!(
+                        item.download_state.as_deref(),
+                        Some("complete" | "queued" | "downloading")
+                    ),
+                    4 => !item.queued,
+                    10 | 34 | 35 => {
+                        item.queued && (self.source == Source::PodcastQueue || *n == 10)
+                    }
+                    11 => matches!(
+                        item.download_state.as_deref(),
+                        Some("queued" | "downloading")
+                    ),
+                    12 => matches!(
+                        item.download_state.as_deref(),
+                        Some("paused" | "cancelled" | "failed")
+                    ),
+                    13 => !item.saved,
+                    14 => item.saved,
+                    36 => matches!(
+                        item.download_state.as_deref(),
+                        Some("queued" | "downloading" | "paused")
+                    ),
+                    37 => item
+                        .download_state
+                        .as_deref()
+                        .is_some_and(|s| s != "removed"),
+                    _ => true,
+                });
+            } else {
+                actions.retain(|n| ![10, 11, 12, 14, 34, 35, 36, 37].contains(n));
+            }
+            self.help = false;
+            self.podcast_menu = Some(super::podcast::Menu {
+                id: id.clone(),
+                title,
+                current,
+                selected: 0,
+                rows: vec![],
+                feed_id: view
+                    .status
+                    .episode
+                    .as_ref()
+                    .filter(|e| e.id == id)
+                    .map(|e| e.feed_id.clone())
+                    .or_else(|| {
+                        self.podcast_items(view)
+                            .iter()
+                            .find(|i| i.id == id)
+                            .and_then(|i| i.feed_id.clone())
+                    }),
+                bookmark_id: None,
+                actions,
+            });
+        } else if !selected && self.source.is_podcast() {
+            let item = self
+                .list_ready(view)
+                .then(|| self.podcast_items(view))
+                .and_then(|items| items.get(self.list.selected().unwrap_or(0)).copied());
+            let feed = item.filter(|i| i.kind == "feed");
+            self.podcast_menu = Some(super::podcast::Menu {
+                id: feed.map(|i| i.id.clone()).unwrap_or_default(),
+                title: feed
+                    .map(|i| i.title.clone())
+                    .unwrap_or_else(|| crate::t!("podcast_all").into()),
+                current: false,
+                selected: 0,
+                rows: vec![],
+                feed_id: feed.map(|i| i.id.clone()),
+                bookmark_id: None,
+                actions: if feed.is_some() {
+                    vec![
+                        46, 47, 48, 30, 31, 32, 15, 16, 17, 18, 19, 33, 39, 40, 41, 42, 43,
+                    ]
+                } else {
+                    vec![46, 47, 48, 15, 16, 17, 18, 19, 33, 38, 39, 40, 41, 42, 43]
+                },
+            });
+        } else {
+            self.message = crate::t!("podcast_current_required").into();
+        }
+    }
+    fn podcast_menu_key(&mut self, key: KeyEvent, view: &View, sender: &CommandSender) {
+        let mut menu = self.podcast_menu.take().unwrap();
+        let selection = match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => return,
+            KeyCode::Char(c @ '1'..='9') => Some(c as usize - '1' as usize),
+            KeyCode::Enter => Some(menu.selected),
+            KeyCode::Up | KeyCode::Char('k') => {
+                menu.selected = menu.selected.saturating_sub(1);
+                None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                menu.selected = (menu.selected + 1).min(menu.actions.len() - 1);
+                None
+            }
+            _ => None,
+        };
+        let Some(choice) = selection else {
+            self.podcast_menu = Some(menu);
+            return;
+        };
+        let Some(choice) = menu.actions.get(choice).copied() else {
+            return;
+        };
+        use crate::podcast::{Action, QueueAction};
+        if (46..49).contains(&choice) {
+            let country = self.discovery_country();
+            self.push_podcast_origin(view);
+            self.editor.begin(&format!(
+                "podcast {} --country {}{}",
+                ["browse", "categories", "charts"][choice - 46],
+                shell_words::quote(&country),
+                if choice == 48 { " --random" } else { "" }
+            ));
+            self.run_line(view, sender);
+            return;
+        }
+        if choice == 1 && menu.current {
+            self.show_subtitle_panel();
+        }
+        if choice == 7 {
+            self.locate_episode(menu.id, view, sender);
+            return;
+        }
+        if (15..=19).contains(&choice) {
+            let view_name = ["all", "inbox", "continue", "history", "saved"][choice - 15];
+            self.editor.begin(&format!("podcast library {view_name}"));
+            self.run_line(view, sender);
+            return;
+        }
+        let command = match choice {
+            0 => {
+                self.show_subtitle_panel();
+                Command::ShowPodcastSubtitles(menu.id.clone())
+            }
+            1 => Command::Podcast(Action::Subtitles {
+                id: menu.id.clone(),
+                file: None,
+                transcribe: true,
+            }),
+            2 => {
+                self.mode = Mode::Command;
+                self.editor.begin("subtitles import ");
+                self.podcast_input_target = Some((menu.id, menu.title.clone()));
+                self.message =
+                    crate::t!("podcast_import_for", "title" => crate::clean_text(&menu.title));
+                return;
+            }
+            3 => Command::Podcast(Action::Download {
+                id: menu.id.clone(),
+            }),
+            4 => Command::Podcast(Action::Queue {
+                action: QueueAction::Add {
+                    id: menu.id.clone(),
+                },
+            }),
+            5 => Command::Podcast(Action::Play {
+                id: menu.id.clone(),
+                from_start: true,
+                speed: None,
+            }),
+            6 => Command::CancelPodcastSubtitles(menu.id.clone()),
+            8 => Command::Podcast(Action::Mark {
+                id: menu.id.clone(),
+                state: "played".into(),
+            }),
+            9 => Command::Podcast(Action::Mark {
+                id: menu.id.clone(),
+                state: "unplayed".into(),
+            }),
+            10 => Command::Podcast(Action::Queue {
+                action: QueueAction::Remove {
+                    id: menu.id.clone(),
+                },
+            }),
+            11 => Command::Podcast(Action::Downloads {
+                action: crate::podcast::DownloadAction::Pause {
+                    id: menu.id.clone(),
+                },
+            }),
+            12 => Command::Podcast(Action::Downloads {
+                action: crate::podcast::DownloadAction::Resume {
+                    id: menu.id.clone(),
+                },
+            }),
+            44 => {
+                self.mode = Mode::Command;
+                self.editor.begin(&format!(
+                    "podcast bookmark-edit {} --note ",
+                    menu.bookmark_id.as_deref().unwrap_or("")
+                ));
+                return;
+            }
+            45 => Command::Podcast(Action::BookmarkEdit {
+                id: menu.bookmark_id.clone().unwrap_or_default(),
+                note: None,
+            }),
+            30 => Command::Podcast(Action::Refresh {
+                id: menu.feed_id.clone(),
+            }),
+            31 | 33 | 39..=42 => {
+                let prefix = match choice {
+                    31 => format!(
+                        "podcast settings {} ",
+                        menu.feed_id.as_deref().unwrap_or(&menu.id)
+                    ),
+                    33 => format!(
+                        "podcast library all{} --status ",
+                        menu.feed_id
+                            .as_ref()
+                            .map(|f| format!(" --feed {f}"))
+                            .unwrap_or_default()
+                    ),
+                    39 => "podcast import ".into(),
+                    40 => "podcast export ".into(),
+                    41 => "podcast search ".into(),
+                    _ => "podcast add ".into(),
+                };
+                self.mode = Mode::Command;
+                self.editor.begin(&prefix);
+                return;
+            }
+            32 => Command::Podcast(Action::Unsubscribe {
+                id: menu.feed_id.clone().unwrap_or_else(|| menu.id.clone()),
+            }),
+            34 | 35 => {
+                let items = self.podcast_items(view);
+                let current = items.iter().position(|i| i.id == menu.id).unwrap_or(0);
+                Command::Podcast(Action::Queue {
+                    action: QueueAction::Move {
+                        id: menu.id.clone(),
+                        position: if choice == 34 {
+                            current.max(1)
+                        } else {
+                            (current + 2).min(items.len())
+                        },
+                    },
+                })
+            }
+            36 => Command::Podcast(Action::Downloads {
+                action: crate::podcast::DownloadAction::Cancel {
+                    id: menu.id.clone(),
+                },
+            }),
+            37 => Command::Podcast(Action::Downloads {
+                action: crate::podcast::DownloadAction::Remove {
+                    id: menu.id.clone(),
+                },
+            }),
+            38 => Command::Podcast(Action::Queue {
+                action: QueueAction::Clear,
+            }),
+            43 => Command::Podcast(Action::Refresh { id: None }),
+            20 | 21 => {
+                self.push_podcast_origin(view);
+                self.source = Source::Podcasts;
+                self.podcast_feed = None;
+                self.podcast_collection = None;
+                self.filter.query.clear();
+                self.filter.offset = 0;
+                self.reset_selection();
+                self.focus = Focus::List;
+                Command::Podcast(if choice == 20 {
+                    Action::Chapters {
+                        id: menu.id.clone(),
+                    }
+                } else {
+                    Action::Bookmarks {
+                        id: menu.id.clone(),
+                    }
+                })
+            }
+            22 if !menu.current => {
+                self.mode = Mode::Command;
+                self.editor
+                    .begin(&format!("podcast bookmark {} --time ", menu.id));
+                return;
+            }
+            22 => Command::Podcast(Action::Bookmark {
+                id: menu.id.clone(),
+                time: None,
+                note: String::new(),
+            }),
+            23..=25 => Command::Podcast(Action::Sleep {
+                value: ["30", "end", "off"][choice - 23].into(),
+            }),
+            26 => Command::Podcast(Action::Queue {
+                action: QueueAction::Next {
+                    id: menu.id.clone(),
+                    after: None,
+                },
+            }),
+            27 | 28 => Command::Podcast(Action::AutoNext {
+                state: if choice == 27 { "on" } else { "off" }.into(),
+            }),
+            29 => {
+                self.mode = Mode::Command;
+                self.editor.begin("podcast speed ");
+                return;
+            }
+            13 => Command::Podcast(Action::Save {
+                id: menu.id.clone(),
+                remove: false,
+            }),
+            14 => Command::Podcast(Action::Save {
+                id: menu.id.clone(),
+                remove: true,
+            }),
+            _ => return,
+        };
+        if matches!(
+            &command,
+            Command::Podcast(
+                Action::Unsubscribe { .. }
+                    | Action::BookmarkEdit { note: None, .. }
+                    | Action::Downloads {
+                        action: crate::podcast::DownloadAction::Remove { .. }
+                    }
+                    | Action::Queue {
+                        action: QueueAction::Clear
+                    }
+            )
+        ) {
+            self.confirmation = Confirmation::new(command, view);
+            return;
+        }
+        if self.send(sender, command) {
+            self.message =
+                crate::t!("podcast_action_for", "title" => crate::clean_text(&menu.title));
+        } else {
+            self.podcast_menu = Some(menu);
+        }
+    }
+    fn show_subtitle_panel(&mut self) {
+        self.subtitle_details = true;
+        self.subtitle_details_follow = true;
+        self.inspect_info = false;
+        self.focus = Focus::Details;
+    }
+
+    fn remember_podcast(&mut self) {
+        if let Some(feed) = &self.podcast_feed {
+            self.podcast_positions.insert(
+                feed.clone(),
+                (
+                    self.filter.clone(),
+                    self.list,
+                    self.podcast_collection.clone(),
+                ),
+            );
+        }
+    }
+    fn browsing_origin(&self, view: &View) -> PlaybackOrigin {
+        let snapshot = self
+            .source
+            .is_podcast()
+            .then_some(())
+            .filter(|_| self.list_ready(view))
+            .and(view.podcast_page.as_ref())
+            .filter(|action| super::podcast::is_transient(action))
+            .map(|action| super::podcast::Snapshot {
+                action: action.clone(),
+                items: view.podcast_items.clone(),
+                total: view.podcast_total,
+                title: view.podcast_feed_title.clone(),
+            });
+        PlaybackOrigin {
+            source: self.source,
+            feed: self.podcast_feed.clone(),
+            filter: self.filter.clone(),
+            list: self.list,
+            selected_id: self.selection_id(view),
+            collection: self.podcast_collection.clone(),
+            snapshot,
+        }
+    }
+    fn discovery_country(&self) -> String {
+        let country = |action: &crate::podcast::Action| match action {
+            crate::podcast::Action::Browse { country }
+            | crate::podcast::Action::Categories { country }
+            | crate::podcast::Action::Charts { country, .. }
+            | crate::podcast::Action::Search { country, .. } => Some(country.clone()),
+            _ => None,
+        };
+        self.podcast_directory
+            .as_ref()
+            .and_then(country)
+            .or_else(|| {
+                self.podcast_stack
+                    .iter()
+                    .rev()
+                    .filter_map(|origin| origin.snapshot.as_ref())
+                    .find_map(|snapshot| country(&snapshot.action))
+            })
+            .unwrap_or_default()
+    }
+    fn push_podcast_origin(&mut self, view: &View) {
+        // Keep memory bounded even across long directory browsing sessions.
+        if self.podcast_stack.len() == 32 {
+            self.podcast_stack.remove(0);
+        }
+        self.podcast_stack.push(self.browsing_origin(view));
+    }
+    fn restore_origin(&mut self, origin: PlaybackOrigin, sender: &CommandSender) -> bool {
+        if let Some(snapshot) = origin.snapshot {
+            let action = snapshot.action.clone();
+            let request = self.podcast_request.unwrap_or(0).wrapping_add(1);
+            if !self.send(sender, Command::RestorePodcast { snapshot, request }) {
+                return false;
+            }
+            self.podcast_request = Some(request);
+            self.podcast_directory = Some(action);
+            self.search_due = None;
+        } else {
+            self.podcast_directory = None;
+            self.search_due = Some(Instant::now());
+        }
+        self.pending_podcast_jump = None;
+        self.source = origin.source;
+        self.podcast_feed = origin.feed;
+        self.filter = origin.filter;
+        self.list = origin.list;
+        self.selected_id = None;
+        self.restore_selection = origin.selected_id;
+        self.podcast_collection = origin.collection;
+        self.focus = Focus::List;
+        self.inspect_info = false;
+        self.details_scroll = 0;
+        if self.search_due.is_some() {
+            self.flush_search(sender);
+        }
+        true
+    }
     fn activate_podcast(&mut self, view: &View, sender: &CommandSender) {
         if !self.list_ready(view) {
             return;
@@ -1061,24 +1688,82 @@ impl App {
         if let Some(item) = self
             .podcast_items(view)
             .get(self.list.selected().unwrap_or(0))
+            .copied()
+            .cloned()
         {
-            let action = match item.kind.as_str() {
+            if let Some(line) = &item.command {
+                if item.input {
+                    self.podcast_directory_input = true;
+                    self.editor.begin(line);
+                    self.mode = Mode::Command;
+                } else {
+                    self.push_podcast_origin(view);
+                    self.editor.begin(line);
+                    self.run_line(view, sender);
+                }
+                return;
+            }
+            let kind = if item.local_feed_id.is_some() {
+                "feed"
+            } else {
+                item.kind.as_str()
+            };
+            let action = match kind {
                 "feed" => {
-                    self.podcast_feed = Some(item.id.clone());
+                    let id = item
+                        .local_feed_id
+                        .clone()
+                        .unwrap_or_else(|| item.id.clone());
+                    let sort = item.sort.clone();
+                    self.push_podcast_origin(view);
+                    self.podcast_directory = None;
+                    self.podcast_feed = Some(id.clone());
                     self.filter.query.clear();
                     self.filter.offset = 0;
                     self.reset_selection();
+                    self.podcast_collection = sort.map(|sort| crate::podcast::LibraryQuery {
+                        feed: Some(id.clone()),
+                        sort,
+                        ..Default::default()
+                    });
+                    if let Some((filter, list, collection)) =
+                        self.podcast_positions.get(&id).cloned()
+                    {
+                        self.filter = filter;
+                        self.list = list;
+                        self.podcast_collection = collection;
+                    }
                     self.flush_search(sender);
                     return;
                 }
+                "chapter" | "bookmark" => crate::podcast::Action::Jump {
+                    id: item.id.clone(),
+                    time: format!("{}", item.position_ms.unwrap_or(0) as f64 / 1000.),
+                },
+                "episode" if self.source == Source::PodcastQueue => crate::podcast::Action::Queue {
+                    action: crate::podcast::QueueAction::Start {
+                        id: item.id.clone(),
+                        auto_next: false,
+                    },
+                },
                 "episode" | "download" => crate::podcast::Action::Play {
                     id: item.id.clone(),
                     from_start: false,
                     speed: None,
                 },
-                "url" => crate::podcast::Action::Preview {
-                    url: item.url.clone(),
-                },
+                "url" => {
+                    if item.url.is_empty() {
+                        self.message = crate::t!("podcast_no_public_feed").into();
+                        return;
+                    }
+                    self.push_podcast_origin(view);
+                    self.filter.query.clear();
+                    self.filter.offset = 0;
+                    self.reset_selection();
+                    crate::podcast::Action::Preview {
+                        url: item.url.clone(),
+                    }
+                }
                 "preview" => crate::podcast::Action::Add {
                     url: item.url.clone(),
                 },
@@ -1098,6 +1783,10 @@ impl App {
     }
 
     fn clear_filters(&mut self, sender: &CommandSender) {
+        if let Some(options) = self.podcast_collection.as_mut() {
+            options.status = "all".into();
+            options.downloaded = false;
+        }
         self.filter = Filter {
             geo: self.filter.geo,
             favorites: self.source == Source::Favorites,
@@ -1118,6 +1807,8 @@ impl App {
         page: Option<crate::cli::Page>,
         sender: &CommandSender,
     ) {
+        self.remember_podcast();
+        self.pending_podcast_jump = None;
         self.restore_selection = None;
         self.jump_selection = None;
         self.positions[self.source.index()] = Some(SourcePosition {
@@ -1128,6 +1819,8 @@ impl App {
             self.filter.country = country;
         }
         self.source = source;
+        self.podcast_directory = None;
+        self.podcast_collection = None;
         self.podcast_feed = None;
         self.filter.geo = if source == Source::Explore {
             Some(crate::geo::GeoFilter::Cell(self.map.cell()))
@@ -1246,6 +1939,20 @@ impl App {
                 self.details_scroll = 0;
                 self.inspect_info = false;
             }
+            Focus::Details
+                if self.subtitle_details && view.subtitles.enabled && !self.inspect_info =>
+            {
+                if delta >= 10000 {
+                    self.subtitle_details_follow = true;
+                } else {
+                    self.subtitle_details_follow = false;
+                    self.subtitle_scroll = if delta <= -10000 {
+                        0
+                    } else {
+                        self.subtitle_scroll.saturating_add_signed(delta as isize)
+                    };
+                }
+            }
             Focus::Details => {
                 self.details_scroll = (i32::from(self.details_scroll) + delta).clamp(0, 4096) as u16
             }
@@ -1357,6 +2064,10 @@ impl App {
         if !self.list_ready(view) {
             return;
         }
+        if self.source.is_podcast() && self.podcast_directory.is_some() {
+            self.move_selection(if forward { 10 } else { -10 }, view);
+            return;
+        }
         let total = if self.source.is_podcast() {
             view.podcast_total
         } else if self.source == Source::Recordings {
@@ -1388,13 +2099,49 @@ impl App {
     /// Runs the command line; returns whether it was kept out of the history
     /// because it contains credentials, so the user can be told why.
     fn run_line(&mut self, view: &View, sender: &CommandSender) -> bool {
+        let mut line = self.editor.text.clone();
+        if let Ok(mut words) = shell_words::split(&line)
+            && words.first().is_some_and(|s| s == "podcast")
+            && words.iter().any(|s| s == "--selected")
+        {
+            if !self.source.is_podcast() || !self.list_ready(view) {
+                self.message = crate::t!("podcast_current_required").into();
+                return false;
+            }
+            let Some(item) = self
+                .podcast_items(view)
+                .get(self.list.selected().unwrap_or(0))
+                .copied()
+            else {
+                self.message = crate::t!("podcast_current_required").into();
+                return false;
+            };
+            words.retain(|s| s != "--selected");
+            let index = if words
+                .get(1)
+                .is_some_and(|s| matches!(s.as_str(), "queue" | "downloads"))
+            {
+                3
+            } else {
+                2
+            };
+            if words.len() < index {
+                self.message = crate::t!("podcast_current_required").into();
+                return false;
+            }
+            words.insert(index, item.id.clone());
+            line = shell_words::join(words);
+        }
         match command::parse(
-            &self.editor.text,
+            &line,
             self.selected(view),
             view.status.station.as_ref(),
             &self.filter,
         ) {
             Ok(parsed) => {
+                if std::mem::take(&mut self.podcast_directory_input) {
+                    self.push_podcast_origin(view);
+                }
                 self.mode = Mode::Normal;
                 self.message.clear();
                 let withheld = match self.editor.remember() {
@@ -1414,7 +2161,21 @@ impl App {
                 {
                     self.flush_search(sender);
                 }
+                let input_target = self.podcast_input_target.take();
                 match parsed {
+                    Parsed::PodcastCurrent => self.jump_to_playing(view, sender),
+                    Parsed::PodcastMenu => self.open_podcast_menu(view, false),
+                    Parsed::SubtitlePanel => {
+                        self.inspect_info = false;
+                        self.subtitle_details = !self.subtitle_details;
+                        self.focus = Focus::Details;
+                    }
+                    Parsed::SubtitleFollow => {
+                        self.inspect_info = false;
+                        self.subtitle_details = true;
+                        self.subtitle_details_follow = true;
+                        self.focus = Focus::Details;
+                    }
                     Parsed::SubtitleHistory => {
                         self.subtitle_history = true;
                         self.subtitle_follow = true;
@@ -1474,14 +2235,62 @@ impl App {
                         self.flush_search(sender);
                     }
                     Parsed::Worker(mut command) => {
+                        if matches!(&command, Command::Subtitles(action) if action == "on" || action == "toggle" && !view.subtitles.enabled)
+                        {
+                            self.show_subtitle_panel();
+                        }
+                        if let Command::CurrentPodcast(mut action) = command {
+                            let import_target = if matches!(
+                                &action,
+                                crate::podcast::Action::Subtitles { file: Some(_), .. }
+                            ) {
+                                input_target.map(|(id, _)| id)
+                            } else {
+                                None
+                            };
+                            let target = import_target.or_else(|| {
+                                view.status
+                                    .episode
+                                    .as_ref()
+                                    .filter(|_| view.status.playing())
+                                    .map(|e| e.id.clone())
+                            });
+                            if let Some(id) = target {
+                                *action.episode_id_mut().unwrap() = id;
+                                command = Command::Podcast(action);
+                            } else {
+                                self.message = crate::t!("podcast_current_required").into();
+                                return withheld;
+                            }
+                        }
+                        if matches!(&command, Command::Podcast(crate::podcast::Action::Subtitles { id,.. }) if view.status.episode.as_ref().is_some_and(|e| e.id == *id))
+                        {
+                            self.show_subtitle_panel();
+                        }
                         if let Command::Podcast(action) = &command {
                             use crate::podcast::{Action, DownloadAction, QueueAction};
                             match action {
+                                Action::Library { options } => {
+                                    self.source = Source::Podcasts;
+                                    self.podcast_feed = options.feed.clone();
+                                    self.filter.query = options.query.clone();
+                                    self.filter.offset = options.page.offset;
+                                    self.filter.limit = usize::from(options.page.limit);
+                                    self.podcast_collection = Some(options.clone());
+                                    self.reset_selection();
+                                    self.focus = Focus::List;
+                                }
                                 Action::List { .. }
                                 | Action::Search { .. }
+                                | Action::Browse { .. }
+                                | Action::Categories { .. }
+                                | Action::Charts { .. }
                                 | Action::Discover { .. }
                                 | Action::Preview { .. }
-                                | Action::Episodes { .. } => {
+                                | Action::Episodes { .. }
+                                | Action::Chapters { .. }
+                                | Action::Bookmarks { .. } => {
+                                    self.podcast_collection = None;
                                     self.source = Source::Podcasts;
                                     self.filter.query.clear();
                                     self.filter.offset = 0;
@@ -1528,6 +2337,16 @@ impl App {
                             command,
                             Command::Station(crate::service::StationCommand::Remove { .. })
                                 | Command::DeleteRecording { .. }
+                                | Command::Podcast(
+                                    crate::podcast::Action::Unsubscribe { .. }
+                                        | crate::podcast::Action::MarkBatch { .. }
+                                        | crate::podcast::Action::Downloads {
+                                            action: crate::podcast::DownloadAction::Remove { .. }
+                                        }
+                                        | crate::podcast::Action::Queue {
+                                            action: crate::podcast::QueueAction::Clear
+                                        }
+                                )
                         ) {
                             self.confirmation = Confirmation::new(command, view);
                             return withheld;
@@ -1564,7 +2383,29 @@ impl App {
             }
         }
     }
+    fn locate_episode(&mut self, id: String, view: &View, sender: &CommandSender) {
+        let request = self.jump_request.wrapping_add(1);
+        if self.send(
+            sender,
+            Command::LocateEpisode {
+                id: id.clone(),
+                request,
+                limit: self.filter.limit,
+            },
+        ) {
+            if self.playback_origin.is_none() {
+                self.playback_origin = Some((self.browsing_origin(view), self.focus));
+            }
+            self.jump_request = request;
+            self.pending_podcast_jump = Some((request, id));
+            self.message = crate::t!("jump_loading").into();
+        }
+    }
     fn jump_to_playing(&mut self, view: &View, sender: &CommandSender) {
+        if let Some(episode) = &view.status.episode {
+            self.locate_episode(episode.id.clone(), view, sender);
+            return;
+        }
         // A failed station is still the one the player header names, so it can
         // be located (never replayed); only an idle player has nothing to find.
         let Some(station) = view
@@ -1679,7 +2520,10 @@ impl App {
     pub fn paste(&mut self, text: &str) {
         self.last_click = None;
         self.message_clock = None;
-        if self.too_small || self.confirmation.is_some() || (self.mode == Mode::Normal && self.help)
+        if self.too_small
+            || self.podcast_menu.is_some()
+            || self.confirmation.is_some()
+            || (self.mode == Mode::Normal && self.help)
         {
             return;
         }
@@ -1711,7 +2555,7 @@ impl App {
             key.code,
             KeyCode::Enter | KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab
         );
-        if self.confirmation.is_some() {
+        if self.confirmation.is_some() || self.podcast_menu.is_some() {
             false
         } else if self.mode != Mode::Normal {
             !commits
@@ -1769,15 +2613,28 @@ impl App {
                 self.mode = Mode::Normal;
                 self.help = false;
                 self.subtitle_history = false;
+                self.podcast_input_target = None;
+                self.podcast_directory_input = false;
                 self.filter_edit = None;
                 self.message.clear();
             }
+            return;
+        }
+        if self.podcast_menu.is_some() {
+            self.podcast_menu_key(key, view, sender);
             return;
         }
         if let Some(mut confirmation) = self.confirmation.take() {
             match key.code {
                 KeyCode::Char('y') if key.kind == crossterm::event::KeyEventKind::Press => {
                     if self.send(sender, confirmation.command()) {
+                        if matches!(
+                            confirmation.command,
+                            Command::Podcast(crate::podcast::Action::MarkBatch { .. })
+                        ) {
+                            self.podcast_selected.clear();
+                            self.podcast_selected_titles.clear();
+                        }
                         self.message = crate::t!("delete_submitted").into();
                     } else {
                         confirmation.error = self.message.clone();
@@ -1795,6 +2652,8 @@ impl App {
                     self.cancel_search();
                 }
                 self.mode = Mode::Normal;
+                self.podcast_input_target = None;
+                self.podcast_directory_input = false;
                 self.message.clear();
                 return;
             }
@@ -1930,22 +2789,115 @@ impl App {
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Left | KeyCode::Right)
         {
-            if let Some(e) = &view.status.episode {
-                let pos = if key.code == KeyCode::Left {
-                    e.position_ms.saturating_sub(15000)
-                } else {
-                    e.position_ms.saturating_add(15000)
-                };
+            if view.status.episode.is_some() {
                 self.send(
                     sender,
-                    Command::Podcast(crate::podcast::Action::Seek {
-                        time: format!("{}", pos as f64 / 1000.),
+                    Command::Podcast(crate::podcast::Action::Relative {
+                        seconds: if key.code == KeyCode::Left {
+                            -f64::from(view.status.skip_back)
+                        } else {
+                            f64::from(view.status.skip_forward)
+                        },
                     }),
                 );
             }
             return;
         }
+        if key.code == KeyCode::Esc
+            && let Some((origin, focus)) = self.playback_origin.clone()
+        {
+            if self.restore_origin(origin, sender) {
+                self.playback_origin = None;
+                self.focus = focus;
+            }
+            return;
+        }
+        if self.source.is_podcast() && key.code == KeyCode::Esc && !self.podcast_stack.is_empty() {
+            self.remember_podcast();
+            let origin = self.podcast_stack.last().unwrap().clone();
+            if self.restore_origin(origin, sender) {
+                self.podcast_stack.pop();
+            }
+            return;
+        }
+        if self.source.is_podcast() && self.focus == Focus::List && self.list_ready(view) {
+            if key.code == KeyCode::Char('x') {
+                if let Some(item) = self
+                    .podcast_items(view)
+                    .get(self.list.selected().unwrap_or(0))
+                    .copied()
+                    && matches!(item.kind.as_str(), "episode" | "download")
+                {
+                    let id = item.id.clone();
+                    if !self.podcast_selected.remove(&id) {
+                        self.podcast_selected.insert(id.clone());
+                        self.podcast_selected_titles.insert(id, item.title.clone());
+                    } else {
+                        self.podcast_selected_titles.remove(&id);
+                    }
+                }
+                return;
+            }
+            if matches!(key.code, KeyCode::Char('X' | 'U')) && !self.podcast_selected.is_empty() {
+                let command = Command::Podcast(crate::podcast::Action::MarkBatch {
+                    ids: self.podcast_selected.iter().cloned().collect(),
+                    unplayed: key.code == KeyCode::Char('U'),
+                });
+                self.confirmation = Confirmation::new(command, view);
+                if let Some(confirmation) = self.confirmation.as_mut() {
+                    confirmation.summary =
+                        crate::t!("podcast_bulk_count", "count" => self.podcast_selected.len());
+                    confirmation.id = self
+                        .podcast_selected
+                        .iter()
+                        .take(8)
+                        .map(|id| {
+                            crate::clean_text(self.podcast_selected_titles.get(id).unwrap_or(id))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if self.podcast_selected.len() > 8 {
+                        confirmation
+                            .id
+                            .push_str(&format!("\n… (+{})", self.podcast_selected.len() - 8));
+                    }
+                }
+                return;
+            }
+        }
         if self.source.is_podcast() {
+            if key.code == KeyCode::Char('R')
+                && let Some(crate::podcast::Action::Charts {
+                    country,
+                    category,
+                    limit,
+                    ..
+                }) = self.podcast_directory.clone()
+            {
+                self.send(
+                    sender,
+                    Command::Podcast(crate::podcast::Action::Charts {
+                        country,
+                        category,
+                        limit,
+                        random: true,
+                    }),
+                );
+                self.reset_selection();
+                return;
+            }
+            if key.code == KeyCode::Char('D') {
+                let country = self.discovery_country();
+                self.push_podcast_origin(view);
+                self.editor.begin(&shell_words::join([
+                    "podcast",
+                    "browse",
+                    "--country",
+                    &country,
+                ]));
+                self.run_line(view, sender);
+                return;
+            }
             if key.code == KeyCode::F(5) {
                 self.flush_search(sender);
                 return;
@@ -2060,6 +3012,8 @@ impl App {
                 self.help = true;
                 self.help_scroll = 0;
             }
+            KeyCode::Char('p') => self.open_podcast_menu(view, false),
+            KeyCode::Char('P') => self.open_podcast_menu(view, true),
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => self.dismissed_error = view.operation_error_id,
             KeyCode::Tab => {
@@ -2093,6 +3047,10 @@ impl App {
                     None,
                     sender,
                 ),
+            KeyCode::Char('v') if self.focus == Focus::Details => {
+                self.subtitle_details = !self.subtitle_details;
+                self.inspect_info = false;
+            }
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1, view),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1, view),
             KeyCode::Char('h') | KeyCode::Left => self.focus_direction(-1, 0),
@@ -2165,6 +3123,32 @@ impl App {
                 self.recording_error_expanded = !self.recording_error_expanded;
                 self.focus = Focus::Details;
                 self.details_scroll = 0;
+            }
+            KeyCode::Char('F') if self.source.is_podcast() => {
+                self.mode = Mode::Command;
+                self.editor.begin(&format!(
+                    "podcast library all{} --status ",
+                    self.podcast_feed
+                        .as_ref()
+                        .map(|id| format!(" --feed {id}"))
+                        .unwrap_or_default()
+                ));
+            }
+            KeyCode::Char('f') if self.source.is_podcast() => {
+                if self.list_ready(view)
+                    && let Some(item) = self
+                        .podcast_items(view)
+                        .get(self.list.selected().unwrap_or(0))
+                    && matches!(item.kind.as_str(), "episode" | "download")
+                {
+                    self.send(
+                        sender,
+                        Command::Podcast(crate::podcast::Action::Save {
+                            id: item.id.clone(),
+                            remove: item.saved,
+                        }),
+                    );
+                }
             }
             KeyCode::Char('f') if self.source != Source::Recordings => {
                 if let Some(s) = self.selected(view) {
@@ -2292,6 +3276,27 @@ impl App {
             || self.confirmation.is_some()
         {
             self.last_click = None;
+            return;
+        }
+        if let Some(menu) = &mut self.podcast_menu {
+            let code = match event.kind {
+                MouseEventKind::ScrollDown => Some(KeyCode::Down),
+                MouseEventKind::ScrollUp => Some(KeyCode::Up),
+                MouseEventKind::Down(MouseButton::Left) => menu
+                    .rows
+                    .iter()
+                    .position(|r| {
+                        r.contains(ratatui::layout::Position::new(event.column, event.row))
+                    })
+                    .map(|i| {
+                        menu.selected = i;
+                        KeyCode::Enter
+                    }),
+                _ => None,
+            };
+            if let Some(code) = code {
+                self.key(KeyEvent::new(code, KeyModifiers::NONE), view, sender);
+            }
             return;
         }
         if self.help || self.filter_edit.is_some() {

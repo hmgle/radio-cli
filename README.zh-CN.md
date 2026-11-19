@@ -4,7 +4,7 @@
 [![最新版本](https://img.shields.io/github/v/release/hmgle/radio-cli.svg?logo=github)](https://github.com/hmgle/radio-cli/releases/latest)
 [![Crates.io](https://img.shields.io/crates/v/radio-cli.svg?logo=rust)](https://crates.io/crates/radio-cli)
 [![npm](https://img.shields.io/npm/v/@hmgle/radio-cli.svg?logo=npm)](https://www.npmjs.com/package/@hmgle/radio-cli)
-[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
+[![Rust 1.89+](https://img.shields.io/badge/Rust-1.89%2B-dea584.svg?logo=rust)](https://github.com/hmgle/radio-cli/blob/main/Cargo.toml)
 [![Linux 与 macOS](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-blue.svg)](#环境要求)
 [![MIT 许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -13,7 +13,7 @@
 面向 Linux 与 macOS 的轻量终端收音机与播客播放器。Rust 管理本地目录和交互，SQLite 保存收藏与历史，
 mpv 负责播放，FFmpeg 以流拷贝方式录音。无需账号或 API Key。
 
-- 订阅公开播客、续听单集、下载音频和管理队列，见[播客指南](docs/podcasts.zh-CN.md)。
+- 发现和订阅公开播客、管理收听队列和下载，并在 TUI 中跟随同步字幕。见[播客指南](docs/podcasts.zh-CN.md)。
 - 浏览 [Radio Browser](https://www.radio-browser.info/) 目录，在本地搜索，
   按国家/地区、语言、标签和码率筛选，并随机播放匹配电台。
 - 使用键盘优先的 TUI，或用 CLI 编写脚本；支持兼容旧格式的 `--json` 和稳定的
@@ -124,9 +124,10 @@ tmux 会把 `Ctrl-b` 当作前缀键截获，翻页请改用 `PgUp` / `PgDn`。
 | `:help [COMMAND]` | 打开键盘帮助或命令用法 |
 | `:set language en\|zh-CN` / `:set mouse true\|false` | 修改当前会话设置 |
 | `:doctor` / `:focus sources\|list\|details\|player\|activity` | 运行诊断 / 移动焦点 |
-| `:subtitles on\|off\|toggle\|history\|clear\|retry` | 控制直播字幕 / 查看会话历史 |
+| `:subtitles on\|off\|toggle\|history\|clear\|retry\|panel\|follow` | 控制字幕 / 切换详情视图 / 跟随字幕 |
 | `:set subtitles.model ID` | 切换当前会话字幕模型 |
-| `:podcast ...` | 订阅、播放、定位、下载、管理队列和交换 OPML，见[播客指南](docs/podcasts.zh-CN.md) |
+| `p` / `P`、`:podcast` | 打开当前播放 / 选中单集的操作菜单，见[播客指南](docs/podcasts.zh-CN.md) |
+| `:subtitles transcribe` / `:subtitles import 文件` | 为当前单集生成或导入字幕 |
 | `:quit` / `:q` | 收尾录音并退出 |
 
 `:help` 显示完整的上下文键盘帮助；输入 `:` 后按 `Tab` 可补全命令。

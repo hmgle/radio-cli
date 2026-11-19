@@ -232,7 +232,7 @@ xattr -d com.apple.quarantine ./radio
 ```
 
 See [Apple's guidance](https://support.apple.com/en-us/102445). Building from
-source is also supported with Rust 1.88 or newer.
+source is also supported with Rust 1.89 or newer.
 
 ## Language is not the expected one
 

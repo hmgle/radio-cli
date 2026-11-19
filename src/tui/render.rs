@@ -37,6 +37,209 @@ impl DetailsCache {
     }
 }
 
+#[derive(Default)]
+pub(super) struct SubtitleCache {
+    timeline: Option<(u64, String)>,
+    history: std::sync::Arc<std::collections::VecDeque<crate::speech::Segment>>,
+    width: u16,
+    lines: Vec<(usize, Line<'static>)>,
+    starts: Vec<usize>,
+    #[cfg(test)]
+    pub wrapped: usize,
+}
+
+pub(super) fn subtitle_details_visible(app: &App, view: &View) -> bool {
+    view.subtitles.enabled && app.subtitle_details && !app.inspect_info
+}
+
+fn subtitle_manual_reading(app: &App, view: &View) -> bool {
+    subtitle_details_visible(app, view)
+        && !app.subtitle_details_follow
+        && app.subtitle_cache.borrow().timeline == view.subtitles.timeline
+}
+
+fn subtitle_lines(text: &str, width: u16) -> Vec<Line<'static>> {
+    text.lines()
+        .flat_map(|line| {
+            super::text::wrap_words(line, usize::from(width))
+                .into_iter()
+                .map(|s| Line::raw(s.to_owned()))
+        })
+        .collect()
+}
+
+fn render_subtitle_details(frame: &mut Frame, app: &mut App, view: &View) {
+    let rect = app.rects[Focus::Details.index()];
+    let block = panel(
+        app.theme,
+        if subtitle_manual_reading(app, view) {
+            crate::t!("subtitle_panel_manual_title")
+        } else {
+            crate::t!("subtitle_panel_title")
+        }
+        .into(),
+        app.focus == Focus::Details,
+    );
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let title = view.status.station.as_ref().map_or("", |s| s.name.as_str());
+    let heading = if title.is_empty() {
+        view.subtitles.message.clone()
+    } else {
+        format!("{}\n{}", crate::clean_text(title), view.subtitles.message)
+    };
+    let heading_lines = subtitle_lines(&heading, inner.width);
+    let heading_height = heading_lines.len().min(3).min(usize::from(inner.height)) as u16;
+    frame.render_widget(
+        Paragraph::new(heading_lines).style(style(app.theme, Role::Muted)),
+        Rect {
+            height: heading_height,
+            ..inner
+        },
+    );
+    let body = Rect {
+        y: inner.y + heading_height,
+        height: inner.height - heading_height,
+        ..inner
+    };
+    let mut cache = app.subtitle_cache.borrow_mut();
+    let replaced = cache.timeline != view.subtitles.timeline;
+    if !std::sync::Arc::ptr_eq(&cache.history, &view.subtitles.history)
+        || cache.width != inner.width
+        || replaced
+    {
+        let reading = if !app.subtitle_details_follow && !replaced {
+            cache.lines.get(app.subtitle_scroll).map(|(i, _)| {
+                (
+                    cache.history[*i].clone(),
+                    app.subtitle_scroll - cache.starts[*i],
+                )
+            })
+        } else {
+            None
+        };
+        if replaced {
+            app.subtitle_details_follow = true;
+            app.subtitle_scroll = 0;
+        }
+        let shared = if cache.width == inner.width && !replaced {
+            cache
+                .history
+                .iter()
+                .zip(view.subtitles.history.iter())
+                .take_while(|(old, new)| old == new)
+                .count()
+        } else {
+            0
+        };
+        let keep_lines = cache
+            .starts
+            .get(shared)
+            .copied()
+            .unwrap_or(cache.lines.len());
+        cache.lines.truncate(keep_lines);
+        cache.starts.truncate(shared);
+        cache.history = view.subtitles.history.clone();
+        cache.timeline = view.subtitles.timeline.clone();
+        cache.width = inner.width;
+        for (i, s) in view.subtitles.history.iter().enumerate().skip(shared) {
+            #[cfg(test)]
+            {
+                cache.wrapped += 1;
+            }
+            let start = cache.lines.len();
+            cache.starts.push(start);
+            let text = format!(
+                "[{}:{:02}] {}",
+                s.start_ms / 60000,
+                s.start_ms / 1000 % 60,
+                s.text
+            );
+            cache.lines.extend(
+                subtitle_lines(&text, inner.width)
+                    .into_iter()
+                    .map(|l| (i, l)),
+            );
+            cache.lines.push((i, Line::raw("")));
+        }
+        if let Some((cue, offset)) = reading {
+            // Preserve the top cue and its wrapped-line offset when earlier
+            // cues arrive. Text edits fall back to the same audio position.
+            let i = cache
+                .history
+                .iter()
+                .position(|s| s == &cue)
+                .unwrap_or_else(|| {
+                    cache
+                        .history
+                        .partition_point(|s| s.start_ms < cue.start_ms)
+                        .min(cache.history.len().saturating_sub(1))
+                });
+            let from = cache.starts.get(i).copied().unwrap_or(0);
+            let end = cache
+                .starts
+                .get(i + 1)
+                .copied()
+                .unwrap_or(cache.lines.len());
+            app.subtitle_scroll = from + offset.min(end.saturating_sub(from + 1));
+        }
+    }
+    if cache.lines.is_empty() {
+        if !view.subtitles.timed {
+            frame.render_widget(
+                Paragraph::new(crate::t!("subtitle_empty")).wrap(Wrap { trim: false }),
+                body,
+            );
+        }
+        return;
+    }
+    let max_scroll = cache.lines.len().saturating_sub(usize::from(body.height));
+    if app.subtitle_details_follow {
+        if view.subtitles.timed {
+            let index = view
+                .subtitles
+                .current
+                .first()
+                .copied()
+                .or(view.subtitles.anchor)
+                .unwrap_or(0);
+            app.subtitle_scroll = cache
+                .starts
+                .get(index)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(2)
+                .min(max_scroll);
+        } else {
+            app.subtitle_scroll = max_scroll;
+        }
+    } else {
+        app.subtitle_scroll = app.subtitle_scroll.min(max_scroll);
+    }
+    let lines = cache
+        .lines
+        .iter()
+        .skip(app.subtitle_scroll)
+        .take(usize::from(body.height))
+        .map(|(i, line)| {
+            let current = if view.subtitles.timed {
+                view.subtitles.current.contains(i)
+            } else {
+                *i + 1 == view.subtitles.history.len()
+            };
+            line.clone().style(if current {
+                style(app.theme, Role::Focus).add_modifier(Modifier::BOLD)
+            } else {
+                style(app.theme, Role::Muted)
+            })
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), body);
+}
+
 fn panel(theme: crate::config::Theme, title: String, active: bool) -> Block<'static> {
     Block::default()
         .title(if active {
@@ -275,11 +478,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         );
         return None;
     }
-    let subtitle_height = if view.subtitles.enabled {
-        if area.height >= 24 { 3 } else { 1 }
-    } else {
-        0
-    };
+    let subtitle_height = u16::from(view.subtitles.enabled);
     let mut layout = screen_layout(area, app.focus, view.task_active, subtitle_height);
     if app.source == Source::Explore && !layout.task_main {
         if layout.shared {
@@ -297,58 +496,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         }
     }
     if subtitle_height > 0 {
-        // Leave the command/hint bar at the bottom; place captions just above it.
-        let rect = Rect {
-            x: area.x,
-            y: layout.bottom.y,
-            width: area.width,
-            height: subtitle_height,
-        };
-        if subtitle_height == 1 {
-            let latest = view
-                .subtitles
-                .history
-                .back()
-                .map_or("", |s| s.text.as_str());
-            let text = if latest.is_empty() {
-                view.subtitles.message.clone()
+        let message = &view.subtitles.message;
+        let status = if subtitle_manual_reading(app, view) {
+            let hint = crate::t!("subtitle_manual_hint");
+            if view.subtitles.failed {
+                format!("{message} · {hint}")
             } else {
-                format!("{} · {}", view.subtitles.message, latest)
-            };
-            frame.render_widget(
-                Paragraph::new(text).style(style(app.theme, Role::Muted)),
-                rect,
-            );
-        } else {
-            let lines = view
-                .subtitles
-                .history
-                .iter()
-                .rev()
-                // Keep a status row even if the strip later gains a two-row mode.
-                .take(2.min(usize::from(subtitle_height.saturating_sub(1))))
-                .collect::<Vec<_>>();
-            let status_height = subtitle_height - lines.len() as u16;
-            frame.render_widget(
-                Paragraph::new(view.subtitles.message.as_str())
-                    .wrap(Wrap { trim: true })
-                    .style(style(app.theme, Role::Muted)),
-                Rect {
-                    height: status_height,
-                    ..rect
-                },
-            );
-            for (row, segment) in lines.iter().rev().enumerate() {
-                frame.render_widget(
-                    Paragraph::new(segment.text.as_str()).style(style(app.theme, Role::Muted)),
-                    Rect {
-                        y: rect.y + status_height + row as u16,
-                        height: 1,
-                        ..rect
-                    },
-                );
+                format!("{hint} · {message}")
             }
-        }
+        } else {
+            format!("{message} · {}", crate::t!("subtitle_panel_hint"))
+        };
+        frame.render_widget(
+            Paragraph::new(status).style(style(app.theme, Role::Muted)),
+            Rect::new(area.x, layout.bottom.y, area.width, 1),
+        );
     }
     let layout = ScreenLayout {
         bottom: Rect {
@@ -361,7 +523,8 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     let normal = app.mode == Mode::Normal
         && !app.help
         && app.filter_edit.is_none()
-        && app.confirmation.is_none();
+        && app.confirmation.is_none()
+        && app.podcast_menu.is_none();
     let focused = app.focus;
     let active = |focus| normal && focused == focus;
     let detail_width = (usize::from(area.width) / 4).clamp(12, 40);
@@ -384,7 +547,35 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             ""
         }
     );
-    let player_text = if let Some(station) = &view.status.station {
+    let player_text = if let Some(e) = &view.status.episode {
+        format!(
+            "{}\n{} / {} · {:.2}×\n{}",
+            crate::t!("podcast_player", "state" => playing, "title" => crate::clean_text(view.status.station.as_ref().map(|s| s.name.as_str()).unwrap_or(&e.title)), "volume" => volume),
+            super::display::duration(e.position_ms),
+            e.observed_duration_ms
+                .or(e.duration_ms)
+                .map(super::display::duration)
+                .unwrap_or_else(|| "?".into()),
+            view.status.speed,
+            format_args!(
+                "{} · {}{}",
+                crate::t!("podcast_current_hint"),
+                if view.status.podcast_auto_next {
+                    crate::t!("podcast_auto_on")
+                } else {
+                    crate::t!("podcast_auto_off")
+                },
+                view.status
+                    .sleep_remaining
+                    .map(|n| if n == u64::MAX {
+                        format!(" · {}", crate::t!("podcast_sleep_end"))
+                    } else {
+                        format!(" · ⏱ {}s", n)
+                    })
+                    .unwrap_or_default()
+            )
+        )
+    } else if let Some(station) = &view.status.station {
         crate::t!(
             "player_station",
             "state" => playing,
@@ -407,19 +598,6 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         )
     } else {
         crate::t!("player_idle_panel", "volume" => volume, "recording" => recording)
-    };
-    let player_text = if let Some(e) = &view.status.episode {
-        format!(
-            "{player_text}\n{} / {} · {:.2}×",
-            super::display::duration(e.position_ms),
-            e.observed_duration_ms
-                .or(e.duration_ms)
-                .map(super::display::duration)
-                .unwrap_or_else(|| "?".into()),
-            view.status.speed
-        )
-    } else {
-        player_text
     };
     let player_text = if layout.shared {
         let width = usize::from(area.width.saturating_sub(2));
@@ -589,7 +767,21 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             || (app.focus != Focus::Details
                 && (!explore || (app.focus == Focus::List && !app.map.chooser))))
     {
-        let source_label = if app.filter.geo == Some(crate::geo::GeoFilter::Missing) {
+        let collection_label = app
+            .podcast_collection
+            .as_ref()
+            .map(|q| match q.view.as_str() {
+                "inbox" => crate::t!("podcast_inbox"),
+                "continue" => crate::t!("podcast_continue"),
+                "history" => crate::t!("podcast_history"),
+                "saved" => crate::t!("podcast_saved"),
+                _ => crate::t!("podcast_all"),
+            });
+        let source_label = if app.source.is_podcast() && !view.podcast_feed_title.is_empty() {
+            &view.podcast_feed_title
+        } else if let Some(label) = collection_label {
+            label
+        } else if app.filter.geo == Some(crate::geo::GeoFilter::Missing) {
             crate::t!("explore_missing")
         } else {
             app.source.label()
@@ -609,7 +801,54 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         let items: Vec<ListItem> = if app.source.is_podcast() {
             app.podcast_items(view)
                 .iter()
-                .map(|i| ListItem::new(crate::clean_text(&i.title)))
+                .map(|i| {
+                    let current =
+                        view.status
+                            .episode
+                            .as_ref()
+                            .is_some_and(|e| match i.kind.as_str() {
+                                "feed" => e.feed_id == i.id,
+                                "url" => i.local_feed_id.as_deref() == Some(&e.feed_id),
+                                "episode" | "download" => e.id == i.id,
+                                _ => false,
+                            });
+                    let marker = super::display::playback_glyph(&view.status.playback_state)
+                        .filter(|_| current);
+                    let playing_style =
+                        super::display::playback_tone(&view.status.playback_state).style(app.theme);
+                    let width = usize::from(app.rects[Focus::List.index()].width.saturating_sub(6));
+                    let meta = if width >= 35 && !i.meta.is_empty() {
+                        format!(
+                            " · {}",
+                            fit(&i.meta, (width / 2).min(i.meta.width())).trim_end()
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let title = format!(
+                        "{}{}",
+                        if app.podcast_selected.contains(&i.id) {
+                            "☑ "
+                        } else {
+                            ""
+                        },
+                        crate::clean_text(&i.title)
+                    );
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!("{} ", marker.unwrap_or(" ")), playing_style),
+                        Span::styled(
+                            fit(&title, width.saturating_sub(meta.width()))
+                                .trim_end()
+                                .to_owned(),
+                            if marker.is_some() {
+                                playing_style.add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default()
+                            },
+                        ),
+                        Span::styled(meta, style(app.theme, Role::Muted)),
+                    ]))
+                })
                 .collect()
         } else if app.source == Source::Recordings {
             view.recordings_for(&app.filter)
@@ -686,16 +925,31 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             );
         }
     }
-    if show_details {
-        let text = if app.source.is_podcast() {
+    if show_details && subtitle_details_visible(app, view) {
+        render_subtitle_details(frame, app, view);
+    } else if show_details {
+        let text = if let Some(episode) = view.status.episode.as_ref().filter(|_| {
+            view.status.playing()
+                && view.subtitles.enabled
+                && !app.subtitle_details
+                && !app.inspect_info
+        }) {
+            format!(
+                "{}\n{}\n{}\n{}\n{}",
+                crate::t!("podcast_menu_current"),
+                crate::clean_text(&episode.title),
+                super::display::diagnostic(&episode.description),
+                crate::clean_text(&episode.url),
+                crate::t!("podcast_current_hint")
+            )
+        } else if app.source.is_podcast() {
             app.podcast_items(view)
                 .get(app.list.selected().unwrap_or(0))
                 .map(|i| {
                     format!(
-                        "{}\n{}\n{}\n{}\n{}",
+                        "{}\n{}\n{}\n{}",
                         crate::clean_text(&i.title),
-                        crate::clean_text(&i.description),
-                        i.id,
+                        super::display::diagnostic(&i.description),
                         crate::clean_text(&i.url),
                         crate::t!("podcast_hint")
                     )
@@ -749,12 +1003,13 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         let text_rect = app.rects[Focus::Details.index()];
         let block = panel(
             app.theme,
-            if layout.shared {
-                crate::t!("details_shared")
+            if view.subtitles.enabled {
+                crate::t!("subtitle_info_title").into()
+            } else if layout.shared {
+                crate::t!("details_shared").into()
             } else {
-                crate::t!("details_panel")
-            }
-            .into(),
+                crate::t!("details_panel").into()
+            },
             active(Focus::Details),
         );
         let lines = if super::artwork::station(app, view).is_some() {
@@ -869,7 +1124,9 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             input,
         );
         frame.set_cursor_position((input.x + cursor_start + cursor, input.y));
-        let hint = if app.message.is_empty() {
+        let hint = if let Some((_, title)) = &app.podcast_input_target {
+            Line::raw(crate::t!("podcast_import_for", "title" => crate::clean_text(title)))
+        } else if app.message.is_empty() {
             let text = if app.mode == Mode::Command {
                 crate::t!("command_keys")
             } else {
@@ -888,6 +1145,19 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
     } else {
         let filter = if app.source == Source::Recordings {
             crate::t!("recordings_no_filters").into()
+        } else if app.source.is_podcast() {
+            let options = app.podcast_collection.clone().unwrap_or_default();
+            format!(
+                "/{}  {} · {}{}",
+                crate::clean_text(&app.filter.query),
+                options.status,
+                options.sort,
+                if options.downloaded {
+                    format!(" · {}", crate::t!("podcast_download_complete"))
+                } else {
+                    String::new()
+                }
+            )
         } else {
             crate::clean_text(&format!(
                 "/{}  {} {} {} ≥{}k",
@@ -904,9 +1174,26 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
                 app.filter.min_bitrate
             ))
         };
-        let context = context_hint(app.source, app.focus);
+        let context = if app.source.is_podcast()
+            && app.focus == Focus::List
+            && view
+                .podcast_page
+                .as_ref()
+                .is_some_and(super::podcast::is_transient)
+        {
+            crate::t!("podcast_directory_hint")
+        } else if view.status.episode.is_some() && view.status.playing() {
+            crate::t!("podcast_current_hint")
+        } else {
+            context_hint(app.source, app.focus)
+        };
         // A modal owns the keyboard, so the bar names it instead of the panel behind it.
-        let (mode_label, modal_keys) = if app.confirmation.is_some() {
+        let (mode_label, modal_keys) = if app.podcast_menu.is_some() {
+            (
+                crate::t!("podcast_menu_title").into(),
+                Some(crate::t!("podcast_menu_keys").into()),
+            )
+        } else if app.confirmation.is_some() {
             (
                 crate::t!("mode_confirm").to_owned(),
                 Some(crate::t!("confirm_keys").to_owned()),
@@ -993,7 +1280,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             ),
         );
     }
-    if app.mode == Mode::Normal && app.source != Source::Recordings {
+    if app.mode == Mode::Normal && app.source != Source::Recordings && !app.source.is_podcast() {
         let label = crate::t!("clear_filters_label");
         let width = label.width() as u16;
         if width <= bottom.width / 2 {
@@ -1120,33 +1407,55 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         ));
     }
     if app.help {
-        if app.subtitle_history && app.subtitle_follow {
+        if app.subtitle_history && app.subtitle_follow && !view.subtitles.timed {
             app.help_scroll = u16::MAX;
         }
         let rect = popup(area, 88, area.height.saturating_sub(2));
         clear_popup(frame, rect, app.theme);
         let inner = rect.width.saturating_sub(2);
         let lines = if app.subtitle_history {
-            let mut text = String::new();
+            let mut lines = vec![];
             let mut epoch = None;
-            for segment in view.subtitles.history.iter() {
+            let anchor = view
+                .subtitles
+                .current
+                .first()
+                .copied()
+                .or(view.subtitles.anchor)
+                .unwrap_or(0);
+            for (i, segment) in view.subtitles.history.iter().enumerate() {
                 if epoch.is_some_and(|old| old != segment.epoch) {
-                    text.push_str(&format!("\n── {} ──\n", crate::t!("subtitle_interrupted")));
+                    lines.extend(wrapped_lines(
+                        &format!("\n── {} ──", crate::t!("subtitle_interrupted")),
+                        inner,
+                    ));
                 }
                 epoch = Some(segment.epoch);
-                text.push_str(&format!(
-                    "[{}:{:02}–{}:{:02}] {}\n",
+                if view.subtitles.timed && app.subtitle_follow && i == anchor {
+                    app.help_scroll =
+                        lines.len().saturating_sub(2).min(usize::from(u16::MAX)) as u16;
+                }
+                let text = format!(
+                    "[{}:{:02}–{}:{:02}] {}",
                     segment.start_ms / 60000,
                     segment.start_ms / 1000 % 60,
                     segment.end_ms / 60000,
                     segment.end_ms / 1000 % 60,
                     segment.text
-                ));
+                );
+                let current = view.subtitles.timed && view.subtitles.current.contains(&i);
+                lines.extend(subtitle_lines(&text, inner).into_iter().map(|line| {
+                    if current {
+                        line.style(style(app.theme, Role::Focus).add_modifier(Modifier::BOLD))
+                    } else {
+                        line
+                    }
+                }));
             }
-            if text.is_empty() {
-                text = crate::t!("subtitle_empty").into();
+            if lines.is_empty() {
+                lines = wrapped_lines(crate::t!("subtitle_empty"), inner);
             }
-            wrapped_lines(&text, inner)
+            lines
         } else {
             match &app.help_content {
                 Some(content) => wrapped_lines(&super::display::diagnostic(content), inner),
@@ -1160,7 +1469,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         };
         let (paragraph, extent) = scroll_lines(lines, rect, &mut app.help_scroll);
         app.popup = extent;
-        let title = app.help_title.unwrap_or(crate::t!("help_title"));
+        let title = if app.subtitle_history && view.subtitles.timed {
+            crate::t!("podcast_subtitle_history")
+        } else {
+            app.help_title.unwrap_or(crate::t!("help_title"))
+        };
         let mut block = panel(app.theme, title.into(), true);
         if let Some((first, last)) = extent.span(app.help_scroll) {
             let position = format!(" {first}-{last}/{} ", extent.total);
@@ -1171,6 +1484,54 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
             }
         }
         frame.render_widget(paragraph.block(block), rect);
+    }
+    if let Some(menu) = &mut app.podcast_menu {
+        let rect = popup(area, 70, 22);
+        clear_popup(frame, rect, app.theme);
+        let block = panel(app.theme, crate::t!("podcast_menu_title").into(), true);
+        let inner = block.inner(rect);
+        frame.render_widget(block, rect);
+        let heading = if menu.current {
+            crate::t!("podcast_menu_current")
+        } else {
+            crate::t!("podcast_menu_selected")
+        };
+        let mut lines = vec![Line::raw(heading)];
+        lines.extend(
+            subtitle_lines(&crate::clean_text(&menu.title), inner.width)
+                .into_iter()
+                .take(2),
+        );
+        lines.push(Line::raw(""));
+        menu.rows.clear();
+        let labels = super::podcast::Menu::labels();
+        let available = usize::from(inner.height)
+            .saturating_sub(lines.len() + 1)
+            .max(1);
+        let start = menu.selected.saturating_sub(available - 1);
+        menu.rows.resize(menu.actions.len(), Rect::default());
+        for (i, action) in menu.actions.iter().enumerate().skip(start).take(available) {
+            let label = labels[*action];
+            menu.rows[i] = Rect::new(inner.x, inner.y + lines.len() as u16, inner.width, 1);
+            lines.push(
+                Line::raw(format!(
+                    "{} {}",
+                    i + 1,
+                    if *action == 0 && !menu.current {
+                        crate::t!("podcast_menu_play_show")
+                    } else {
+                        label
+                    }
+                ))
+                .style(if i == menu.selected {
+                    style(app.theme, Role::Focus).add_modifier(Modifier::BOLD)
+                } else {
+                    super::styles::base(app.theme)
+                }),
+            );
+        }
+        lines.push(Line::raw(crate::t!("podcast_menu_keys")).style(style(app.theme, Role::Muted)));
+        frame.render_widget(Paragraph::new(lines), inner);
     }
     if let Some(confirmation) = &app.confirmation {
         let rect = popup(area, 72, area.height.saturating_sub(2));
@@ -1183,7 +1544,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, view: &View) -> Option<Rect> {
         let body = format!(
             "{}\n{}\n{}\n{}",
             fit(&confirmation.summary, usize::from(inner.width)).trim_end(),
-            crate::clean_text(&confirmation.id),
+            super::display::diagnostic(&confirmation.id),
             confirmation.scope,
             super::display::diagnostic(&confirmation.error)
         );

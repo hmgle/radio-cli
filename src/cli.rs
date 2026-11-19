@@ -418,6 +418,20 @@ fn run_inner(mut cli: Cli) -> Result<()> {
     let mut store = Store::open(&config.data_dir.join("radio.db"))?;
     match action {
         Action::Podcast { action } => match action {
+            crate::podcast::Action::Queue {
+                action: crate::podcast::QueueAction::Start { id, auto_next },
+            } => {
+                let mut engine = Engine::new(config, stop.clone())?;
+                engine.podcast_action(crate::podcast::Action::Queue {
+                    action: crate::podcast::QueueAction::Start { id, auto_next },
+                })?;
+                playback_loop(&mut engine, &stop)?;
+            }
+            crate::podcast::Action::Resume => {
+                let mut engine = Engine::new(config, stop.clone())?;
+                engine.podcast_action(crate::podcast::Action::Resume)?;
+                playback_loop(&mut engine, &stop)?;
+            }
             crate::podcast::Action::Play {
                 id,
                 from_start,
@@ -437,23 +451,30 @@ fn run_inner(mut cli: Cli) -> Result<()> {
             action => {
                 let _lock = if matches!(
                     &action,
-                    crate::podcast::Action::Download { .. }
+                    crate::podcast::Action::Subtitles {
+                        transcribe: true,
+                        ..
+                    } | crate::podcast::Action::Download { .. }
                         | crate::podcast::Action::Downloads {
                             action: crate::podcast::DownloadAction::Resume { .. }
                                 | crate::podcast::DownloadAction::Remove { .. }
                         }
                         | crate::podcast::Action::Mark { .. }
+                        | crate::podcast::Action::MarkBatch { .. }
                 ) {
                     Some(crate::process::MediaLock::acquire(&config.runtime_dir)?)
                 } else {
                     None
                 };
+                crate::podcast::set_cli_progress(
+                    !cli.json && std::io::IsTerminal::is_terminal(&std::io::stderr()),
+                );
                 let mut value = crate::podcast::manage(&config, &store, action, &stop)?;
                 if cli.json {
                     emit(&value)?;
                 } else {
                     crate::podcast::sanitize_output(&mut value);
-                    println!("{}", serde_json::to_string_pretty(&value)?);
+                    println!("{}", crate::podcast::text_output(&value));
                 }
             }
         },

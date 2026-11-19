@@ -88,11 +88,14 @@ impl Writer {
     }
 
     pub fn preference(&self, key: &str, value: &str) -> Result<()> {
+        self.preferences(vec![(key.into(), value.into())])
+    }
+    pub fn preferences(&self, updates: Vec<(String, String)>) -> Result<()> {
         let mut pending = self.shared.pending();
         if pending.closing.is_some() || pending.cancelled || pending.finished {
             bail!(crate::t!("session_save_failed"));
         }
-        pending.preferences.insert(key.into(), value.into());
+        pending.preferences.extend(updates);
         // Bound the delay from the first update, even under continuous input.
         pending
             .due

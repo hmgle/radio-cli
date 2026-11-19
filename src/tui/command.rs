@@ -22,7 +22,9 @@ fn priority(command: &Command) -> bool {
     matches!(
         command,
         Command::Podcast(
-            crate::podcast::Action::Seek { .. } | crate::podcast::Action::Speed { .. }
+            crate::podcast::Action::Seek { .. }
+                | crate::podcast::Action::Relative { .. }
+                | crate::podcast::Action::Speed { .. }
         ) | Command::Pause
             | Command::Mute
             | Command::Stop
@@ -103,12 +105,24 @@ impl CommandReceiver {
 #[derive(Clone)]
 pub(super) enum Command {
     Podcast(crate::podcast::Action),
+    CurrentPodcast(crate::podcast::Action),
+    ShowPodcastSubtitles(String),
+    CancelPodcastSubtitles(String),
     PodcastRequest {
         action: crate::podcast::Action,
         request: u64,
     },
+    RestorePodcast {
+        snapshot: super::podcast::Snapshot,
+        request: u64,
+    },
     Subtitles(String),
     SubtitleModel(String),
+    LocateEpisode {
+        id: String,
+        request: u64,
+        limit: usize,
+    },
     LocatePlaying {
         uuid: String,
         request: u64,
@@ -153,7 +167,11 @@ pub(super) enum Command {
 }
 
 pub(super) enum Parsed {
+    PodcastMenu,
+    PodcastCurrent,
     SubtitleHistory,
+    SubtitlePanel,
+    SubtitleFollow,
     Mouse(bool),
     HelpText(String),
     Worker(Command),
@@ -165,10 +183,17 @@ pub(super) enum Parsed {
 }
 
 pub(super) const COMPLETIONS: &[&str] = &[
+    "subtitles",
+    "subtitles transcribe",
+    "subtitles import",
+    "subtitles fetch",
+    "subtitles cancel",
     "subtitles on",
     "subtitles off",
     "subtitles toggle",
     "subtitles history",
+    "subtitles panel",
+    "subtitles follow",
     "subtitles clear",
     "subtitles retry",
     "set subtitles.model sensevoice-small-int8",
@@ -190,6 +215,25 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "volume",
     "record",
     "record stop",
+    "podcast current",
+    "podcast browse",
+    "podcast charts",
+    "podcast categories",
+    "podcast library",
+    "podcast save",
+    "podcast dismiss",
+    "podcast mark-batch",
+    "podcast resume",
+    "podcast relative",
+    "podcast chapters",
+    "podcast bookmarks",
+    "podcast bookmark",
+    "podcast bookmark-edit",
+    "podcast settings",
+    "podcast jump",
+    "podcast sleep",
+    "podcast queue start",
+    "podcast queue next",
     "podcast list",
     "podcast episodes",
     "podcast add",
@@ -201,7 +245,9 @@ pub(super) const COMPLETIONS: &[&str] = &[
     "podcast play",
     "podcast mark",
     "podcast download",
+    "podcast subtitles",
     "podcast downloads list",
+    "podcast downloads stats",
     "podcast downloads pause",
     "podcast downloads resume",
     "podcast downloads cancel",
@@ -260,10 +306,33 @@ pub(super) fn parse(
             .ok_or_else(|| anyhow::anyhow!(crate::t!("command_need_station")))
     };
     match name.as_str() {
+        "podcast" if words.get(1).map(String::as_str) == Some("current") && words.len() == 2 => {
+            return Ok(Parsed::PodcastCurrent);
+        }
+        "podcast" if words.len() == 1 => return Ok(Parsed::PodcastMenu),
         "subtitles" => {
             return match words.get(1).map(String::as_str) {
+                None => Ok(Parsed::PodcastMenu),
+                Some("transcribe" | "fetch") if words.len() == 2 => Ok(Parsed::Worker(
+                    Command::CurrentPodcast(crate::podcast::Action::Subtitles {
+                        id: String::new(),
+                        file: None,
+                        transcribe: words[1] == "transcribe",
+                    }),
+                )),
+                Some("import") if words.len() == 3 => Ok(Parsed::Worker(Command::CurrentPodcast(
+                    crate::podcast::Action::Subtitles {
+                        id: String::new(),
+                        file: Some(PathBuf::from(&words[2])),
+                        transcribe: false,
+                    },
+                ))),
+                Some("panel") if words.len() == 2 => Ok(Parsed::SubtitlePanel),
+                Some("follow") if words.len() == 2 => Ok(Parsed::SubtitleFollow),
                 Some("history") if words.len() == 2 => Ok(Parsed::SubtitleHistory),
-                Some("on" | "off" | "toggle" | "clear" | "retry") if words.len() == 2 => {
+                Some("on" | "off" | "toggle" | "clear" | "retry" | "cancel")
+                    if words.len() == 2 =>
+                {
                     Ok(Parsed::Worker(Command::Subtitles(words[1].clone())))
                 }
                 _ => bail!(crate::t!("subtitle_usage")),
@@ -366,6 +435,39 @@ pub(super) fn parse(
                 .ok_or_else(|| anyhow::anyhow!(crate::t!("command_nothing_playing_uuid")))?,
         );
     }
+    // The CLI retains explicit IDs; the TUI resolves omitted episode targets
+    // against its live player, never persisted last-played preferences.
+    let current_podcast = if name == "podcast" {
+        match words.get(1).map(String::as_str) {
+            Some(
+                "play" | "download" | "subtitles" | "chapters" | "bookmarks" | "bookmark" | "save"
+                | "dismiss",
+            ) if words.len() == 2 || words[2].starts_with('-') => {
+                words.insert(2, "@current".into());
+                true
+            }
+            Some("mark")
+                if words.len() == 3 && matches!(words[2].as_str(), "played" | "unplayed") =>
+            {
+                words.insert(2, "@current".into());
+                true
+            }
+            Some("queue") if words.len() == 3 && matches!(words[2].as_str(), "add" | "remove") => {
+                words.push("@current".into());
+                true
+            }
+            Some("downloads")
+                if words.len() == 3
+                    && matches!(words[2].as_str(), "pause" | "resume" | "cancel" | "remove") =>
+            {
+                words.push("@current".into());
+                true
+            }
+            _ => false,
+        }
+    } else {
+        false
+    };
     let cli = Cli::try_parse_from(std::iter::once("radio".to_owned()).chain(words))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     // Global process/config flags have no meaning inside an existing session.
@@ -382,6 +484,9 @@ pub(super) fn parse(
         Some(Action::Podcast {
             action: crate::podcast::Action::Add { url },
         }) => Parsed::Worker(Command::Podcast(crate::podcast::Action::Preview { url })),
+        Some(Action::Podcast { action }) if current_podcast => {
+            Parsed::Worker(Command::CurrentPodcast(action))
+        }
         Some(Action::Podcast { action }) => Parsed::Worker(Command::Podcast(action)),
         Some(Action::Sync { accept_shrink }) => Parsed::Worker(Command::Sync(accept_shrink)),
         Some(Action::Search(search)) => Parsed::Search(search.filter()),
@@ -466,12 +571,28 @@ pub(super) fn completion_candidates(
         words.iter().rev().nth(1)
     }
     .map(String::as_str);
-    if preceding == Some("--duration") {
+    if command == "podcast" && preceding == Some("--category") {
+        values.extend(
+            crate::podcast::directory::CATEGORIES
+                .iter()
+                .map(|(_, slug, _, _)| (*slug).into()),
+        );
+    } else if preceding == Some("--duration") {
         values.extend(["10m", "30m", "1h"].map(String::from));
     } else if preceding == Some("--sort") {
         values.extend(["name", "bitrate", "votes", "clickcount", "random"].map(String::from));
     } else {
         let options: &[&str] = match command {
+            "podcast" if words.get(1).is_some_and(|s| s == "charts") => {
+                &["--country", "--category", "--limit", "--random"]
+            }
+            "podcast"
+                if words
+                    .get(1)
+                    .is_some_and(|s| matches!(s.as_str(), "browse" | "categories" | "search")) =>
+            {
+                &["--country"]
+            }
             "record" => &["--duration", "--output-dir"],
             "search" | "random" => &[
                 "--country",

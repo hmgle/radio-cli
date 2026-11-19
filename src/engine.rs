@@ -27,6 +27,10 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Status {
+    pub sleep_remaining: Option<u64>,
+    pub podcast_auto_next: bool,
+    pub skip_back: u32,
+    pub skip_forward: u32,
     pub episode: Option<crate::podcast::Episode>,
     pub seekable: bool,
     pub speed: f64,
@@ -52,6 +56,10 @@ impl Status {
                 .as_ref()
                 .map(|e| (&e.id, e.completed, e.observed_duration_ms))
             && self.seekable == other.seekable
+            && self.sleep_remaining == other.sleep_remaining
+            && self.podcast_auto_next == other.podcast_auto_next
+            && self.skip_back == other.skip_back
+            && self.skip_forward == other.skip_forward
             && self.speed == other.speed
             && self.station == other.station
             && self.title == other.title
@@ -152,6 +160,11 @@ impl Engine {
 
     pub fn store(&self) -> &Store {
         &self.session.store
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_store_mut(&mut self) -> &mut Store {
+        &mut self.session.store
     }
 
     pub fn subtitles(&self) -> &crate::speech::Snapshot {
@@ -269,6 +282,10 @@ impl Engine {
         let recovery_warnings = recorder::recover(&store)?;
         let directory = Directory::new(&config, stop.clone())?;
         let status = Status {
+            sleep_remaining: None,
+            podcast_auto_next: false,
+            skip_back: 15,
+            skip_forward: 15,
             episode: None,
             seekable: false,
             speed: 1.,
@@ -307,6 +324,9 @@ impl Engine {
                 playback_failed: false,
             },
             playback: PlaybackController {
+                sleep_deadline: None,
+                sleep_end: false,
+                show_settings: Default::default(),
                 episode: None,
                 progress: Default::default(),
                 seek_request: None,
@@ -349,6 +369,9 @@ impl Engine {
     }
 
     pub fn play_episode(&mut self, id: &str, from_start: bool, speed: Option<f64>) -> Result<()> {
+        if self.podcast_runtime.cleaning(id) {
+            anyhow::bail!(crate::t!("podcast_download_busy"));
+        }
         self.playback.play_episode(
             &mut self.session,
             &mut self.recording,
@@ -385,6 +408,7 @@ impl Engine {
             .save_preference("podcast_speed", &rate.to_string())
     }
     pub fn podcast_auto_next(&mut self, on: bool) -> Result<()> {
+        self.session.status.podcast_auto_next = on;
         self.session.podcast_auto_next = on;
         self.playback.auto_next = on;
         self.session
@@ -437,19 +461,159 @@ impl Engine {
         result
     }
 
-    pub fn podcast_action(&mut self, action: crate::podcast::Action) -> Result<()> {
+    pub(crate) fn current_podcast_action(
+        &mut self,
+        mut action: crate::podcast::Action,
+    ) -> Result<()> {
+        let episode = self
+            .session
+            .status
+            .episode
+            .as_ref()
+            .filter(|_| self.session.status.playing())
+            .ok_or_else(|| crate::podcast::error(crate::t!("podcast_current_required")))?;
+        let id = action
+            .episode_id_mut()
+            .ok_or_else(|| crate::podcast::error(crate::t!("podcast_current_required")))?;
+        *id = episode.id.clone();
+        self.podcast_action(action)
+    }
+
+    pub fn podcast_action(&mut self, mut action: crate::podcast::Action) -> Result<()> {
         use crate::podcast::{Action, DownloadAction, QueueAction};
-        match action {
+        if let Some(id) = action.episode_id_mut() {
+            *id = self.store().podcast_episode_id(id)?;
+        }
+        if let Action::Queue {
+            action: QueueAction::Next { after, .. },
+        } = &mut action
+        {
+            *after = self
+                .playback
+                .queue_mode
+                .then(|| self.playback.episode.as_ref().map(|e| e.id.clone()))
+                .flatten();
+        }
+        self.podcast_runtime
+            .follow_captions(self.session.status.episode.as_ref());
+        let show = matches!(&action, Action::Subtitles { id, .. } if self.status().playing() && self.status().episode.as_ref().is_some_and(|e| e.id == *id));
+        let result = match action {
+            Action::Sleep { value } => self.playback.set_sleep(&mut self.session, &value),
+            Action::Jump { id, time } => {
+                let target = crate::podcast::parse_time(&time)?;
+                if self.status().episode.as_ref().is_some_and(|e| e.id == id) {
+                    self.seek_episode(target)
+                } else {
+                    self.play_episode(&id, false, None)?;
+                    self.playback.episode.as_mut().unwrap().position_ms = target;
+                    self.playback.resume_pending = target > 0;
+                    Ok(())
+                }
+            }
+            Action::Bookmark {
+                id,
+                time: None,
+                note,
+            } => {
+                let episode = self
+                    .status()
+                    .episode
+                    .as_ref()
+                    .filter(|e| e.id == id)
+                    .ok_or_else(|| crate::podcast::error(crate::t!("podcast_current_required")))?;
+                self.store()
+                    .podcast_add_bookmark(&id, episode.position_ms, &note)?;
+                Ok(())
+            }
+            Action::Resume => {
+                let id = self
+                    .store()
+                    .meta("pref_last_episode")?
+                    .ok_or_else(|| crate::podcast::error(crate::t!("podcast_current_required")))?;
+                self.play_episode(&id, false, None)
+            }
+            Action::Relative { seconds } => {
+                if !seconds.is_finite() || seconds.abs() > 86400. {
+                    anyhow::bail!(crate::t!("podcast_invalid_time"));
+                }
+                self.playback.seek_relative(&mut self.session, seconds)
+            }
             Action::Play {
                 id,
                 from_start,
                 speed,
             } => self.play_episode(&id, from_start, speed),
             Action::Queue {
+                action: QueueAction::Start { id, auto_next },
+            } => {
+                if !self.store().podcast_queue()?.iter().any(|e| e.id == id) {
+                    anyhow::bail!(crate::t!("podcast_not_found"));
+                }
+                self.play_episode(&id, false, None)?;
+                self.playback.queue_mode = true;
+                self.playback.auto_next = auto_next || self.session.podcast_auto_next;
+                Ok(())
+            }
+            Action::Queue {
                 action: QueueAction::Play { auto_next },
             } => self.play_podcast_queue(auto_next || self.session.podcast_auto_next),
             Action::Seek { time } => self.seek_episode(crate::podcast::parse_time(&time)?),
             Action::Speed { rate } => self.podcast_speed(rate),
+            Action::MarkBatch { ids, unplayed } => {
+                // Validate all targets before changing the player or any progress.
+                let mut episodes = ids
+                    .iter()
+                    .map(|id| self.store().podcast_episode(id))
+                    .collect::<Result<Vec<_>>>()?;
+                let ids = episodes.iter().map(|e| e.id.clone()).collect::<Vec<_>>();
+                if self
+                    .playback
+                    .episode
+                    .as_ref()
+                    .is_some_and(|e| ids.contains(&e.id))
+                {
+                    self.stop_playback()?;
+                    self.playback.episode = None;
+                }
+                let mut rows = Vec::new();
+                for e in &mut episodes {
+                    e.completed = !unplayed;
+                    e.position_ms = if unplayed {
+                        0
+                    } else {
+                        e.observed_duration_ms
+                            .or(e.duration_ms)
+                            .unwrap_or(e.position_ms)
+                    };
+                    self.playback.progress.insert(e.id.clone(), e.clone());
+                    if self.status().episode.as_ref().is_some_and(|p| p.id == e.id) {
+                        self.session.status.episode = Some(e.clone());
+                    }
+                    rows.push((e.id.clone(), e.progress()));
+                }
+                if let Some(writer) = &self.session.persistence {
+                    let updates = rows
+                        .iter()
+                        .map(|(id, progress)| {
+                            Ok((
+                                format!("podcast_progress:{id}"),
+                                serde_json::to_string(progress)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    writer.preferences(updates)
+                } else {
+                    let tx = rusqlite::Transaction::new_unchecked(
+                        &self.store().conn,
+                        rusqlite::TransactionBehavior::Immediate,
+                    )?;
+                    for (id, progress) in rows {
+                        Store::write_podcast_progress(&tx, &id, &progress)?;
+                    }
+                    tx.commit()?;
+                    Ok(())
+                }
+            }
             Action::Mark { id, state } => {
                 let mut e = self.session.store.podcast_episode(&id)?;
                 if self.playback.episode.as_ref().is_some_and(|e| e.id == id) {
@@ -498,22 +662,79 @@ impl Engine {
                 action,
                 self.session._lock.clone(),
             ),
+        };
+        if result.is_ok() && show {
+            self.set_subtitles(true);
         }
+        result
+    }
+    pub(crate) fn show_podcast_subtitles(&mut self, id: &str) -> Result<()> {
+        // Resolve the frozen menu target at execution time. Playback may have
+        // advanced after the menu opened or while this command was queued.
+        if !self.playback_active() || self.playback.episode.as_ref().is_none_or(|e| e.id != id) {
+            self.play_episode(id, false, None)?;
+        }
+        self.set_subtitles(true);
+        Ok(())
+    }
+    pub(crate) fn subtitle_progress(&self) -> Option<u64> {
+        self.podcast_runtime.subtitle_progress()
     }
     pub fn podcast_tasks(&self) -> (usize, bool) {
         self.podcast_runtime.tasks()
     }
+    pub(crate) fn poll_podcast_browse(&mut self) -> Option<Result<serde_json::Value>> {
+        self.podcast_runtime.poll_browse()
+    }
     pub fn poll_podcast(&mut self) -> Option<Result<serde_json::Value>> {
+        self.podcast_runtime
+            .poll_browse()
+            .or_else(|| self.podcast_runtime.poll())
+    }
+    pub(crate) fn poll_podcast_operation(&mut self) -> Option<Result<serde_json::Value>> {
         self.podcast_runtime.poll()
     }
+    pub(crate) fn poll_podcast_subtitles(&mut self) -> Option<Result<serde_json::Value>> {
+        let current = self
+            .session
+            .status
+            .episode
+            .as_ref()
+            .is_some_and(|e| self.podcast_runtime.subtitle_target() == Some(e.id.as_str()));
+        let result = self.podcast_runtime.poll_subtitles()?;
+        if current {
+            self.session.subtitles.retry();
+        }
+        Some(result)
+    }
+    pub(crate) fn cancel_podcast_subtitles(&mut self) {
+        self.podcast_runtime.cancel_subtitles();
+        self.session.subtitles.retry();
+    }
+    pub(crate) fn cancel_podcast_subtitles_for(&mut self, id: &str) -> Result<()> {
+        self.podcast_runtime.cancel_subtitles_for(id)?;
+        self.session.subtitles.retry();
+        Ok(())
+    }
+    pub(crate) fn cancel_podcast_browse(&mut self) {
+        self.podcast_runtime.cancel_browse();
+    }
     pub fn cancel_podcast(&mut self) -> bool {
-        self.podcast_runtime.cancel()
+        let cancelled = self.podcast_runtime.cancel();
+        if cancelled {
+            self.session.subtitles.retry();
+        }
+        cancelled
     }
     pub fn tick(&mut self) -> Result<()> {
         if self.session.background_media {
             self.podcast_runtime
+                .follow_captions(self.session.status.episode.as_ref());
+            self.podcast_runtime
                 .tick(&self.session.config, self.session._lock.clone())?;
         }
+        self.playback
+            .sleep_tick(&mut self.session, Instant::now())?;
         self.poll_background()?;
         self.playback.tick(&mut self.session, &mut self.recording)?;
         self.recording
@@ -535,6 +756,27 @@ impl Engine {
         let paused = self.session.status.paused();
         let local = self.playback.source_kind == playback::SourceKind::Local;
         let generation = self.playback.generation;
+        if let Some(episode) = &self.session.status.episode {
+            self.podcast_runtime.follow_captions(Some(episode));
+            self.session.subtitles.update_episode(
+                &self.session.config,
+                generation,
+                episode,
+                playing || paused,
+            );
+            let reset = !self
+                .session
+                .subtitles
+                .incremental_episode(generation, episode);
+            if self.session.subtitles.snapshot.enabled
+                && let Some(update) = self.podcast_runtime.caption_update(episode, reset)
+            {
+                self.session
+                    .subtitles
+                    .publish_episode(generation, episode, update);
+            }
+            return;
+        }
         let session = &mut self.session;
         let key = (generation, session.status.source_url.as_str());
         session
@@ -825,6 +1067,138 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_episode_captions_follow_mpv_resume_pause_seek_and_speed() {
+        use crate::podcast::{Action, Download, Episode, Feed, Preview};
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::test_support::config(dir.path());
+        config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+        config.settings.audio_device = Some("null".into());
+        config.settings.podcasts.refresh_hours = 0;
+        if std::process::Command::new(&config.settings.mpv)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let audio = dir.path().join("audio.wav");
+        std::fs::write(&audio, crate::test_support::fixture("pcm_s16le", "wav")).unwrap();
+        let file = dir.path().join("captions.vtt");
+        std::fs::write(&file, "WEBVTT\n\n00:00.000 --> 00:01.000\nfirst\n\n00:01.000 --> 00:02.000\nsecond\n\n00:02.000 --> 00:05.000\nthird").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut engine = Engine::new(config.clone(), stop.clone()).unwrap();
+        let p = Preview {
+            feed: Feed {
+                url: "https://example.test/feed".into(),
+                title: "show".into(),
+                ..Default::default()
+            },
+            episodes: vec![Episode {
+                url: "https://example.test/audio".into(),
+                title: "episode".into(),
+                ..Default::default()
+            }],
+        };
+        let feed = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+        let episode = engine.store().podcast_episodes(&feed.id).unwrap().remove(0);
+        engine
+            .store()
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: audio.to_string_lossy().into(),
+                state: "complete".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        crate::podcast::manage(
+            &config,
+            engine.store(),
+            Action::Subtitles {
+                id: episode.id.clone(),
+                file: Some(file),
+                transcribe: false,
+            },
+            &stop,
+        )
+        .unwrap();
+        engine
+            .store()
+            .podcast_progress(&episode, 1200, None, false)
+            .unwrap();
+        engine.session.background_media = true;
+        engine.set_subtitles(true);
+        engine.play_episode(&episode.id, false, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let wait = |engine: &mut Engine, expected: usize| {
+            loop {
+                engine.tick().unwrap();
+                if engine.subtitles().current == [expected] {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{:?} {:?}",
+                    engine.status(),
+                    engine.subtitles()
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait(&mut engine, 1);
+        while engine.status().playback_state != PlaybackState::Playing
+            || !engine.playback.session_started
+            || engine.status().episode.as_ref().unwrap().position_ms <= 1200
+        {
+            engine.tick().unwrap();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(engine.subtitles().timed);
+        engine.pause().unwrap();
+        while !engine.status().paused() {
+            engine.tick().unwrap();
+            assert!(Instant::now() < deadline, "{:?}", engine.status());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        engine.seek_episode(2500).unwrap();
+        engine.podcast_speed(2.).unwrap();
+        wait(&mut engine, 2);
+        assert!(engine.status().paused());
+        assert_eq!(engine.status().speed, 2.);
+        let generation = engine.playback.generation;
+        let position = engine.status().episode.as_ref().unwrap().position_ms;
+        engine.show_podcast_subtitles(&episode.id).unwrap();
+        assert!(engine.subtitles().enabled);
+        assert_eq!(engine.playback.generation, generation);
+        assert_eq!(
+            engine.status().episode.as_ref().unwrap().position_ms,
+            position
+        );
+        assert!(engine.status().paused());
+        assert_eq!(engine.status().speed, 2.);
+        let revision = engine.subtitles().revision;
+        for _ in 0..3 {
+            engine.tick().unwrap();
+        }
+        assert_eq!(engine.subtitles().revision, revision);
+        engine.seek_episode(250).unwrap();
+        wait(&mut engine, 0);
+        engine.pause().unwrap();
+        wait(&mut engine, 1);
+        assert_eq!(engine.status().speed, 2.);
+        engine.set_subtitles(false);
+        let error = engine
+            .show_podcast_subtitles("missing-episode")
+            .unwrap_err();
+        assert!(!error.to_string().is_empty());
+        assert!(!engine.subtitles().enabled);
+        assert_eq!(engine.status().episode.as_ref().unwrap().id, episode.id);
+        engine.shutdown().unwrap();
+    }
 
     #[test]
     fn queue_completion_refreshes_candidates_after_concurrent_edits() {

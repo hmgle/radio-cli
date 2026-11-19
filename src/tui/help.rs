@@ -52,6 +52,14 @@ pub(super) fn sections(locale: Locale, jump_binding: &str) -> Vec<Section> {
                     keys: ":podcast COMMAND".into(),
                     detail: messages::text_in(locale, "podcast_hint").into(),
                 });
+                entries.push(Entry::Item {
+                    keys: "D / :podcast browse".into(),
+                    detail: messages::text_in(locale, "podcast_browse").into(),
+                });
+                entries.push(Entry::Item {
+                    keys: ":podcast charts --category technology".into(),
+                    detail: messages::text_in(locale, "podcast_categories").into(),
+                });
             }
             entries
         },

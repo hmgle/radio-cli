@@ -25,6 +25,73 @@ fn preview(url: &str) -> Preview {
     }
 }
 #[test]
+fn legacy_episode_json_survives_listing_playback_and_feed_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.audio_device = Some("null".into());
+    config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+    let database = config.data_dir.join("radio.db");
+    let store = Store::open(&database).unwrap();
+    let audio = support::fixture("libmp3lame", "mp3");
+    let server =
+        support::Server::new(move |_, stream| support::response(stream, 200, "audio/mpeg", &audio));
+    let mut p = preview(&server.url);
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    store
+        .podcast_progress(&episode, 75, Some(200), false)
+        .unwrap();
+    let mut legacy = serde_json::to_value(&episode).unwrap();
+    legacy.as_object_mut().unwrap().remove("transcripts");
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE podcast_episodes SET json=?1 WHERE id=?2",
+            rusqlite::params![legacy.to_string(), episode.id],
+        )
+        .unwrap();
+    drop(store);
+    let store = Store::open(&database).unwrap();
+    let listed = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    assert!(listed.transcripts.is_empty());
+    assert_eq!(listed.id, episode.id);
+    assert_eq!(listed.position_ms, 75);
+    assert!(
+        store
+            .podcast_episode(&episode.id)
+            .unwrap()
+            .transcripts
+            .is_empty()
+    );
+    if std::process::Command::new(&config.settings.mpv)
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+        engine
+            .podcast_action(Action::Play {
+                id: episode.id.clone(),
+                from_start: true,
+                speed: None,
+            })
+            .unwrap();
+        assert_eq!(engine.status().episode.as_ref().unwrap().id, episode.id);
+        engine.shutdown().unwrap();
+    }
+    p.episodes[0].transcripts = vec![podcast::Transcript {
+        url: format!("{}/captions.vtt", server.url),
+        mime: "text/vtt".into(),
+        language: Some("zh".into()),
+    }];
+    store.podcast_refresh_merge(&feed, Some(p)).unwrap();
+    let refreshed = store.podcast_episode(&episode.id).unwrap();
+    assert_eq!(refreshed.id, episode.id);
+    assert_eq!(refreshed.transcripts.len(), 1);
+    assert_eq!(refreshed.transcripts[0].mime, "text/vtt");
+}
+
+#[test]
 fn episode_search_filters_before_sql_pagination_and_joins_progress() {
     let dir = tempfile::tempdir().unwrap();
     let c = support::config(dir.path());
@@ -33,6 +100,7 @@ fn episode_search_filters_before_sql_pagination_and_joins_progress() {
     p.episodes = (0..101)
         .map(|i| Episode {
             guid: Some(i.to_string()),
+            source_order: Some(100 - i),
             title: if i == 0 {
                 "BJÖRK 第101集 100%_mix".into()
             } else {
@@ -166,7 +234,7 @@ fn subscriptions_merge_without_losing_identity_progress_or_missing_episodes() {
 #[test]
 fn opml_import_stops_on_cancellation_and_keeps_prior_successes() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    for successful in [0, 1] {
+    for successful in [0, 4] {
         let stop = Arc::new(AtomicBool::new(false));
         let cancel = stop.clone();
         let requests = Arc::new(AtomicUsize::new(0));
@@ -182,7 +250,7 @@ fn opml_import_stops_on_cancellation_and_keeps_prior_successes() {
         let config = support::config(dir.path());
         let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
         let file = dir.path().join("feeds.opml");
-        let outlines: String = (0..3)
+        let outlines: String = (0..8)
             .map(|i| format!("<outline xmlUrl='{}/{i}'/>", server.url))
             .collect();
         std::fs::write(&file, format!("<opml><body>{outlines}</body></opml>")).unwrap();
@@ -204,7 +272,7 @@ fn opml_import_stops_on_cancellation_and_keeps_prior_successes() {
                     .code,
                 radio_cli::error::ErrorCode::Cancelled
             );
-            assert_eq!(requests.load(Ordering::Relaxed), successful + 1);
+            assert!((successful + 1..=successful + 4).contains(&requests.load(Ordering::Relaxed)));
             assert_eq!(store.podcast_feeds().unwrap().len(), successful);
         }
     }
@@ -695,6 +763,10 @@ fn m4a_resume_seek_pause_and_queue_completion_use_episode_progress() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(engine.status().seekable);
+    assert!(
+        engine.status().paused(),
+        "seeking while paused must retain pause state"
+    );
     engine.pause().unwrap();
     while engine.playback_active() {
         engine.tick().unwrap();
@@ -1207,6 +1279,113 @@ fn missing_guids_deduplicate_by_url_and_stale_refresh_cannot_resubscribe() {
 }
 
 #[test]
+fn migration_from_schema_nine_keeps_podcasts_and_enables_the_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("radio.db");
+    let store = Store::open(&path).unwrap();
+    let p = preview("https://example.test/legacy");
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    store
+        .podcast_progress(&episode, 12345, Some(60000), false)
+        .unwrap();
+    store
+        .podcast_queue_set(std::slice::from_ref(&episode.id))
+        .unwrap();
+    store
+        .podcast_save_download(&podcast::Download {
+            episode_id: episode.id.clone(),
+            url: episode.url.clone(),
+            state: "paused".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    store.set_meta("pref_last_episode", &episode.id).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    support::downgrade_podcast_schema_to_v9(&conn);
+    drop(conn);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.podcast_feed(&feed.id).unwrap().title, feed.title);
+    assert_eq!(
+        store.podcast_by_url(&p.feed.url).unwrap().unwrap().id,
+        feed.id
+    );
+    let resumed = store.podcast_episode(&episode.id).unwrap();
+    assert_eq!(resumed.position_ms, 12345);
+    assert_eq!(resumed.observed_duration_ms, Some(60000));
+    assert!(!resumed.completed);
+    assert_eq!(store.podcast_queue().unwrap()[0].id, episode.id);
+    assert_eq!(
+        store.podcast_download(&episode.id).unwrap().unwrap().state,
+        "paused"
+    );
+    assert_eq!(
+        store.meta("pref_last_episode").unwrap().as_deref(),
+        Some(episode.id.as_str())
+    );
+    assert_eq!(
+        store.podcast_library(&Default::default()).unwrap()["total"],
+        1
+    );
+    assert!(store.podcast_bookmarks(&episode.id).unwrap().is_empty());
+    let revision = store.podcast_revision().unwrap();
+    store.podcast_save_episode(&episode.id, false).unwrap();
+    assert!(store.podcast_revision().unwrap() > revision);
+    for (view, total) in [("saved", 1), ("inbox", 0)] {
+        assert_eq!(
+            store
+                .podcast_library(&podcast::LibraryQuery {
+                    view: view.into(),
+                    ..Default::default()
+                })
+                .unwrap()["total"],
+            total
+        );
+    }
+    let revision = store.podcast_revision().unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.podcast_revision().unwrap(), revision);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        10
+    );
+}
+
+#[test]
+fn failed_schema_ten_migration_rolls_back_before_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("radio.db");
+    let store = Store::open(&path).unwrap();
+    let p = preview("https://example.test/legacy");
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    support::downgrade_podcast_schema_to_v9(&conn);
+    conn.execute_batch("CREATE VIEW podcast_revision AS SELECT 0 AS n")
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        9
+    );
+    let new_tables: usize = conn.query_row(
+        "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('podcast_saved','podcast_inbox','podcast_bookmarks')",
+        [], |r| r.get(0),
+    ).unwrap();
+    assert_eq!(new_tables, 0);
+    conn.execute_batch("DROP VIEW podcast_revision").unwrap();
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.podcast_feed(&feed.id).unwrap().title, feed.title);
+    assert!(store.podcast_library(&Default::default()).is_ok());
+}
+
+#[test]
 fn migration_from_schema_eight_keeps_radio_data_and_creates_empty_podcasts() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("radio.db");
@@ -1230,4 +1409,410 @@ fn migration_from_schema_eight_keeps_radio_data_and_creates_empty_podcasts() {
     let s = Store::open(&path).unwrap();
     assert_eq!(s.meta("existing").unwrap().as_deref(), Some("retained"));
     assert!(s.podcast_feeds().unwrap().is_empty());
+}
+
+#[test]
+fn caption_cli_import_is_atomic_and_reports_json_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let p = preview("https://example.test/rss");
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    let file = dir.path().join("caption.srt");
+    std::fs::write(&file, "1\n00:00:00,000 --> 00:00:02,000\nCaption").unwrap();
+    let command = || {
+        let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_radio"));
+        c.arg("--data-dir").arg(dir.path()).args([
+            "--config",
+            "/dev/null",
+            "--json-v2",
+            "podcast",
+            "subtitles",
+            &episode.id,
+        ]);
+        c
+    };
+    let output = command().arg("--file").arg(&file).output().unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["data"],
+        serde_json::json!({"id":episode.id,"segments":1})
+    );
+    std::fs::write(&file, "invalid").unwrap();
+    let output = command().arg("--file").arg(&file).output().unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!output.status.success());
+    assert_eq!(value["error"]["code"], "podcast_failed");
+    std::fs::remove_file(file).unwrap();
+    let output = command().output().unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["data"]["segments"], 1,
+        "bad import kept previous cache"
+    );
+    let output = command().arg("--transcribe").output().unwrap();
+    assert!(!output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "subtitle_runtime");
+    assert!(store.podcast_download(&episode.id).unwrap().is_none());
+}
+
+#[test]
+fn redirect_conflicts_are_isolated_and_temporary_urls_are_not_saved() {
+    let server = support::Server::new(|request, stream| {
+        if request.starts_with("GET /old ") || request.starts_with("GET /temporary ") {
+            let status = if request.starts_with("GET /old ") {
+                301
+            } else {
+                302
+            };
+            write!(stream, "HTTP/1.1 {status} Redirect\r\nLocation: /target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        } else {
+            support::response(stream, 200, "application/rss+xml", b"<rss><channel><title>Updated</title><item><guid>a</guid><title>Episode</title><enclosure url='/audio' type='audio/mpeg'/></item></channel></rss>");
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let old = format!("{}/old", server.url);
+    let target = format!("{}/target", server.url);
+    let temporary = format!("{}/temporary", server.url);
+    let a = store.podcast_subscribe(&preview(&old), &old).unwrap();
+    let b = store.podcast_subscribe(&preview(&target), &target).unwrap();
+    let c = store
+        .podcast_subscribe(&preview(&temporary), &temporary)
+        .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let result = podcast::refresh(&config, &store, None, &stop).unwrap();
+    assert_eq!(result.as_array().unwrap().len(), 3);
+    let failed = store.podcast_feed(&a.id).unwrap();
+    assert_eq!(failed.failures, 1);
+    assert!(failed.error.is_some());
+    assert_eq!(failed.url, old);
+    assert_eq!(store.podcast_feed(&b.id).unwrap().title, "Updated");
+    assert_eq!(store.podcast_feed(&c.id).unwrap().url, temporary);
+}
+
+#[test]
+fn library_filters_before_paging_and_preserves_initial_inbox_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("radio.db")).unwrap();
+    let mut p = preview("https://library.test/feed");
+    let f = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let mut q = podcast::LibraryQuery {
+        view: "inbox".into(),
+        ..Default::default()
+    };
+    assert_eq!(store.podcast_library(&q).unwrap()["total"], 0);
+    p.episodes.push(Episode {
+        guid: Some("new".into()),
+        title: "New episode".into(),
+        url: "https://library.test/new.mp3".into(),
+        ..Default::default()
+    });
+    store.podcast_refresh_merge(&f, Some(p)).unwrap();
+    let new = store.podcast_library(&q).unwrap();
+    assert_eq!(new["total"], 1);
+    let id = new["items"][0]["id"].as_str().unwrap();
+    store.podcast_save_episode(id, false).unwrap();
+    q.view = "saved".into();
+    q.query = "New".into();
+    assert_eq!(store.podcast_library(&q).unwrap()["total"], 1);
+    q.page.offset = 1;
+    assert_eq!(
+        store.podcast_library(&q).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    store.podcast_dismiss_inbox(id).unwrap();
+    q.view = "inbox".into();
+    q.page.offset = 0;
+    assert_eq!(store.podcast_library(&q).unwrap()["total"], 0);
+}
+
+#[test]
+fn settings_bookmarks_and_automatic_downloads_survive_reopening() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("radio.db");
+    let store = Store::open(&path).unwrap();
+    let mut p = preview("https://settings.test/feed");
+    let f = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    assert!(store.podcast_set_setting(&f.id, "speed", "9").is_err());
+    assert!(store.podcast_set_setting(&f.id, "sort", "random").is_err());
+    store
+        .podcast_set_setting(&f.title, "speed", "1.25")
+        .unwrap();
+    store
+        .podcast_set_setting(&f.id, "auto_download", "true")
+        .unwrap();
+    let e = store.podcast_episodes(&f.id).unwrap().remove(0);
+    let bookmark = store.podcast_add_bookmark(&e.id, 12500, "A note").unwrap();
+    store
+        .podcast_edit_bookmark(&bookmark.id, Some("Edited"))
+        .unwrap();
+    assert!(store.podcast_downloads().unwrap().is_empty());
+    p.episodes.push(Episode {
+        guid: Some("new-id".into()),
+        url: "https://settings.test/new.mp3".into(),
+        ..Default::default()
+    });
+    store.podcast_refresh_merge(&f, Some(p)).unwrap();
+    assert_eq!(store.podcast_downloads().unwrap().len(), 1);
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.podcast_settings(&f.id).unwrap().speed, Some(1.25));
+    assert_eq!(store.podcast_settings(&f.title).unwrap().speed, Some(1.25));
+    assert_eq!(store.podcast_bookmarks(&e.id).unwrap()[0].note, "Edited");
+    store.podcast_edit_bookmark(&bookmark.id, None).unwrap();
+    assert!(store.podcast_bookmarks(&e.id).unwrap().is_empty());
+}
+
+#[test]
+fn transient_download_failures_have_a_persistent_retry_budget() {
+    let server = support::Server::new(|_, stream| {
+        support::response(stream, 503, "text/plain", b"Try later")
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let p = preview(&server.url);
+    let f = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let e = store.podcast_episodes(&f.id).unwrap().remove(0);
+    let stop = Arc::new(AtomicBool::new(false));
+    for attempt in 1..=4 {
+        assert!(podcast::download(&config, &e.id, &stop).is_err());
+        let d = store.podcast_download(&e.id).unwrap().unwrap();
+        assert_eq!(d.retries, attempt.min(3));
+        assert_eq!(d.state, if attempt <= 3 { "queued" } else { "failed" });
+    }
+}
+
+#[test]
+fn queue_start_and_relative_seeks_respect_pause_and_sleep_at_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = support::config(dir.path());
+    config.settings.audio_device = Some("null".into());
+    config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+    let audio = support::fixture("pcm_s16le", "wav");
+    let server =
+        support::Server::new(move |_, stream| support::response(stream, 200, "audio/wav", &audio));
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let mut p = preview(&server.url);
+    p.episodes = (0..3)
+        .map(|i| Episode {
+            guid: Some(i.to_string()),
+            title: format!("Episode {i}"),
+            url: format!("{}/audio", server.url),
+            ..Default::default()
+        })
+        .collect();
+    let f = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+    let rows = engine.store().podcast_episodes(&f.id).unwrap();
+    let ids: Vec<_> = rows.iter().map(|e| e.id.clone()).collect();
+    engine.store().podcast_queue_set(&ids).unwrap();
+    podcast::download(engine.config(), &ids[1], &Arc::new(AtomicBool::new(false))).unwrap();
+    engine
+        .podcast_action(Action::Queue {
+            action: podcast::QueueAction::Start {
+                id: ids[1].clone(),
+                auto_next: true,
+            },
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while !engine.status().seekable
+        || engine.status().episode.as_ref().unwrap().position_ms < 200
+        || !matches!(
+            engine.status().playback_state,
+            radio_cli::engine::PlaybackState::Playing
+        )
+    {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline, "{:?}", engine.status());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    engine.pause().unwrap();
+    while !engine.status().paused() {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline, "{:?}", engine.status());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for seconds in [0.8, -0.4] {
+        let before = engine.status().episode.as_ref().unwrap().position_ms;
+        engine.podcast_action(Action::Relative { seconds }).unwrap();
+        // Wait for mpv to report each position before issuing another seek.
+        loop {
+            engine.tick().unwrap();
+            let position = engine.status().episode.as_ref().unwrap().position_ms;
+            let moved = if seconds > 0. {
+                position.saturating_sub(before)
+            } else {
+                before.saturating_sub(position)
+            };
+            if moved >= 200 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "relative seek by {seconds}s from {before}ms: {:?}",
+                engine.status()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(engine.status().paused());
+    }
+    engine
+        .podcast_action(Action::Queue {
+            action: podcast::QueueAction::Next {
+                id: ids[0].clone(),
+                after: None,
+            },
+        })
+        .unwrap();
+    while engine.poll_podcast().is_none() {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        engine
+            .store()
+            .podcast_queue()
+            .unwrap()
+            .iter()
+            .map(|e| &e.id)
+            .collect::<Vec<_>>(),
+        vec![&ids[1], &ids[0], &ids[2]]
+    );
+    engine
+        .podcast_action(Action::Sleep {
+            value: "end".into(),
+        })
+        .unwrap();
+    engine.pause().unwrap();
+    while engine.playback_active() || engine.store().podcast_queue().unwrap().len() == 3 {
+        engine.tick().unwrap();
+        assert!(Instant::now() < deadline, "{:?}", engine.status());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let queue = engine.store().podcast_queue().unwrap();
+    assert_eq!(
+        queue.iter().map(|e| &e.id).collect::<Vec<_>>(),
+        vec![&ids[0], &ids[2]]
+    );
+    assert_eq!(engine.status().episode.as_ref().unwrap().id, ids[1]);
+    assert!(engine.store().podcast_episode(&ids[1]).unwrap().completed);
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn empty_subscriptions_receive_new_episodes_and_cli_titles_keep_json_contracts() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let mut p = preview("https://empty.test/feed");
+    let episode = p.episodes.pop().unwrap();
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    p.episodes.push(episode);
+    store.podcast_refresh_merge(&feed, Some(p)).unwrap();
+    let q = podcast::LibraryQuery {
+        view: "inbox".into(),
+        feed: Some(feed.title.clone()),
+        ..Default::default()
+    };
+    assert_eq!(store.podcast_library(&q).unwrap()["total"], 1);
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_radio"))
+            .arg("--data-dir")
+            .arg(dir.path())
+            .args(["--config", "/dev/null", "podcast"])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let output = run(&["episodes", &feed.title]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.starts_with("title\t"));
+    assert!(text.contains("单集"));
+    assert!(!text.contains("\"items\""));
+    let output = run(&["library", "inbox", "--feed", &feed.title, "--json-v2"]);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["data"]["total"], 1);
+    let output = run(&["save", "节目::单集", "--json-v2"]);
+    assert!(output.status.success(), "{:?}", output);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["data"]["saved"], true);
+}
+
+#[test]
+fn foreground_download_retries_and_cancelling_backoff_requires_manual_resume() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let audio = support::fixture("libmp3lame", "mp3");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let server = support::Server::new(move |request, stream| {
+        if request.starts_with("GET /cancel ") || count.fetch_add(1, Ordering::SeqCst) == 0 {
+            support::response(stream, 503, "text/plain", b"Later");
+        } else {
+            support::response(stream, 200, "audio/mpeg", &audio);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let mut p = preview(&server.url);
+    p.episodes.push(Episode {
+        guid: Some("cancel".into()),
+        url: format!("{}/cancel", server.url),
+        ..Default::default()
+    });
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let rows = store.podcast_episodes(&feed.id).unwrap();
+    let e = rows
+        .iter()
+        .find(|e| e.guid.as_deref() == Some("opaque-guid"))
+        .unwrap();
+    let value = podcast::manage(
+        &config,
+        &store,
+        Action::Download { id: e.id.clone() },
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(value["state"], "complete");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let id = rows
+        .iter()
+        .find(|e| e.guid.as_deref() == Some("cancel"))
+        .unwrap()
+        .id
+        .clone();
+    let target = id.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let cancel = stop.clone();
+    let task = std::thread::spawn(move || {
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        podcast::manage(&config, &store, Action::Download { id: target }, &cancel)
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while store
+        .podcast_download(&id)
+        .unwrap()
+        .is_none_or(|d| d.retry_at.is_none())
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    stop.store(true, Ordering::SeqCst);
+    assert!(task.join().unwrap().is_err());
+    let d = store.podcast_download(&id).unwrap().unwrap();
+    assert_eq!(d.state, "paused");
+    assert!(d.retry_at.is_none());
 }

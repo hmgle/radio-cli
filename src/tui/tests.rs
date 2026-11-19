@@ -27,6 +27,298 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+fn podcast_action_view() -> (App, View) {
+    let mut app = App::default();
+    app.source = Source::Podcasts;
+    app.podcast_feed = Some("feed".into());
+    let mut data = view();
+    data.status.episode = Some(crate::podcast::Episode {
+        id: "playing".into(),
+        title: "Playing episode".into(),
+        ..Default::default()
+    });
+    data.podcast_page = Some(super::podcast::browse(
+        app.source,
+        &app.podcast_feed,
+        "",
+        0,
+        100,
+    ));
+    data.podcast_items = vec![super::podcast::Item {
+        id: "selected".into(),
+        title: "Selected episode".into(),
+        kind: "episode".into(),
+        ..Default::default()
+    }]
+    .into();
+    (app, data)
+}
+
+#[test]
+fn targetless_podcast_commands_use_the_player_even_when_another_row_is_selected() {
+    for line in [
+        "subtitles transcribe",
+        "subtitles import 'caption with spaces.vtt'",
+        "subtitles fetch",
+        "podcast subtitles --transcribe",
+        "podcast subtitles --file x.srt",
+        "podcast download",
+        "podcast queue add",
+        "podcast queue remove",
+        "podcast play --from-start",
+        "podcast mark played",
+        "podcast downloads pause",
+    ] {
+        let (mut app, data) = podcast_action_view();
+        let (sender, receiver) = command::channel(8);
+        app.mode = Mode::Command;
+        app.editor.begin(line);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        let Command::Podcast(mut action) = receiver
+            .try_recv()
+            .unwrap_or_else(|e| panic!("{line}: {e:?} {}", app.message))
+        else {
+            panic!("{line}");
+        };
+        assert_eq!(action.episode_id_mut().unwrap(), "playing", "{line}");
+    }
+    let (mut app, mut data) = podcast_action_view();
+    let (sender, receiver) = command::channel(8);
+    for state in [
+        crate::engine::PlaybackState::Idle,
+        crate::engine::PlaybackState::Connecting,
+    ] {
+        data.status.playback_state = state;
+        app.mode = Mode::Command;
+        app.editor.begin("subtitles transcribe");
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(app.message, crate::t!("podcast_current_required"));
+    }
+    data.status.episode = None;
+    data.status.playback_state = crate::engine::PlaybackState::Playing;
+    app.mode = Mode::Command;
+    app.editor.begin("podcast download");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(
+        receiver.try_recv().is_err(),
+        "radio playback cannot stand in for a podcast"
+    );
+}
+
+#[test]
+fn podcast_menu_names_and_freezes_current_or_selected_targets() {
+    let (mut app, mut data) = podcast_action_view();
+    let (sender, receiver) = command::channel(8);
+    app.key(key(KeyCode::Char('p')), &data, &sender);
+    assert_eq!(app.podcast_menu.as_ref().unwrap().title, "Playing episode");
+    data.status.episode.as_mut().unwrap().id = "next".into();
+    app.key(key(KeyCode::Char('2')), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(),Command::Podcast(crate::podcast::Action::Subtitles { id,transcribe:true,.. }) if id=="playing")
+    );
+    app.key(key(KeyCode::Char('P')), &data, &sender);
+    assert!(!app.podcast_menu.as_ref().unwrap().current);
+    assert_eq!(app.podcast_menu.as_ref().unwrap().title, "Selected episode");
+    app.key(key(KeyCode::Char('3')), &data, &sender);
+    assert_eq!(app.editor.text, "subtitles import ");
+    app.paste("'file with spaces.vtt'");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(),Command::Podcast(crate::podcast::Action::Subtitles { id,file:Some(file),.. }) if id=="selected" && file==std::path::Path::new("file with spaces.vtt"))
+    );
+    assert!(app.podcast_input_target.is_none());
+    app.key(key(KeyCode::Char('p')), &data, &sender);
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(app.podcast_menu.is_none());
+    assert!(receiver.try_recv().is_err());
+    app.key(key(KeyCode::Char('p')), &data, &sender);
+    app.key(key(KeyCode::Char('3')), &data, &sender);
+    assert!(app.podcast_input_target.is_some());
+    app.update_size(20, 10);
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(app.podcast_input_target.is_none());
+}
+
+#[test]
+fn showing_menu_captions_keeps_the_frozen_target_when_playback_changes() {
+    use crate::podcast::{Download, Episode, Feed, Preview};
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = crate::test_support::config(dir.path());
+    config.settings.audio_device = Some("null".into());
+    config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
+    if std::process::Command::new(&config.settings.mpv)
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let audio = dir.path().join("audio.wav");
+    std::fs::write(&audio, crate::test_support::fixture("pcm_s16le", "wav")).unwrap();
+    let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
+    let p = Preview {
+        feed: Feed {
+            url: "https://example.test/show".into(),
+            ..Default::default()
+        },
+        episodes: ["A", "B"]
+            .into_iter()
+            .map(|title| Episode {
+                title: title.into(),
+                url: format!("https://example.test/{title}"),
+                ..Default::default()
+            })
+            .collect(),
+    };
+    let feed = engine.store().podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episodes = engine.store().podcast_episodes(&feed.id).unwrap();
+    for episode in &episodes {
+        engine
+            .store()
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: audio.to_string_lossy().into(),
+                state: "complete".into(),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let a = episodes.iter().find(|e| e.title == "A").unwrap();
+    let b = episodes.iter().find(|e| e.title == "B").unwrap();
+    for advance_before_submission in [true, false] {
+        engine.play_episode(&a.id, true, None).unwrap();
+        let (mut app, mut data) = podcast_action_view();
+        data.status = engine.status().clone();
+        data.status.playback_state = crate::engine::PlaybackState::Playing;
+        let (sender, receiver) = command::channel(1);
+        app.key(key(KeyCode::Char('p')), &data, &sender);
+        assert_eq!(app.podcast_menu.as_ref().unwrap().id, a.id);
+        if advance_before_submission {
+            engine.play_episode(&b.id, true, None).unwrap();
+            data.status = engine.status().clone();
+        }
+        app.key(key(KeyCode::Char('1')), &data, &sender);
+        let command = receiver.try_recv().unwrap();
+        if !advance_before_submission {
+            engine.play_episode(&b.id, true, None).unwrap();
+        }
+        let shared = Arc::new(Mutex::new(data));
+        worker::execute(
+            command,
+            &mut engine,
+            &mut Filter::default(),
+            &mut None,
+            &shared,
+        )
+        .unwrap();
+        assert_eq!(engine.status().episode.as_ref().unwrap().id, a.id);
+        assert!(engine.subtitles().enabled);
+        assert!(
+            receiver.try_recv().is_err(),
+            "showing captions is one target-bound operation"
+        );
+    }
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn showing_selected_episode_captions_sends_one_bound_command() {
+    let (mut app, data) = podcast_action_view();
+    let (sender, receiver) = command::channel(1);
+    app.key(key(KeyCode::Char('P')), &data, &sender);
+    app.key(key(KeyCode::Char('1')), &data, &sender);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::ShowPodcastSubtitles(id) if id == "selected"
+    ));
+    assert!(receiver.try_recv().is_err());
+    assert!(app.podcast_menu.is_none());
+    assert_eq!(app.focus, Focus::Details);
+}
+
+#[test]
+fn podcast_menu_fits_small_terminals_and_accepts_mouse_actions() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    for (width, height) in [(40, 16), (80, 24), (120, 32)] {
+        let (mut app, data) = podcast_action_view();
+        let (sender, receiver) = command::channel(8);
+        app.key(key(KeyCode::Char('p')), &data, &sender);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let rendered = text(&terminal);
+        assert!(rendered.contains("Playing episode"));
+        assert!(
+            rendered.contains(crate::t!("podcast_menu_generate")),
+            "{rendered}"
+        );
+        let rect = app.podcast_menu.as_ref().unwrap().rows[3];
+        app.mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x + 2,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            &data,
+            &sender,
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap(),Command::Podcast(crate::podcast::Action::Download { id }) if id=="playing")
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "menu clicks never leak to the background"
+        );
+    }
+}
+
+#[test]
+fn toggling_current_subtitles_to_info_shows_the_playing_episode() {
+    let (mut app, mut data) = podcast_action_view();
+    data.subtitles.enabled = true;
+    app.focus = Focus::Details;
+    app.subtitle_details = false;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("Playing episode"));
+    assert!(!text(&terminal).contains("Selected episode"));
+}
+
+#[test]
+fn podcast_player_keeps_position_visible_instead_of_radio_metadata() {
+    let (mut app, mut data) = podcast_action_view();
+    data.status.episode.as_mut().unwrap().position_ms = 125_000;
+    data.status.episode.as_mut().unwrap().duration_ms = Some(600_000);
+    for (width, height) in [(40, 16), (80, 24), (120, 32)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains("02:05 / 10:00 · 1.00×"));
+    }
+}
+
+#[test]
+fn explicit_podcast_ids_still_work_and_stale_selected_pages_cannot_open_actions() {
+    let (mut app, mut data) = podcast_action_view();
+    let (sender, receiver) = command::channel(8);
+    app.mode = Mode::Command;
+    app.editor.begin("podcast subtitles explicit --transcribe");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(),Command::Podcast(crate::podcast::Action::Subtitles { id,.. }) if id=="explicit")
+    );
+    data.podcast_page = None;
+    app.key(key(KeyCode::Char('P')), &data, &sender);
+    assert!(app.podcast_menu.is_none());
+    app.key(key(KeyCode::Char('p')), &data, &sender);
+    assert!(
+        app.podcast_menu.as_ref().unwrap().current,
+        "the player remains usable while a list reloads"
+    );
+}
+
 #[test]
 fn subtitle_history_does_not_replace_help_after_resizing_and_escape() {
     let data = view();
@@ -92,7 +384,7 @@ fn subtitle_strip_preserves_layout_and_command_bar_at_height_boundaries() {
         );
         let rendered = text(&terminal);
         assert!(rendered.contains("Loading speech model"));
-        assert!(!rendered.contains("Loading speech model ·"));
+        assert!(rendered.contains("Loading speech model ·"));
         assert!(rendered.contains("subtitles history"));
         let rows: Vec<_> = rendered.lines().collect();
         let caption = rows
@@ -109,7 +401,226 @@ fn subtitle_strip_preserves_layout_and_command_bar_at_height_boundaries() {
 }
 
 #[test]
-fn single_row_subtitles_keep_unspaced_chinese_visible() {
+fn subtitle_backfill_preserves_manual_reading_in_the_same_episode() {
+    let (mut app, mut data) = podcast_action_view();
+    data.subtitles.enabled = true;
+    data.subtitles.timed = true;
+    data.subtitles.timeline = Some((1, "playing".into()));
+    data.subtitles.history = Arc::new(
+        (10..50)
+            .map(|i| crate::speech::Segment {
+                epoch: 0,
+                start_ms: i * 1000,
+                end_ms: i * 1000 + 500,
+                text: format!("reading cue {i}\ncontinued cue {i}"),
+            })
+            .collect(),
+    );
+    data.subtitles.current = vec![30];
+    app.focus = Focus::Details;
+    let (sender, _) = command::channel(8);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.key(key(KeyCode::Home), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(!app.subtitle_details_follow);
+    assert!(text(&terminal).contains("reading cue 10"));
+    for i in (5..10).rev() {
+        Arc::make_mut(&mut data.subtitles.history).push_front(crate::speech::Segment {
+            epoch: 0,
+            start_ms: i * 1000,
+            end_ms: i * 1000 + 500,
+            text: format!("backfilled cue {i}"),
+        });
+    }
+    data.subtitles.current = vec![35];
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(
+        !app.subtitle_details_follow,
+        "backfill must not restore follow mode"
+    );
+    assert_eq!(
+        app.subtitle_scroll, 10,
+        "keep cue 10 at the top after inserting earlier cues"
+    );
+    assert!(text(&terminal).contains("reading cue 10"));
+    app.key(key(KeyCode::Down), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(app.subtitle_scroll, 11);
+    for i in (0..5).rev() {
+        Arc::make_mut(&mut data.subtitles.history).push_front(crate::speech::Segment {
+            epoch: 0,
+            start_ms: i * 1000,
+            end_ms: i * 1000 + 500,
+            text: format!("backfilled cue {i}"),
+        });
+    }
+    data.subtitles.current = vec![40];
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(!app.subtitle_details_follow);
+    assert_eq!(app.subtitle_scroll, 21, "keep the offset within cue 10");
+    assert!(text(&terminal).contains("continued cue 10"));
+    app.key(key(KeyCode::End), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(app.subtitle_details_follow);
+}
+
+#[test]
+fn subtitle_timeline_switch_restores_follow_even_with_identical_cues() {
+    for next in [(2, "playing"), (1, "another episode")] {
+        let (mut app, mut data) = podcast_action_view();
+        data.subtitles.enabled = true;
+        data.subtitles.timed = true;
+        data.subtitles.timeline = Some((1, "playing".into()));
+        data.subtitles.history = Arc::new(
+            (0..40)
+                .map(|i| crate::speech::Segment {
+                    epoch: 0,
+                    start_ms: i * 1000,
+                    end_ms: i * 1000 + 500,
+                    text: format!("cue {i}"),
+                })
+                .collect(),
+        );
+        data.subtitles.current = vec![30];
+        app.focus = Focus::Details;
+        let (sender, _) = command::channel(1);
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        app.key(key(KeyCode::Home), &data, &sender);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(!app.subtitle_details_follow);
+        assert_eq!(app.subtitle_scroll, 0);
+        // Only the identity changes; even the history Arc is unchanged.
+        data.subtitles.timeline = Some((next.0, next.1.into()));
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(app.subtitle_details_follow, "{next:?}");
+        assert!(app.subtitle_scroll > 0);
+        assert!(text(&terminal).contains("cue 30"));
+        assert!(!text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+    }
+}
+
+#[test]
+fn live_subtitle_sessions_restore_following_after_restart_or_source_change() {
+    for next in [(8, "stream-a"), (7, "stream-b")] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let mut controller = crate::speech::Controller::default();
+        controller.enabled(true);
+        // Keep recognition stopped while exercising the live controller's
+        // normal session publication, without models or network requests.
+        let stop = Arc::new(AtomicBool::new(true));
+        controller.update(&config, (7, "stream-a"), true, false, false, &stop);
+        assert_eq!(controller.snapshot.timeline, Some((7, "stream-a".into())));
+        assert!(!controller.snapshot.timed);
+        controller.snapshot.history = Arc::new(
+            (0..40)
+                .map(|i| crate::speech::Segment {
+                    epoch: 0,
+                    start_ms: i * 1000,
+                    end_ms: (i + 1) * 1000,
+                    text: format!("live cue {i}"),
+                })
+                .collect(),
+        );
+        let mut data = view();
+        data.subtitles = controller.snapshot.clone();
+        let mut app = App::default();
+        app.focus = Focus::Details;
+        let (sender, _) = command::channel(1);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        app.key(key(KeyCode::Home), &data, &sender);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(!app.subtitle_details_follow);
+        assert!(text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+        // A tick in the same live session must keep manual reading.
+        controller.update(&config, (7, "stream-a"), true, false, false, &stop);
+        data.subtitles = controller.snapshot.clone();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(!app.subtitle_details_follow);
+        controller.update(&config, next, true, false, false, &stop);
+        assert_eq!(controller.snapshot.timeline, Some((next.0, next.1.into())));
+        controller.snapshot.history = Arc::new(
+            (40..80)
+                .map(|i| crate::speech::Segment {
+                    epoch: 0,
+                    start_ms: i * 1000,
+                    end_ms: (i + 1) * 1000,
+                    text: format!("live cue {i}"),
+                })
+                .collect(),
+        );
+        data.subtitles = controller.snapshot.clone();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(app.subtitle_details_follow);
+        assert!(app.subtitle_scroll > 0);
+        assert!(text(&terminal).contains("[1:19] live cue 79"));
+        assert!(text(&terminal).contains(crate::t!("subtitle_panel_title")));
+        assert!(!text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+    }
+}
+
+#[test]
+fn subtitle_details_reuse_wrapping_until_cues_change_or_the_width_changes() {
+    let mut data = view();
+    data.subtitles.enabled = true;
+    data.subtitles.timed = true;
+    data.subtitles.history = Arc::new(
+        (0..5000)
+            .map(|i| crate::speech::Segment {
+                epoch: 0,
+                start_ms: i * 1000,
+                end_ms: i * 1000 + 500,
+                text: format!("字幕 cue {i}"),
+            })
+            .collect(),
+    );
+    let mut app = App::default();
+    app.focus = Focus::Details;
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(app.subtitle_cache.borrow().wrapped, 5000);
+    app.subtitle_details_follow = false;
+    app.subtitle_scroll = 10;
+    Arc::make_mut(&mut data.subtitles.history).push_back(crate::speech::Segment {
+        epoch: 0,
+        start_ms: 5_000_000,
+        end_ms: 5_000_500,
+        text: "new cue".into(),
+    });
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(
+        app.subtitle_cache.borrow().wrapped,
+        5001,
+        "only wrap the appended cue"
+    );
+    assert!(!app.subtitle_details_follow);
+    assert_eq!(app.subtitle_scroll, 10);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(app.subtitle_cache.borrow().wrapped, 5001);
+    Arc::make_mut(&mut data.subtitles.history)
+        .back_mut()
+        .unwrap()
+        .text = "replacement".into();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(
+        app.subtitle_cache.borrow().wrapped,
+        5002,
+        "invalidate an edited tail"
+    );
+    terminal.backend_mut().resize(80, 24);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert_eq!(
+        app.subtitle_cache.borrow().wrapped,
+        10003,
+        "rewrap all cues on width change"
+    );
+}
+
+#[test]
+fn subtitle_details_wrap_unspaced_chinese_on_narrow_terminals() {
     for width in [40, 50] {
         let mut data = view();
         data.subtitles.enabled = true;
@@ -121,6 +632,7 @@ fn single_row_subtitles_keep_unspaced_chinese_visible() {
             text: "今日廣東天氣晴朗適合出門聽廣播".into(),
         });
         let mut app = App::default();
+        app.focus = Focus::Details;
         let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
         terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
         assert!(text(&terminal).contains("今日廣"));
@@ -128,7 +640,7 @@ fn single_row_subtitles_keep_unspaced_chinese_visible() {
 }
 
 #[test]
-fn three_row_subtitles_keep_history_visible_beside_long_failures() {
+fn subtitle_details_keep_history_visible_beside_long_failures() {
     let mut data = view();
     data.subtitles.enabled = true;
     data.subtitles.message = "damaged model: ".to_owned() + &"very long diagnostic ".repeat(8);
@@ -141,6 +653,7 @@ fn three_row_subtitles_keep_history_visible_beside_long_failures() {
         });
     }
     let mut app = App::default();
+    app.focus = Focus::Details;
     let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     let rendered = text(&terminal);
@@ -150,14 +663,269 @@ fn three_row_subtitles_keep_history_visible_beside_long_failures() {
 }
 
 #[test]
-fn subtitle_strip_wraps_long_status_messages() {
+fn subtitle_details_wrap_status_messages() {
     let mut data = view();
     data.subtitles.enabled = true;
-    data.subtitles.message = format!("{} repair command", "x".repeat(90));
+    data.subtitles.message = format!("{} repair command", "x".repeat(40));
     let mut app = App::default();
+    app.focus = Focus::Details;
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
     assert!(text(&terminal).contains("repair command"));
+}
+
+#[test]
+fn subtitle_details_snapshots_cover_wide_and_narrow_reading() {
+    let mut data = view();
+    data.catalog_note = "Catalog ready".into();
+    data.subtitles.enabled = true;
+    data.subtitles.timed = true;
+    data.subtitles.message = "Episode subtitles · synchronized to playback".into();
+    data.subtitles.current = vec![1];
+    data.subtitles.anchor = Some(1);
+    data.subtitles.history = Arc::new(
+        [
+            "We can prepare a transcript before playing a podcast.",
+            "The highlighted sentence follows the audio when you pause, seek or change speed.",
+            "Use the Details panel to read the surrounding sentences without losing your place.",
+            "Press v for episode information, or scroll and press End to follow again.",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| crate::speech::Segment {
+            epoch: 0,
+            start_ms: i as u64 * 5000,
+            end_ms: i as u64 * 5000 + 5000,
+            text: (*t).into(),
+        })
+        .collect(),
+    );
+    for (width, height) in [(80, 24), (120, 32)] {
+        let mut app = App::default();
+        app.focus = Focus::Details;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let rendered = text(&terminal);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/snapshots/{width}x{height}-subtitles.txt"));
+        if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
+            std::fs::write(&path, &rendered).unwrap();
+        }
+        assert_eq!(rendered, std::fs::read_to_string(&path).unwrap());
+    }
+}
+
+#[test]
+fn manual_subtitle_recovery_hint_fits_at_minimum_terminal_width() {
+    let mut data = view();
+    data.subtitles.enabled = true;
+    data.subtitles.timed = true;
+    data.subtitles.message = crate::t!("podcast_subtitle_synced").into();
+    let mut app = App::default();
+    app.focus = Focus::Details;
+    let (sender, _) = command::channel(1);
+    let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    app.key(key(KeyCode::Home), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let rendered = text(&terminal);
+    assert!(rendered.contains(crate::t!("subtitle_panel_manual_title")));
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.starts_with(crate::t!("subtitle_manual_hint"))),
+        "{rendered}"
+    );
+    app.key(key(KeyCode::End), &data, &sender);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(app.subtitle_details_follow);
+    assert!(!text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+}
+
+#[test]
+fn manual_subtitle_reading_keeps_failure_messages_first_on_narrow_terminals() {
+    let mut data = view();
+    data.subtitles.enabled = true;
+    data.subtitles.timed = true;
+    data.subtitles.failed = true;
+    data.subtitles.message = "Episode subtitles failed: unavailable".into();
+    for width in [40, 80, 120] {
+        let mut app = App::default();
+        app.focus = Focus::Details;
+        let (sender, _) = command::channel(1);
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        app.key(key(KeyCode::Home), &data, &sender);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        let rendered = text(&terminal);
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.starts_with(&data.subtitles.message)),
+            "{width}:\n{rendered}"
+        );
+        assert!(!app.subtitle_details_follow);
+        assert!(rendered.contains(crate::t!("subtitle_panel_manual_title")));
+        if width == 80 {
+            assert!(rendered.contains(crate::t!("subtitle_manual_hint")));
+        }
+    }
+}
+
+#[test]
+fn podcast_seek_shortcuts_preserve_caption_following_and_manual_reading() {
+    for focus in [Focus::List, Focus::Details, Focus::Player] {
+        for follow in [true, false] {
+            let (mut app, mut data) = podcast_action_view();
+            data.subtitles.enabled = true;
+            data.subtitles.timed = true;
+            data.subtitles.timeline = Some((1, "playing".into()));
+            data.subtitles.current = vec![20];
+            data.subtitles.history = Arc::new(
+                (0..50)
+                    .map(|i| crate::speech::Segment {
+                        epoch: 0,
+                        start_ms: i * 1000,
+                        end_ms: (i + 1) * 1000,
+                        text: format!("seek caption {i}"),
+                    })
+                    .collect(),
+            );
+            let (sender, receiver) = command::channel(8);
+            let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+            app.focus = Focus::Details;
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            if !follow {
+                app.key(key(KeyCode::Home), &data, &sender);
+                app.key(key(KeyCode::Down), &data, &sender);
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            }
+            let scroll = app.subtitle_scroll;
+            app.focus = focus;
+            for (direction, current, seconds) in [
+                (KeyCode::Right, 35, f64::from(data.status.skip_forward)),
+                (KeyCode::Left, 5, -f64::from(data.status.skip_back)),
+                (KeyCode::Right, 30, f64::from(data.status.skip_forward)),
+            ] {
+                app.key(KeyEvent::new(direction, KeyModifiers::ALT), &data, &sender);
+                assert!(matches!(receiver.try_recv().unwrap(),
+                    Command::Podcast(crate::podcast::Action::Relative { seconds: value })
+                    if value == seconds));
+                // Publish the new active cue after the seek, without changing
+                // the timeline identity or loading new caption history.
+                data.subtitles.current = vec![current];
+                data.subtitles.anchor = Some(current);
+                data.status.episode.as_mut().unwrap().position_ms = current as u64 * 1000;
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                assert_eq!(app.focus, focus);
+                assert_eq!(app.subtitle_details_follow, follow);
+                if follow {
+                    assert!(text(&terminal).contains(&format!("seek caption {current}")));
+                } else {
+                    assert_eq!(app.subtitle_scroll, scroll);
+                    assert!(text(&terminal).lines().any(|line| {
+                        line.trim_end_matches([' ', '│', '┃'])
+                            .ends_with("[0:01] seek caption 1")
+                    }));
+                    if current >= 30 {
+                        assert!(!text(&terminal).contains(&format!("seek caption {current}")));
+                    }
+                    assert!(text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+                }
+            }
+            assert!(receiver.try_recv().is_err());
+            app.mode = Mode::Command;
+            app.editor.begin("subtitles follow");
+            app.key(key(KeyCode::Enter), &data, &sender);
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+            assert!(app.subtitle_details_follow);
+            assert!(text(&terminal).contains("seek caption 30"));
+            assert!(text(&terminal).contains(crate::t!("subtitle_panel_title")));
+            assert!(!text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+        }
+    }
+}
+
+#[test]
+fn subtitle_details_follow_cues_allow_scrolling_and_toggle_back_to_information() {
+    let mut data = view();
+    data.subtitles.enabled = true;
+    data.subtitles.timed = true;
+    data.subtitles.current = vec![20];
+    data.subtitles.anchor = Some(20);
+    data.subtitles.history = Arc::new(
+        (0..40)
+            .map(|i| crate::speech::Segment {
+                epoch: 0,
+                start_ms: i * 1000,
+                end_ms: i * 1000 + 1000,
+                text: format!("caption number {i} with enough words to wrap in a small panel"),
+            })
+            .collect(),
+    );
+    let (tx, _) = command::channel(8);
+    let mut app = App::default();
+    app.focus = Focus::Details;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("caption number 20"));
+    assert!(!text(&terminal).contains("caption number 39"));
+    app.key(key(KeyCode::Home), &data, &tx);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(!app.subtitle_details_follow);
+    assert!(text(&terminal).contains("caption number 0"));
+    assert!(text(&terminal).contains(crate::t!("subtitle_panel_manual_title")));
+    assert!(text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+    data.subtitles.current = vec![30];
+    data.subtitles.anchor = Some(30);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("caption number 0"));
+    app.key(key(KeyCode::End), &data, &tx);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("caption number 30"));
+    assert!(text(&terminal).contains(crate::t!("subtitle_panel_title")));
+    assert!(!text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+    let details = app.rects[Focus::Details.index()];
+    for kind in [
+        crossterm::event::MouseEventKind::ScrollUp,
+        crossterm::event::MouseEventKind::ScrollDown,
+    ] {
+        app.mouse(
+            crossterm::event::MouseEvent {
+                kind,
+                column: details.x + 1,
+                row: details.y + 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            &data,
+            &tx,
+        );
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(!app.subtitle_details_follow);
+        assert!(text(&terminal).contains(crate::t!("subtitle_panel_manual_title")));
+        assert!(text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+        app.key(key(KeyCode::End), &data, &tx);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains(crate::t!("subtitle_panel_title")));
+        assert!(!text(&terminal).contains(crate::t!("subtitle_manual_hint")));
+    }
+    app.key(key(KeyCode::Char('v')), &data, &tx);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(!text(&terminal).contains("caption number 30"));
+    app.key(key(KeyCode::Char('v')), &data, &tx);
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(text(&terminal).contains("caption number 30"));
+    // Mono terminals must still emphasize the current cue using bold text.
+    app.theme = crate::config::Theme::Mono;
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|c| c.modifier.contains(ratatui::style::Modifier::BOLD) && c.symbol() == "c")
+    );
 }
 
 #[test]
@@ -272,6 +1040,10 @@ fn view() -> View {
     selected.bitrate = 96;
     selected.codec = "MP3".into();
     let mut data = View::new(Status {
+        sleep_remaining: None,
+        podcast_auto_next: false,
+        skip_back: 15,
+        skip_forward: 15,
         episode: None,
         seekable: false,
         speed: 1.,
@@ -6667,8 +7439,8 @@ fn podcast_sources_open_feeds_and_preview_before_subscribing() {
     app.filter.offset = 100;
     app.key(key(KeyCode::Esc), &data, &sender);
     assert!(app.podcast_feed.is_none());
-    assert!(app.filter.query.is_empty());
-    assert_eq!(app.filter.offset, 0);
+    assert_eq!(app.filter.query, "节目");
+    assert_eq!(app.filter.offset, 100);
     assert!(matches!(
         receiver.try_recv(),
         Ok(Command::PodcastRequest {
@@ -6804,6 +7576,73 @@ fn podcast_selection_resume_restores_the_episode_page_once_without_playback() {
     assert_eq!(fresh.source, Source::Stations);
     assert!(fresh.podcast_feed.is_none());
     assert_eq!(fresh.filter.offset, 0);
+}
+
+#[test]
+fn podcast_search_and_discovery_selection_survives_reconciliation() {
+    for (line, results) in [
+        (
+            "podcast search example",
+            serde_json::json!([
+                {"wrapperType": "track", "kind": "podcast", "collectionId": 101, "collectionName": "Same title", "feedUrl": "https://example.test/one"},
+                {"wrapperType": "track", "kind": "podcast", "collectionId": 102, "collectionName": "No public feed"},
+                {"wrapperType": "track", "kind": "podcast", "collectionId": 103, "collectionName": "Same title", "feedUrl": "https://example.test/three"},
+            ]),
+        ),
+        (
+            "podcast discover https://example.test",
+            serde_json::json!([
+                "https://example.test/one",
+                "https://example.test/two",
+                "https://example.test/three",
+            ]),
+        ),
+    ] {
+        let mut app = App::default();
+        let mut data = view();
+        data.page = None;
+        let (sender, receiver) = command::channel(8);
+        app.mode = Mode::Command;
+        app.editor.begin(line);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+            panic!("expected browse request: {line}");
+        };
+        data.podcast_page = Some(action);
+        data.podcast_request = Some(request);
+        data.podcast_items = super::podcast::items(&results).into();
+        assert!(data.podcast_items.iter().all(|item| item.id.is_empty()));
+        app.reconcile(&data);
+
+        for (code, index) in [
+            (KeyCode::Char('j'), 1),
+            (KeyCode::Char('j'), 2),
+            (KeyCode::Char('k'), 1),
+            (KeyCode::Up, 0),
+            (KeyCode::Down, 1),
+            (KeyCode::End, 2),
+            (KeyCode::Home, 0),
+            (KeyCode::Char('k'), 0),
+            (KeyCode::End, 2),
+            (KeyCode::Char('j'), 2),
+        ] {
+            app.key(key(code), &data, &sender);
+            assert_eq!(app.list.selected(), Some(index), "{line}: {code:?}");
+            // The event loop reconciles before drawing, including idle ticks.
+            for _ in 0..2 {
+                app.reconcile(&data);
+                assert_eq!(app.list.selected(), Some(index), "{line}: {code:?}");
+            }
+        }
+
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Command::PodcastRequest {
+                action: crate::podcast::Action::Preview { url }, ..
+            }) if url == "https://example.test/three"
+        ));
+    }
 }
 
 #[test]
@@ -7015,7 +7854,7 @@ fn podcast_list_commands_clear_episode_search_context() {
         assert_eq!(app.length(&data), 1);
         app.key(key(KeyCode::Enter), &data, &sender);
         assert!(
-            matches!(receiver.try_recv(), Ok(Command::Podcast(crate::podcast::Action::Play { id, .. })) if id == "new-episode")
+            matches!(receiver.try_recv(), Ok(Command::Podcast(crate::podcast::Action::Play { id, .. } | crate::podcast::Action::Queue { action: crate::podcast::QueueAction::Start { id, .. } })) if id == "new-episode")
         );
     }
 }
@@ -7104,6 +7943,14 @@ fn podcast_double_click_uses_the_same_actions_as_enter() {
         assert!(receiver.try_recv().is_err());
         app.mouse_at(click, &data, &sender, now + Duration::from_millis(100));
         match (kind, receiver.try_recv().unwrap()) {
+            (
+                "episode",
+                Command::Podcast(crate::podcast::Action::Queue {
+                    action: crate::podcast::QueueAction::Start { id, .. },
+                }),
+            ) if source == Source::PodcastQueue => {
+                assert_eq!(id, "target-id");
+            }
             ("episode" | "download", Command::Podcast(crate::podcast::Action::Play { id, .. })) => {
                 assert_eq!(id, "target-id")
             }
@@ -7195,6 +8042,67 @@ fn podcast_search_is_sent_with_the_requested_page() {
 }
 
 #[test]
+fn podcast_parent_feed_shows_playback_independently_of_selection() {
+    let (mut app, mut data) = podcast_action_view();
+    app.podcast_feed = None;
+    app.focus = Focus::List;
+    data.status.episode.as_mut().unwrap().feed_id = "playing-feed".into();
+    data.podcast_items = vec![
+        super::podcast::Item {
+            id: "other".into(),
+            title: "Other podcast".into(),
+            kind: "feed".into(),
+            ..Default::default()
+        },
+        super::podcast::Item {
+            id: "playing-feed".into(),
+            title: "Playing podcast".into(),
+            kind: "feed".into(),
+            ..Default::default()
+        },
+    ]
+    .into();
+    data.podcast_page = Some(super::podcast::browse(app.source, &None, "", 0, 100));
+    for theme in [
+        crate::config::Theme::Default,
+        crate::config::Theme::Light,
+        crate::config::Theme::Mono,
+    ] {
+        app.theme = theme;
+        for (state, glyph) in [
+            (crate::engine::PlaybackState::Playing, "▶"),
+            (crate::engine::PlaybackState::Paused, "‖"),
+            (crate::engine::PlaybackState::Connecting, "…"),
+        ] {
+            data.status.playback_state = state;
+            app.list.select(Some(0));
+            for size in [(40, 16), (80, 24), (160, 48)] {
+                let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                let screen = text(&terminal);
+                let row = screen
+                    .lines()
+                    .find(|line| line.contains("Playing podcast"))
+                    .unwrap();
+                assert!(row.contains(glyph), "{screen}");
+                assert_eq!(app.list.selected(), Some(0));
+            }
+        }
+    }
+    data.status.playback_state = crate::engine::PlaybackState::Idle;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+    let screen = text(&terminal);
+    assert!(
+        !screen
+            .lines()
+            .find(|line| line.contains("Playing podcast"))
+            .unwrap()
+            .contains('▶')
+    );
+}
+
+#[test]
 fn podcast_views_render_without_station_actions() {
     {
         let mut data = view();
@@ -7224,4 +8132,571 @@ fn podcast_views_render_without_station_actions() {
             }
         }
     }
+}
+
+#[test]
+fn podcast_discovery_input_adds_a_return_page_only_when_submitted() {
+    for submit in [false, true] {
+        let (mut app, mut data) = podcast_action_view();
+        app.mode = Mode::Command;
+        app.editor.begin("podcast browse --country CN");
+        let (sender, receiver) = command::channel(8);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+            panic!()
+        };
+        data.podcast_page = Some(action);
+        data.podcast_request = Some(request);
+        data.podcast_items = super::podcast::items(&crate::podcast::directory::home("CN")).into();
+        app.list.select(Some(3)); // Search input.
+        app.key(key(KeyCode::Enter), &data, &sender);
+        assert_eq!(app.mode, Mode::Command);
+        if submit {
+            for c in "technology".chars() {
+                app.key(key(KeyCode::Char(c)), &data, &sender);
+            }
+            app.key(key(KeyCode::Enter), &data, &sender);
+            assert!(
+                matches!(receiver.try_recv().unwrap(),Command::PodcastRequest {
+                action:crate::podcast::Action::Search {country,query,..},..
+            } if country == "CN" && query == "technology")
+            );
+        } else {
+            app.key(key(KeyCode::Esc), &data, &sender);
+        }
+        app.key(key(KeyCode::Esc), &data, &sender);
+        if submit {
+            assert!(
+                matches!(receiver.try_recv().unwrap(),Command::RestorePodcast {snapshot,..}
+                if matches!(snapshot.action,crate::podcast::Action::Browse { .. }))
+            );
+        } else {
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+}
+
+#[test]
+fn podcast_discovery_menu_keeps_the_region_and_return_page_during_playback() {
+    let (mut app, mut data) = podcast_action_view();
+    app.mode = Mode::Command;
+    app.editor
+        .begin("podcast charts --country CN --category science");
+    let (sender, receiver) = command::channel(8);
+    app.key(key(KeyCode::Enter), &data, &sender);
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+        panic!()
+    };
+    data.podcast_page = Some(action);
+    data.podcast_request = Some(request);
+    data.status.playback_state = crate::engine::PlaybackState::Playing;
+    app.key(key(KeyCode::Char('p')), &data, &sender);
+    let menu = app.podcast_menu.as_mut().unwrap();
+    assert!(menu.current);
+    menu.selected = menu.actions.iter().position(|id| *id == 46).unwrap();
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::PodcastRequest {
+        action:crate::podcast::Action::Browse {country}, ..
+    } if country == "CN")
+    );
+    app.key(key(KeyCode::Esc), &data, &sender);
+    let Command::RestorePodcast { snapshot, request } = receiver.try_recv().unwrap() else {
+        panic!()
+    };
+    assert!(
+        matches!(&snapshot.action,crate::podcast::Action::Charts {country,category:Some(id),..} if country == "CN" && id == "1533")
+    );
+    data.podcast_page = Some(snapshot.action);
+    data.podcast_request = Some(request);
+    app.key(key(KeyCode::Char('D')), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::PodcastRequest {
+        action:crate::podcast::Action::Browse {country}, ..
+    } if country == "CN")
+    );
+}
+
+#[test]
+fn podcast_discovery_categories_open_charts_and_escape_restores_the_category() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let mut app = App::default();
+    app.source = Source::Podcasts;
+    app.focus = Focus::List;
+    let mut data = view();
+    let (sender, receiver) = command::channel(8);
+    app.key(key(KeyCode::Char('D')), &data, &sender);
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+        panic!()
+    };
+    assert!(matches!(action, crate::podcast::Action::Browse { .. }));
+    data.podcast_page = Some(action.clone());
+    data.podcast_request = Some(request);
+    let value =
+        crate::podcast::manage(&config, &store, action, &Arc::new(AtomicBool::new(false))).unwrap();
+    data.podcast_items = super::podcast::items(&value).into();
+    data.podcast_feed_title = value["feed_title"].as_str().unwrap().into();
+    for size in [(40, 16), (80, 24), (160, 48)] {
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(text(&terminal).contains(crate::t!("podcast_charts")));
+    }
+    app.list.select(Some(1)); // Categories entry.
+    app.key(key(KeyCode::Enter), &data, &sender);
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+        panic!()
+    };
+    assert!(matches!(action, crate::podcast::Action::Categories { .. }));
+    let value = crate::podcast::manage(
+        &config,
+        &store,
+        action.clone(),
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    data.podcast_items = super::podcast::items(&value).into();
+    data.podcast_total = data.podcast_items.len();
+    data.podcast_page = Some(action);
+    data.podcast_request = Some(request);
+    app.reconcile(&data);
+    let technology = data
+        .podcast_items
+        .iter()
+        .position(|item| item.id == "1318")
+        .unwrap();
+    app.list.select(Some(technology));
+    app.key(key(KeyCode::Enter), &data, &sender);
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+        panic!()
+    };
+    assert!(
+        matches!(&action, crate::podcast::Action::Charts { category: Some(id), .. } if id == "1318")
+    );
+    data.podcast_page = Some(action);
+    data.podcast_request = Some(request);
+    app.key(key(KeyCode::F(5)), &data, &sender);
+    let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+        panic!()
+    };
+    assert!(
+        matches!(&action, crate::podcast::Action::Charts { category: Some(id), .. } if id == "1318")
+    );
+    data.podcast_request = Some(request);
+    data.podcast_page = Some(action);
+    app.key(key(KeyCode::Char('R')), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::PodcastRequest {
+        action: crate::podcast::Action::Charts {category:Some(id),random:true,..}, ..
+    } if id == "1318")
+    );
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::RestorePodcast {snapshot, ..}
+        if matches!(snapshot.action, crate::podcast::Action::Categories { .. }))
+    );
+    assert_eq!(app.list.selected(), Some(technology));
+}
+
+#[test]
+fn podcast_chart_rows_preview_lazily_and_open_existing_subscriptions() {
+    for subscribed in [false, true] {
+        let (mut app, mut data) = podcast_action_view();
+        app.podcast_feed = None;
+        let value = serde_json::json!({"items":[{
+            "collectionName":"Technology show", "collectionViewUrl":"https://podcasts.apple.com/cn/podcast/id123",
+            "artistName":"Author", "chartRank":1,
+            "local_feed_id":if subscribed {Some("local-feed")} else {None}
+        }]});
+        data.podcast_items = super::podcast::items(&value).into();
+        assert_eq!(data.podcast_items[0].kind, "url");
+        assert!(data.podcast_items[0].meta.contains("Author"));
+        data.podcast_page = Some(crate::podcast::Action::Charts {
+            country: "CN".into(),
+            category: None,
+            limit: 25,
+            random: false,
+        });
+        let (sender, receiver) = command::channel(8);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        let Command::PodcastRequest { action, .. } = receiver.try_recv().unwrap() else {
+            panic!()
+        };
+        if subscribed {
+            assert!(
+                matches!(action,crate::podcast::Action::Episodes {id,..} if id == "local-feed")
+            );
+        } else {
+            assert!(
+                matches!(action,crate::podcast::Action::Preview {url} if url == "https://podcasts.apple.com/cn/podcast/id123")
+            );
+        }
+        assert!(receiver.try_recv().is_err());
+    }
+    let completions = command::completion_candidates("podcast charts --category tech", &[], &[]);
+    assert!(completions.contains(&"podcast charts --category technology".into()));
+}
+
+#[test]
+fn podcast_directory_returns_restore_exact_rows_without_network_requests() {
+    for via_preview in [false, true] {
+        let (mut app, mut data) = podcast_action_view();
+        app.podcast_feed = None;
+        data.podcast_page = Some(crate::podcast::Action::Search {
+            query: "科技".into(),
+            country: "CN".into(),
+            limit: 25,
+        });
+        data.podcast_items = (0..25)
+            .map(|n| super::podcast::Item {
+                title: format!("Result {n}"),
+                url: format!("https://example.test/feed/{n}"),
+                kind: "url".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into();
+        data.podcast_total = 25;
+        let original = data.podcast_items.clone();
+        app.list.select(Some(20));
+        *app.list.offset_mut() = 15;
+        let (sender, receiver) = command::channel(8);
+        if via_preview {
+            app.key(key(KeyCode::Enter), &data, &sender);
+            assert!(matches!(
+                receiver.try_recv().unwrap(),
+                Command::PodcastRequest {
+                    action: crate::podcast::Action::Preview { .. },
+                    ..
+                }
+            ));
+        } else {
+            app.key(key(KeyCode::Char('\'')), &data, &sender);
+            app.key(key(KeyCode::Char('\'')), &data, &sender);
+            let Command::LocateEpisode { request, .. } = receiver.try_recv().unwrap() else {
+                panic!()
+            };
+            data.located_episode = Some((request, Ok(("playing-feed".into(), 0))));
+            app.reconcile(&data);
+            app.flush_search(&sender);
+            receiver.try_recv().unwrap();
+        }
+        // The destination has only one row. It must not clamp the saved cursor
+        // during the frame between Esc and the owner's snapshot publication.
+        data.podcast_page = None;
+        data.podcast_items = vec![super::podcast::Item::default()].into();
+        app.key(key(KeyCode::Esc), &data, &sender);
+        let restore = receiver.try_recv().unwrap();
+        assert!(matches!(restore, Command::RestorePodcast { .. }));
+        app.reconcile(&data);
+        assert_eq!(app.list.selected(), Some(20));
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::new(
+            crate::test_support::config(dir.path()),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let shared = Arc::new(Mutex::new(data));
+        worker::execute(
+            restore,
+            &mut engine,
+            &mut Filter::default(),
+            &mut None,
+            &shared,
+        )
+        .unwrap();
+        let data = shared.lock().unwrap();
+        app.reconcile(&data);
+        assert!(Arc::ptr_eq(&original, &data.podcast_items));
+        assert_eq!(app.list.selected(), Some(20));
+        assert_eq!(app.list.offset(), 15);
+        assert_eq!(data.podcast_total, 25);
+        assert!(
+            matches!(&data.podcast_page, Some(crate::podcast::Action::Search { query, country, .. }) if query == "科技" && country == "CN")
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[test]
+fn podcast_jump_preserves_the_details_view_and_subtitle_reading_position() {
+    for (width, height, navigation) in [
+        (120, 32, "shortcut"),
+        (120, 32, "command"),
+        (120, 32, "menu"),
+        (80, 24, "shortcut"),
+        (80, 24, "command"),
+        (80, 24, "menu"),
+    ] {
+        for playback in [
+            crate::engine::PlaybackState::Playing,
+            crate::engine::PlaybackState::Paused,
+        ] {
+            for panel in ["follow", "manual", "info"] {
+                let (mut app, mut data) = podcast_action_view();
+                app.source = Source::Stations;
+                app.filter.query = "original search".into();
+                app.focus = Focus::Details;
+                data.status.playback_state = playback.clone();
+                data.status.episode.as_mut().unwrap().description =
+                    "Playing episode information".into();
+                data.subtitles.enabled = true;
+                data.subtitles.timed = true;
+                data.subtitles.timeline = Some((1, "playing".into()));
+                data.subtitles.current = vec![20];
+                data.subtitles.history = Arc::new(
+                    (0..40)
+                        .map(|i| crate::speech::Segment {
+                            epoch: 0,
+                            start_ms: i * 1000,
+                            end_ms: (i + 1) * 1000,
+                            text: format!("navigation caption {i}"),
+                        })
+                        .collect(),
+                );
+                let (sender, receiver) = command::channel(8);
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                if panel == "manual" {
+                    app.key(key(KeyCode::Home), &data, &sender);
+                    app.key(key(KeyCode::Down), &data, &sender);
+                } else if panel == "info" {
+                    app.key(key(KeyCode::Char('v')), &data, &sender);
+                }
+                terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                let follow = app.subtitle_details_follow;
+                let scroll = app.subtitle_scroll;
+                match navigation {
+                    "shortcut" => {
+                        app.key(key(KeyCode::Char('\'')), &data, &sender);
+                        app.key(key(KeyCode::Char('\'')), &data, &sender);
+                    }
+                    "command" => {
+                        app.mode = Mode::Command;
+                        app.editor.begin("podcast current");
+                        app.key(key(KeyCode::Enter), &data, &sender);
+                    }
+                    "menu" => {
+                        app.key(key(KeyCode::Char('p')), &data, &sender);
+                        app.key(key(KeyCode::Char('8')), &data, &sender);
+                    }
+                    _ => unreachable!(),
+                }
+                let Command::LocateEpisode { id, request, .. } = receiver.try_recv().unwrap()
+                else {
+                    panic!("expected navigation only");
+                };
+                assert_eq!(id, "playing");
+                data.located_episode = Some((request, Ok(("playing-feed".into(), 200))));
+                app.reconcile(&data);
+                app.flush_search(&sender);
+                let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap()
+                else {
+                    panic!("expected an episode page request");
+                };
+                assert!(
+                    matches!(&action, crate::podcast::Action::Episodes { id, page, .. }
+                    if id == "playing-feed" && page.offset == 200)
+                );
+                data.podcast_page = Some(action);
+                data.podcast_request = Some(request);
+                Arc::make_mut(&mut data.podcast_items)[0].id = "playing".into();
+                app.reconcile(&data);
+                assert_eq!(
+                    data.podcast_items[app.list.selected().unwrap()].id,
+                    "playing"
+                );
+                assert_eq!(app.focus, Focus::List);
+                for returning in [false, true] {
+                    if returning {
+                        app.key(key(KeyCode::Esc), &data, &sender);
+                        assert_eq!(app.source, Source::Stations);
+                        assert_eq!(app.focus, Focus::Details);
+                        assert_eq!(app.filter.query, "original search");
+                        assert!(matches!(receiver.try_recv().unwrap(), Command::Search(_)));
+                    }
+                    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                    assert_eq!(app.subtitle_details, panel != "info");
+                    assert_eq!(app.subtitle_details_follow, follow);
+                    assert_eq!(app.subtitle_scroll, scroll);
+                    let rendered = text(&terminal);
+                    let details_visible = returning || width >= 100;
+                    assert_eq!(
+                        rendered.contains("navigation caption 20"),
+                        details_visible && panel == "follow",
+                        "{width}, {navigation}, {playback:?}, {panel}, returning={returning}:\n{rendered}"
+                    );
+                    if !details_visible {
+                        assert!(rendered.contains("Selected episode"));
+                        assert!(!rendered.contains("navigation caption"));
+                    } else if panel == "manual" {
+                        assert!(rendered.contains("navigation caption 1"));
+                    } else if panel == "info" {
+                        assert!(!rendered.contains("navigation caption"));
+                        assert!(rendered.contains("Playing episode information"));
+                    }
+                    assert!(
+                        receiver.try_recv().is_err(),
+                        "navigation never sends playback commands"
+                    );
+                }
+                if panel == "follow" {
+                    data.subtitles.current = vec![30];
+                    terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+                    assert!(text(&terminal).contains("navigation caption 30"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn podcast_feed_escape_preserves_subtitles_without_a_playback_jump() {
+    for follow in [true, false] {
+        let (mut app, mut data) = podcast_action_view();
+        app.podcast_feed = None;
+        data.podcast_page = Some(super::podcast::browse(
+            app.source,
+            &app.podcast_feed,
+            "",
+            0,
+            app.filter.limit,
+        ));
+        data.podcast_items = vec![super::podcast::Item {
+            id: "browsed-feed".into(),
+            title: "Browsed podcast".into(),
+            kind: "feed".into(),
+            ..Default::default()
+        }]
+        .into();
+        let feeds = data.podcast_items.clone();
+        data.subtitles.enabled = true;
+        data.subtitles.timed = true;
+        data.subtitles.timeline = Some((1, "playing".into()));
+        data.subtitles.current = vec![20];
+        data.subtitles.history = Arc::new(
+            (0..40)
+                .map(|i| crate::speech::Segment {
+                    epoch: 0,
+                    start_ms: i * 1000,
+                    end_ms: (i + 1) * 1000,
+                    text: format!("feed navigation caption {i}"),
+                })
+                .collect(),
+        );
+        let (sender, receiver) = command::channel(8);
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        app.focus = Focus::Details;
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        if !follow {
+            app.key(key(KeyCode::Home), &data, &sender);
+            app.key(key(KeyCode::Down), &data, &sender);
+            terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        }
+        let scroll = app.subtitle_scroll;
+        app.key(key(KeyCode::Char('2')), &data, &sender);
+        app.key(key(KeyCode::Enter), &data, &sender);
+        let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+            panic!("expected an episode page request");
+        };
+        assert!(
+            matches!(&action, crate::podcast::Action::Episodes { id, .. }
+            if id == "browsed-feed")
+        );
+        data.podcast_page = Some(action);
+        data.podcast_request = Some(request);
+        data.podcast_items = vec![super::podcast::Item {
+            id: "browsed-episode".into(),
+            title: "Browsed episode".into(),
+            kind: "episode".into(),
+            ..Default::default()
+        }]
+        .into();
+        app.reconcile(&data);
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        app.key(key(KeyCode::Esc), &data, &sender);
+        let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
+            panic!("expected a subscription list request");
+        };
+        assert!(matches!(&action, crate::podcast::Action::List { .. }));
+        data.podcast_page = Some(action);
+        data.podcast_request = Some(request);
+        data.podcast_items = feeds;
+        app.reconcile(&data);
+        assert_eq!(app.source, Source::Podcasts);
+        assert!(app.podcast_feed.is_none());
+        assert_eq!(app.list.selected(), Some(0));
+        terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
+        assert!(app.subtitle_details);
+        assert_eq!(app.subtitle_details_follow, follow);
+        assert_eq!(app.subtitle_scroll, scroll);
+        assert!(text(&terminal).contains(if follow {
+            "feed navigation caption 20"
+        } else {
+            "feed navigation caption 1"
+        }));
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[test]
+fn podcast_jump_restores_browsing_without_playback_commands() {
+    let (mut app, mut data) = podcast_action_view();
+    data.status.episode.as_mut().unwrap().feed_id = "playing-feed".into();
+    app.filter.query = "original search".into();
+    app.source = Source::Stations;
+    let (sender, receiver) = command::channel(8);
+    app.key(key(KeyCode::Char('\'')), &data, &sender);
+    app.key(key(KeyCode::Char('\'')), &data, &sender);
+    let request = match receiver.try_recv().unwrap() {
+        Command::LocateEpisode { id, request, .. } => {
+            assert_eq!(id, "playing");
+            request
+        }
+        _ => panic!("expected navigation only"),
+    };
+    data.located_episode = Some((request, Ok(("playing-feed".into(), 200))));
+    app.reconcile(&data);
+    assert_eq!(app.source, Source::Podcasts);
+    assert_eq!(app.podcast_feed.as_deref(), Some("playing-feed"));
+    assert_eq!(app.filter.offset, 200);
+    assert!(app.filter.query.is_empty());
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert_eq!(app.source, Source::Stations);
+    assert_eq!(app.filter.query, "original search");
+    assert!(
+        receiver
+            .try_iter()
+            .all(|c| !matches!(c, Command::Podcast(crate::podcast::Action::Play { .. })))
+    );
+}
+
+#[test]
+fn podcast_bulk_marks_freeze_targets_and_require_confirmation() {
+    let (mut app, data) = podcast_action_view();
+    app.focus = Focus::List;
+    let (sender, receiver) = command::channel(8);
+    app.key(key(KeyCode::Char('x')), &data, &sender);
+    assert!(app.podcast_selected.contains("selected"));
+    app.key(key(KeyCode::Char('X')), &data, &sender);
+    assert!(app.confirmation.is_some());
+    assert!(receiver.try_recv().is_err());
+    app.key(key(KeyCode::Char('y')), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::Podcast(crate::podcast::Action::MarkBatch { ids, unplayed: false }) if ids == vec!["selected"])
+    );
+    assert!(app.podcast_selected.is_empty());
+}
+
+#[test]
+fn selected_podcast_commands_never_fall_back_to_the_player() {
+    let (mut app, data) = podcast_action_view();
+    let (sender, receiver) = command::channel(8);
+    app.mode = Mode::Command;
+    app.editor.begin("podcast download --selected");
+    app.key(key(KeyCode::Enter), &data, &sender);
+    assert!(
+        matches!(receiver.try_recv().unwrap(), Command::Podcast(crate::podcast::Action::Download { id }) if id == "selected")
+    );
 }

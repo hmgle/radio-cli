@@ -25,13 +25,91 @@ pub(crate) fn migrate(conn: &rusqlite::Connection) -> Result<()> {
     CREATE INDEX IF NOT EXISTS podcast_feed_episodes ON podcast_episodes(feed_id);")?;
     Ok(())
 }
+
+pub(crate) fn migrate_library(conn: &rusqlite::Connection) -> Result<()> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS podcast_bookmarks(id TEXT PRIMARY KEY,episode_id TEXT NOT NULL REFERENCES podcast_episodes(id),position_ms INTEGER NOT NULL,note TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS podcast_bookmark_episode ON podcast_bookmarks(episode_id,position_ms);
+    CREATE TABLE IF NOT EXISTS podcast_saved(episode_id TEXT PRIMARY KEY REFERENCES podcast_episodes(id));
+    CREATE TABLE IF NOT EXISTS podcast_inbox(episode_id TEXT PRIMARY KEY REFERENCES podcast_episodes(id));")?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS podcast_revision(n INTEGER NOT NULL); INSERT INTO podcast_revision SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM podcast_revision);
+        CREATE INDEX IF NOT EXISTS podcast_episode_dates ON podcast_episodes(feed_id,CASE WHEN json_valid(json) THEN json_extract(json,'$.published') END DESC,CASE WHEN json_valid(json) THEN json_extract(json,'$.source_order') END,id);
+        CREATE INDEX IF NOT EXISTS podcast_history_episode ON podcast_history(episode_id,played_at DESC);")?;
+    for table in [
+        "podcast_feeds",
+        "podcast_episodes",
+        "podcast_progress",
+        "podcast_downloads",
+        "podcast_queue",
+        "podcast_saved",
+        "podcast_inbox",
+        "podcast_bookmarks",
+        "podcast_history",
+    ] {
+        for operation in ["INSERT", "UPDATE", "DELETE"] {
+            conn.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS changed_{table}_{operation} AFTER {operation} ON {table} BEGIN UPDATE podcast_revision SET n=n+1; END;"))?;
+        }
+    }
+    Ok(())
+}
 impl Store {
+    pub fn podcast_revision(&self) -> Result<u64> {
+        Ok(self
+            .conn
+            .query_row("SELECT n FROM podcast_revision", [], |r| r.get(0))?)
+    }
+    pub(crate) fn podcast_unplayed_count(&self, feed: &str) -> Result<usize> {
+        Ok(self.conn.query_row("SELECT count(*) FROM podcast_episodes e LEFT JOIN podcast_progress p ON p.episode_id=e.id WHERE e.feed_id=?1 AND COALESCE(p.completed,0)=0", [feed], |r| r.get(0))?)
+    }
     pub fn podcast_feeds(&self) -> Result<Vec<Feed>> {
         let mut stmt = self.conn.prepare("SELECT json FROM podcast_feeds WHERE subscribed=1 ORDER BY json_extract(json,'$.title'),id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
+    pub fn podcast_feed_id(&self, value: &str) -> Result<String> {
+        let mut stmt = self.conn.prepare("SELECT id FROM podcast_feeds WHERE id=?1 OR json_extract(json,'$.title')=?1 ORDER BY id=?1 DESC,id")?;
+        let ids = stmt
+            .query_map([value], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        match ids.as_slice() {
+            [id] => Ok(id.clone()),
+            [id, ..] if id == value => Ok(id.clone()),
+            [] => Err(error(crate::t!("podcast_not_found"))),
+            _ => Err(error(&format!(
+                "{}: {}",
+                crate::t!("podcast_ambiguous"),
+                ids.join(", ")
+            ))),
+        }
+    }
+    pub fn podcast_episode_id(&self, value: &str) -> Result<String> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM podcast_episodes WHERE id=?1)",
+            [value],
+            |r| r.get(0),
+        )?;
+        if exists {
+            return Ok(value.into());
+        }
+        let (feed, title) = value
+            .split_once("::")
+            .ok_or_else(|| error(crate::t!("podcast_not_found")))?;
+        let feed = self.podcast_feed_id(feed)?;
+        let mut stmt = self.conn.prepare("SELECT id FROM podcast_episodes WHERE feed_id=?1 AND json_extract(json,'$.title')=?2 ORDER BY id")?;
+        let ids = stmt
+            .query_map(params![feed, title], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        match ids.as_slice() {
+            [id] => Ok(id.clone()),
+            [] => Err(error(crate::t!("podcast_not_found"))),
+            _ => Err(error(&format!(
+                "{}: {}",
+                crate::t!("podcast_ambiguous"),
+                ids.join(", ")
+            ))),
+        }
+    }
     pub fn podcast_feed(&self, id: &str) -> Result<Feed> {
+        let id = self.podcast_feed_id(id)?;
         let json: Option<String> = self
             .conn
             .query_row("SELECT json FROM podcast_feeds WHERE id=?1", [id], |r| {
@@ -68,7 +146,7 @@ impl Store {
                 params![url, feed.id],
             )?;
         }
-        self.podcast_merge(&feed.id, &preview.episodes)?;
+        self.podcast_merge(&feed.id, &preview.episodes, false)?;
         tx.commit()?;
         Ok(feed)
     }
@@ -93,19 +171,26 @@ impl Store {
         feed.failures = 0;
         feed.revision = old.revision.saturating_add(1);
         feed.refreshed_at = Some(chrono::Utc::now().to_rfc3339());
+        if self
+            .podcast_by_url(&feed.url)?
+            .is_some_and(|owner| owner.id != feed.id)
+        {
+            return Err(error(crate::t!("podcast_url_conflict")));
+        }
         self.podcast_write(&feed)?;
         self.conn.execute(
             "INSERT OR IGNORE INTO podcast_aliases VALUES (?1,?2)",
             params![feed.url, feed.id],
         )?;
         if let Some(p) = preview {
-            self.podcast_merge(&feed.id, &p.episodes)?;
+            self.podcast_merge(&feed.id, &p.episodes, true)?;
         }
         tx.commit()?;
         Ok(())
     }
-    fn podcast_merge(&self, feed_id: &str, episodes: &[Episode]) -> Result<()> {
-        for item in episodes {
+    fn podcast_merge(&self, feed_id: &str, episodes: &[Episode], baseline: bool) -> Result<()> {
+        let settings = self.podcast_settings(feed_id)?;
+        for (order, item) in episodes.iter().enumerate() {
             let identity = item
                 .guid
                 .as_ref()
@@ -120,7 +205,9 @@ impl Store {
                 )
                 .optional()?;
             let mut e = item.clone();
+            e.source_order = e.source_order.or(Some(order as u64));
             e.feed_id = feed_id.into();
+            let new_episode = old.is_none();
             e.id = if let Some(old) = old {
                 let old: Episode = serde_json::from_str(&old)?;
                 if (old.bytes.is_some() && e.bytes.is_some() && old.bytes != e.bytes)
@@ -138,6 +225,18 @@ impl Store {
                 uuid::Uuid::new_v4().to_string()
             };
             self.conn.execute("INSERT INTO podcast_episodes VALUES (?1,?2,?3,?4) ON CONFLICT(feed_id,identity) DO UPDATE SET json=excluded.json",params![e.id,feed_id,identity,serde_json::to_string(&e)?])?;
+            if baseline && new_episode {
+                if settings.auto_download && !e.completed {
+                    self.podcast_save_download(&Download {
+                        episode_id: e.id.clone(),
+                        state: "queued".into(),
+                        enqueued_at: Some(chrono::Utc::now().to_rfc3339()),
+                        ..Default::default()
+                    })?;
+                }
+                self.conn
+                    .execute("INSERT OR IGNORE INTO podcast_inbox VALUES (?1)", [&e.id])?;
+            }
         }
         Ok(())
     }
@@ -148,6 +247,8 @@ impl Store {
         self.podcast_write(&f)
     }
     pub fn podcast_episode(&self, id: &str) -> Result<Episode> {
+        let resolved = self.podcast_episode_id(id)?;
+        let id = resolved.as_str();
         let json: Option<String> = self
             .conn
             .query_row("SELECT json FROM podcast_episodes WHERE id=?1", [id], |r| {
@@ -165,8 +266,8 @@ impl Store {
         Ok(e)
     }
     pub fn podcast_episodes(&self, id: &str) -> Result<Vec<Episode>> {
-        self.podcast_feed(id)?;
-        self.podcast_episode_rows(id, "", -1, 0)
+        let feed = self.podcast_feed(id)?;
+        self.podcast_episode_rows(&feed.id, "", -1, 0)
     }
     pub(crate) fn podcast_episode_position(&self, feed: &str, id: &str) -> Result<Option<usize>> {
         Ok(self
@@ -174,7 +275,7 @@ impl Store {
             .query_row(
                 "SELECT position FROM (
                 SELECT id,row_number() OVER (
-                    ORDER BY json_extract(json,'$.published') DESC,rowid DESC
+                    ORDER BY json_extract(json,'$.published') DESC,COALESCE(json_extract(json,'$.source_order'),rowid),id
                 )-1 AS position FROM podcast_episodes WHERE feed_id=?1
              ) WHERE id=?2",
                 params![feed, id],
@@ -188,6 +289,8 @@ impl Store {
         query: &str,
         page: &crate::cli::Page,
     ) -> Result<(Vec<Episode>, usize)> {
+        let feed = self.podcast_feed(id)?;
+        let id = feed.id.as_str();
         let query = query.to_lowercase();
         self.read_snapshot(|store| {
             store.podcast_feed(id)?;
@@ -217,7 +320,7 @@ impl Store {
             "SELECT e.json,p.position_ms,p.duration_ms,p.completed FROM podcast_episodes e
              LEFT JOIN podcast_progress p ON p.episode_id=e.id WHERE e.feed_id=?1
              AND (?2='' OR instr(podcast_lower(json_extract(e.json,'$.title')),?2)>0)
-             ORDER BY json_extract(e.json,'$.published') DESC,e.rowid DESC LIMIT ?3 OFFSET ?4",
+             ORDER BY json_extract(e.json,'$.published') DESC,COALESCE(json_extract(e.json,'$.source_order'),e.rowid),e.id LIMIT ?3 OFFSET ?4",
         )?;
         let rows = stmt.query_map(params![id, query, limit, offset], |r| {
             Ok((
@@ -347,7 +450,7 @@ impl Store {
     pub fn podcast_downloads(&self) -> Result<Vec<Download>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT json FROM podcast_downloads ORDER BY episode_id")?;
+            .prepare("SELECT json FROM podcast_downloads ORDER BY COALESCE(json_extract(json,'$.enqueued_at'),''),rowid")?;
         stmt.query_map([], |r| r.get::<_, String>(0))?
             .map(|j| Ok(serde_json::from_str(&j?)?))
             .collect()
@@ -399,6 +502,17 @@ impl Store {
                     ids.push(id);
                 }
             }
+            QueueAction::Next { id, after } => {
+                self.podcast_episode(&id)?;
+                if after.as_ref() == Some(&id) {
+                    return Err(error(crate::t!("podcast_invalid_time")));
+                }
+                ids.retain(|v| v != &id);
+                let position = after
+                    .and_then(|after| ids.iter().position(|v| v == &after))
+                    .map_or(0, |p| p + 1);
+                ids.insert(position, id);
+            }
             QueueAction::Remove { id } => ids.retain(|v| v != &id),
             QueueAction::Clear => ids.clear(),
             QueueAction::Move { id, position } => {
@@ -408,7 +522,9 @@ impl Store {
                 ids.retain(|v| v != &id);
                 ids.insert(position - 1, id);
             }
-            QueueAction::Play { .. } => return Err(error(crate::t!("podcast_playback_only"))),
+            QueueAction::Play { .. } | QueueAction::Start { .. } => {
+                return Err(error(crate::t!("podcast_playback_only")));
+            }
             QueueAction::List => unreachable!(),
         }
         self.podcast_queue_write(&ids)?;
@@ -416,6 +532,28 @@ impl Store {
         let revision = self.podcast_queue_revision()?;
         tx.commit()?;
         Ok((items, revision))
+    }
+    pub(crate) fn podcast_queue_complete(
+        &self,
+        id: &str,
+    ) -> Result<(Vec<Episode>, u64, Vec<String>)> {
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let before = self.podcast_queue()?;
+        let earlier = before
+            .iter()
+            .take_while(|e| e.id != id)
+            .map(|e| e.id.clone())
+            .collect();
+        let ids = before
+            .into_iter()
+            .filter(|e| e.id != id)
+            .map(|e| e.id)
+            .collect::<Vec<_>>();
+        self.podcast_queue_write(&ids)?;
+        let items = self.podcast_queue()?;
+        let revision = self.podcast_queue_revision()?;
+        tx.commit()?;
+        Ok((items, revision, earlier))
     }
     fn podcast_queue_write(&self, ids: &[String]) -> Result<()> {
         self.conn.execute("DELETE FROM podcast_queue", [])?;
@@ -498,28 +636,31 @@ mod tests {
                 let (release, go) = mpsc::channel();
                 let id = episode.id.clone();
                 let worker = std::thread::spawn(move || {
-                    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                    let mut store = Store::open(&config.data_dir.join("radio.db")).unwrap();
                     let mut synchronized = false;
                     // Mark has read its media snapshot before requesting the
                     // write transaction. The INSERT hook catches the old path
                     // which bypassed that transaction and its media guard.
-                    store.conn.authorizer(Some(move |context: AuthContext<'_>| {
-                        if !synchronized
-                            && matches!(
-                                context.action,
-                                AuthAction::Transaction {
-                                    operation: TransactionOperation::Begin
-                                } | AuthAction::Insert {
-                                    table_name: "podcast_progress"
-                                }
-                            )
-                        {
-                            synchronized = true;
-                            ready.send(()).unwrap();
-                            go.recv_timeout(Duration::from_secs(3)).unwrap();
-                        }
-                        Authorization::Allow
-                    }));
+                    store
+                        .conn
+                        .authorizer(Some(move |context: AuthContext<'_>| {
+                            if !synchronized
+                                && matches!(
+                                    context.action,
+                                    AuthAction::Transaction {
+                                        operation: TransactionOperation::Begin
+                                    } | AuthAction::Insert {
+                                        table_name: "podcast_progress"
+                                    }
+                                )
+                            {
+                                synchronized = true;
+                                ready.send(()).unwrap();
+                                go.recv_timeout(Duration::from_secs(3)).unwrap();
+                            }
+                            Authorization::Allow
+                        }))
+                        .unwrap();
                     manage(
                         &config,
                         &store,
@@ -577,27 +718,30 @@ mod tests {
             let id = snapshot.episode_id.clone();
             let config = config.clone();
             let worker = std::thread::spawn(move || {
-                let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                let mut store = Store::open(&config.data_dir.join("radio.db")).unwrap();
                 let mut synchronized = false;
                 // Pause immediately before acquiring the write lock. Without
                 // a transaction this hook runs at INSERT, after the stale read.
-                store.conn.authorizer(Some(move |context: AuthContext<'_>| {
-                    if !synchronized
-                        && matches!(
-                            context.action,
-                            AuthAction::Transaction {
-                                operation: TransactionOperation::Begin
-                            } | AuthAction::Insert {
-                                table_name: "podcast_downloads"
-                            }
-                        )
-                    {
-                        synchronized = true;
-                        ready.send(()).unwrap();
-                        go.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
-                    }
-                    Authorization::Allow
-                }));
+                store
+                    .conn
+                    .authorizer(Some(move |context: AuthContext<'_>| {
+                        if !synchronized
+                            && matches!(
+                                context.action,
+                                AuthAction::Transaction {
+                                    operation: TransactionOperation::Begin
+                                } | AuthAction::Insert {
+                                    table_name: "podcast_downloads"
+                                }
+                            )
+                        {
+                            synchronized = true;
+                            ready.send(()).unwrap();
+                            go.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+                        }
+                        Authorization::Allow
+                    }))
+                    .unwrap();
                 if control == "enqueue" {
                     Runtime::enqueue(&store, &id).unwrap();
                 } else {
@@ -653,24 +797,27 @@ mod tests {
                 let id = e.id.clone();
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
-                    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+                    let mut store = Store::open(&config.data_dir.join("radio.db")).unwrap();
                     let mut synchronized = false;
                     // Align the first write transactions. Reading before BEGIN
                     // makes both workers overwrite the same old queue snapshot.
-                    store.conn.authorizer(Some(move |context: AuthContext<'_>| {
-                        if !synchronized
-                            && matches!(
-                                context.action,
-                                AuthAction::Transaction {
-                                    operation: TransactionOperation::Begin
-                                }
-                            )
-                        {
-                            synchronized = true;
-                            barrier.wait();
-                        }
-                        Authorization::Allow
-                    }));
+                    store
+                        .conn
+                        .authorizer(Some(move |context: AuthContext<'_>| {
+                            if !synchronized
+                                && matches!(
+                                    context.action,
+                                    AuthAction::Transaction {
+                                        operation: TransactionOperation::Begin
+                                    }
+                                )
+                            {
+                                synchronized = true;
+                                barrier.wait();
+                            }
+                            Authorization::Allow
+                        }))
+                        .unwrap();
                     manage(
                         &config,
                         &store,

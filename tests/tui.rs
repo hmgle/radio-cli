@@ -193,6 +193,27 @@ impl Drop for Tui {
 }
 
 #[test]
+fn podcast_discovery_and_category_back_navigation_work_in_real_terminal() {
+    let server = Server::new(|_, stream| response(stream, 200, "application/json", b"[]"));
+    let dir = tempfile::tempdir().unwrap();
+    let mut tui = Tui::start(dir.path(), &server.url);
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("NORMAL"));
+    tui.send(":podcast browse --country CN\r");
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("discovery"));
+    tui.send("j\r");
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("Arts"));
+    tui.send("\x1b");
+    // Resizing forces a complete frame. Diff output alone can omit unchanged
+    // letters or split a word across cursor-position escapes.
+    tui.resize(119, 30);
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("discovery"));
+    tui.send("D");
+    tui.resize(120, 30);
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("discovery"));
+    tui.quit();
+}
+
+#[test]
 fn tmux_artwork_queries_once_retries_failures_and_preserves_halfblock_fallback() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -548,4 +569,100 @@ fn podcast_preview_requires_confirmation_in_real_terminal() {
     tui.send("\r");
     tui.wait(|| store.podcast_feeds().unwrap().len() == 1);
     tui.quit();
+}
+
+#[test]
+fn paused_podcast_can_be_located_across_pages_and_return_to_its_collection() {
+    use radio_cli::podcast::{Episode, Feed, Preview};
+    let dir = tempfile::tempdir().unwrap();
+    let config = support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    store
+        .upsert(&Station {
+            stationuuid: uuid::Uuid::new_v4().to_string(),
+            name: "Station".into(),
+            url: "https://example.test/live".into(),
+            custom: true,
+            active: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let audio = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=60",
+            "-c:a",
+            "libmp3lame",
+            "-f",
+            "mp3",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(audio.status.success());
+    let server = Server::new(move |_, stream| response(stream, 200, "audio/mpeg", &audio.stdout));
+    let p = Preview {
+        feed: Feed {
+            url: format!("{}/rss", server.url),
+            title: "Context podcast".into(),
+            ..Default::default()
+        },
+        episodes: (0..205)
+            .map(|i| Episode {
+                guid: Some(i.to_string()),
+                title: format!("Episode {i:03}"),
+                url: format!("{}/audio", server.url),
+                ..Default::default()
+            })
+            .collect(),
+    };
+    let feed = store.podcast_subscribe(&p, &p.feed.url).unwrap();
+    let episodes = store.podcast_episodes(&feed.id).unwrap();
+    store.podcast_save_episode(&episodes[0].id, false).unwrap();
+    let path = dir.path().join("podcast-tui.toml");
+    fs::write(&path, "language='en'\naudio_device='null'\nauto_sync_days=0\nartwork='off'\n[podcasts]\nrefresh_hours=0\n").unwrap();
+    let mut tui = Tui::start_with_config(dir.path(), "http://127.0.0.1:1", Some(&path));
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("Sources"));
+    tui.send(&format!(":podcast play {}\r", episodes[203].id));
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("Playing"));
+    tui.send(" ");
+    // The unchanged P in Playing may be omitted from the terminal delta.
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("aused"));
+    tui.send(":podcast library saved --query \"Episode 000\"\r");
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("Saved episodes"));
+    tui.send("''");
+    // Force a full terminal frame, so the page label is not a cursor delta.
+    thread::sleep(Duration::from_millis(250));
+    tui.resize(121, 30);
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("5/205"));
+    tui.send(":podcast save --selected\r");
+    tui.wait(|| {
+        store
+            .podcast_library(&radio_cli::podcast::LibraryQuery {
+                view: "saved".into(),
+                query: "Episode 203".into(),
+                ..Default::default()
+            })
+            .unwrap()["total"]
+            == 1
+    });
+    tui.send("\x1b");
+    tui.wait_output(|out| {
+        let text = String::from_utf8_lossy(out);
+        text.contains("Saved episode") && text.contains("1/1 items")
+    });
+    // Ratatui can emit only the changed digits in the selected episode title.
+    // The collection has one item when its original search is restored.
+    tui.resize(120, 30);
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("Paused"));
+    tui.quit();
+    assert_eq!(
+        store.meta("pref_last_episode").unwrap().as_deref(),
+        Some(episodes[203].id.as_str())
+    );
+    assert!(!store.podcast_episode(&episodes[203].id).unwrap().completed);
 }

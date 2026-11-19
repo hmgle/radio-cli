@@ -23,6 +23,53 @@ pub fn download_path(config: &Config, id: &str) -> PathBuf {
 pub fn download(config: &Config, id: &str, stop: &Arc<AtomicBool>) -> Result<Download> {
     run(config, id, stop, None)
 }
+pub(super) fn foreground(
+    config: &Config,
+    store: &Store,
+    id: &str,
+    stop: &Arc<AtomicBool>,
+) -> Result<Download> {
+    Runtime::enqueue(store, id)?;
+    loop {
+        let result = download(config, id, stop);
+        if result.is_ok() {
+            return result;
+        }
+        let mut current = store
+            .podcast_download(id)?
+            .ok_or_else(|| error(crate::t!("podcast_not_found")))?;
+        if stop.load(Ordering::Relaxed) {
+            current.state = "paused".into();
+            current.retry_at = None;
+            current.generation = current.generation.saturating_add(1);
+            store.podcast_save_download(&current)?;
+            return Err(DomainError::new(ErrorCode::Cancelled).into());
+        }
+        let retry = current
+            .retry_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+        if current.state != "queued" || retry.is_none() {
+            return result;
+        }
+        if expected_download_progress() {
+            eprintln!(
+                "{}",
+                crate::t!("podcast_download_retry", "time" => current.retry_at.as_deref().unwrap())
+            );
+        }
+        while !stop.load(Ordering::Relaxed) && chrono::Utc::now() < retry.unwrap() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if stop.load(Ordering::Relaxed) {
+            current.state = "paused".into();
+            current.retry_at = None;
+            current.generation = current.generation.saturating_add(1);
+            store.podcast_save_download(&current)?;
+            return Err(DomainError::new(ErrorCode::Cancelled).into());
+        }
+    }
+}
 pub(super) fn scheduled(
     config: &Config,
     expected: &Download,
@@ -56,12 +103,16 @@ fn run(
     let previous_path = d.path.clone();
     d.state = "downloading".into();
     d.error = None;
+    d.retry_at = None;
+    d.bytes_per_second = 0;
     d.path = final_path.to_string_lossy().into_owned();
     if exists {
         store.podcast_download_update(&d)?;
     } else {
         store.podcast_save_download(&d)?;
     }
+    let mut transient = false;
+    let mut retry_after = 0i64;
     let result = (|| -> Result<()> {
         let e = store.podcast_episode(id)?;
         fs::create_dir_all(final_path.parent().unwrap()).with_context(|| {
@@ -117,17 +168,34 @@ fn run(
                     .unwrap(),
             );
         }
-        let mut r = req
-            .send()
-            .map_err(|_| error(crate::t!("podcast_network")))?;
+        let mut r = req.send().map_err(|e| {
+            transient = e.is_timeout() || e.is_connect() || e.is_body();
+            super::feed::network_error(e)
+        })?;
         if r.status() == 416 {
             r = client
                 .get(&e.url)
                 .header("Accept-Encoding", "identity")
                 .send()
-                .map_err(|_| error(crate::t!("podcast_network")))?;
+                .map_err(|e| {
+                    transient = e.is_timeout() || e.is_connect() || e.is_body();
+                    super::feed::network_error(e)
+                })?;
         }
         if !r.status().is_success() {
+            transient = matches!(r.status().as_u16(), 408 | 429 | 500 | 502 | 503 | 504);
+            retry_after = r
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| {
+                    v.parse().ok().or_else(|| {
+                        chrono::DateTime::parse_from_rfc2822(v)
+                            .ok()
+                            .map(|d| (d.to_utc() - chrono::Utc::now()).num_seconds())
+                    })
+                })
+                .unwrap_or(0);
             return Err(error(&format!(
                 "{} {}",
                 crate::t!("podcast_http"),
@@ -210,7 +278,11 @@ fn run(
         })?;
         let mut buf = [0; 65536];
         let mut saved = Instant::now();
+        d.total_bytes = total_length
+            .or_else(|| expected.and_then(|n| n.checked_add(if append { offset } else { 0 })));
         let start = d.bytes;
+        let started = Instant::now();
+        let show_progress = expected_download_progress();
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Err(DomainError::new(ErrorCode::Cancelled).into());
@@ -225,12 +297,25 @@ fn run(
                 if fs2::available_space(final_path.parent().unwrap())? < 200 * 1024 * 1024 {
                     return Err(DomainError::new(ErrorCode::InsufficientSpace).into());
                 }
+                d.bytes_per_second =
+                    ((d.bytes - start) as f64 / started.elapsed().as_secs_f64().max(0.001)) as u64;
                 store.podcast_download_update(&d)?;
+                if show_progress {
+                    eprint!(
+                        "\r{} / {} B · {} B/s",
+                        d.bytes,
+                        d.total_bytes
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "?".into()),
+                        d.bytes_per_second
+                    );
+                }
                 saved = Instant::now();
             }
-            let n = r
-                .read(&mut buf)
-                .map_err(|_| error(crate::t!("podcast_network")))?;
+            let n = r.read(&mut buf).map_err(|e| {
+                transient = true;
+                error(&format!("{}: {}", crate::t!("podcast_network"), e.kind()))
+            })?;
             if n == 0 {
                 break;
             }
@@ -278,6 +363,15 @@ fn run(
         d.state = "complete".into();
         Ok(())
     })();
+    if expected_download_progress() {
+        eprintln!(
+            "\r{} / {} B",
+            d.bytes,
+            d.total_bytes
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into())
+        );
+    }
     if let Err(e) = &result {
         if !matches!(d.state.as_str(), "paused" | "cancelled") {
             d.state = if stop.load(Ordering::Relaxed) {
@@ -287,6 +381,15 @@ fn run(
             }
             .into();
         }
+        if transient && d.retries < 3 && d.state == "failed" {
+            let delay = [5i64, 30, 120][usize::from(d.retries)].max(retry_after);
+            d.retries += 1;
+            let delay = chrono::TimeDelta::try_seconds(delay)
+                .and_then(|delay| chrono::Utc::now().checked_add_signed(delay))
+                .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
+            d.retry_at = Some(delay.to_rfc3339());
+            d.state = "queued".into();
+        }
         d.error = Some(crate::clean_text(&format!("{e:#}")));
     }
     if let Err(update) = store.podcast_download_update(&d) {
@@ -295,4 +398,12 @@ fn run(
     }
     result?;
     Ok(d)
+}
+
+thread_local! { static CLI_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+pub(crate) fn set_cli_progress(enabled: bool) {
+    CLI_PROGRESS.set(enabled);
+}
+fn expected_download_progress() -> bool {
+    CLI_PROGRESS.get()
 }

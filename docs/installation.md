@@ -9,7 +9,7 @@ For project orientation and daily usage, start with the
 - Linux or macOS. Linux is the primary target.
 - `mpv`.
 - `ffmpeg` and `ffprobe`.
-- Rust 1.88 or newer only when building from source.
+- Rust 1.89 or newer only when building from source.
 
 SQLite is bundled into the executable, so no SQLite command-line package is
 needed. Install the media tools with your package manager, for example:
@@ -22,13 +22,14 @@ sudo apt install mpv ffmpeg
 brew install mpv ffmpeg
 ```
 
-## Upgrade to 0.12
+## Database upgrades
 
-The first open migrates existing databases to schema v9 for podcast storage.
-Earlier binaries, including 0.11.1, cannot open that database afterwards. If you
-need the option of downgrading, close radio-cli and back up the entire data
-directory before upgrading. Existing stations, favorites and recordings remain
-available after migration.
+The first open migrates existing databases to schema v10. Schema v9 introduced
+podcast storage; v10 adds listening-library tables, indexes and revision tracking
+for existing podcast databases. Earlier binaries, including 0.12.0, cannot open
+that database afterwards. If you need the option of downgrading, close radio-cli
+and back up the entire data directory before upgrading. Existing stations,
+favorites and recordings remain available after migration.
 
 ## Install from npm
 
@@ -82,7 +83,7 @@ from the extracted binary with `xattr -d com.apple.quarantine ./radio`. See
 cargo install radio-cli --locked
 ```
 
-`cargo install` builds from source, so it needs a Rust 1.88 or newer toolchain
+`cargo install` builds from source, so it needs a Rust 1.89 or newer toolchain
 and installs the `radio` binary into `~/.cargo/bin`. `mpv`, `ffmpeg`, and
 `ffprobe` are still required at runtime.
 

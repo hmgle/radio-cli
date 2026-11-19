@@ -284,6 +284,12 @@ impl VerificationCache {
     }
 }
 
+pub(crate) fn check_available(config: &Config, stop: &std::sync::Arc<AtomicBool>) -> Result<()> {
+    let _lock = lock(config, false)?;
+    runtime_check(config, stop)?;
+    verify_with(config, &config.settings.subtitles.model, present)
+}
+
 pub(super) fn verify(config: &Config, id: &str, stop: &AtomicBool) -> Result<()> {
     verify_with(config, id, |path, file| valid(path, file, stop))
 }

@@ -1,0 +1,32 @@
+╭ radio · 4 Player · Current station ──────────────────────────────────────────────────────────────────────────────────╮
+│▶ Playing · Current Station · Volume 80%                                                                              │
+│Recording idle · AAC · 192 kbps (catalog)                                                                             │
+│FR · french · Song title                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ 1 Sources ─────╮╭ 2 All stations · 2/0 items · Page 1 ───────────────────╮┏ ▶ Details · Subtitles · v: info ━━━━━━━━━┓
+│› All stations  ││·    Selected Station                   [FR] 96 kbps MP3│┃Current Station                           ┃
+│  Favorites     ││     Another Station                   [FR] 192 kbps AAC│┃Episode subtitles · synchronized to       ┃
+│  Recent plays  ││                                                        │┃playback                                  ┃
+│  Recordings    ││                                                        │┃[0:00] We can prepare a transcript before ┃
+│  Explore       ││                                                        │┃playing a podcast.                        ┃
+│  Podcasts      ││                                                        │┃                                          ┃
+│  Podcast downlo││                                                        │┃[0:05] The highlighted sentence follows   ┃
+│  Podcast queue ││                                                        │┃the audio when you pause, seek or change  ┃
+│                ││                                                        │┃speed.                                    ┃
+│j/k select      ││                                                        │┃                                          ┃
+│Enter open      ││                                                        │┃[0:10] Use the Details panel to read the  ┃
+│[ / ] categories││                                                        │┃surrounding sentences without losing your ┃
+│                ││                                                        │┃place.                                    ┃
+│                ││                                                        │┃                                          ┃
+│                ││                                                        │┃[0:15] Press v for episode information, or┃
+│                ││                                                        │┃scroll and press End to follow again.     ┃
+│                ││                                                        │┃                                          ┃
+│                ││                                                        │┃                                          ┃
+│                ││                                                        │┃                                          ┃
+│                ││                                                        │┃                                          ┃
+╰────────────────╯╰────────────────────────────────────────────────────────╯┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+5 Catalog ready · Playing                                                                                               
+Episode subtitles · synchronized to playback · 3: details · v: subtitles/info · End: follow                             
+ NORMAL · Details /  All countries All languages All tags ≥0k                                                    [Clear]
+j/k / PgUp/PgDn scroll details                                                                                          
+Tab/1-5 panels · [ / ] source · / search · F filter · : · ? help · q quit                                               

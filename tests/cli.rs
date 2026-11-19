@@ -1286,6 +1286,53 @@ fn play_and_random_progress_follow_the_cli_language() {
 }
 
 #[test]
+fn podcast_discovery_lists_choices_offline_and_validates_chart_options() {
+    let dir = tempfile::tempdir().unwrap();
+    for command in ["browse", "categories"] {
+        let output = radio(dir.path())
+            .args(["--json-v2", "podcast", command, "--country", "CN"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let rows = value["data"]["items"].as_array().unwrap();
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row["command"].is_string()));
+        if command == "categories" {
+            assert!(rows.iter().any(|row| row["slug"] == "technology"));
+        }
+    }
+    let output = radio(dir.path())
+        .args(["podcast", "categories", "--country", "CN"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("podcast charts --country CN --category technology")
+    );
+    for args in [
+        vec!["charts", "--category", "invalid"],
+        vec!["charts", "--limit", "0"],
+        vec!["charts", "--limit", "101"],
+        vec!["charts", "--country", "../CN"],
+    ] {
+        assert!(
+            !radio(dir.path())
+                .arg("podcast")
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+}
+
+#[test]
 fn podcast_json_pages_errors_and_help_keep_the_existing_contract() {
     let dir = tempfile::tempdir().unwrap();
     let output = radio(dir.path())

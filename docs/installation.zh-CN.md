@@ -8,7 +8,7 @@
 - Linux 或 macOS；Linux 为主要目标平台。
 - `mpv`。
 - `ffmpeg` 与 `ffprobe`。
-- 仅从源码构建时需要 Rust 1.88 或更新版本。
+- 仅从源码构建时需要 Rust 1.89 或更新版本。
 
 SQLite 已编入可执行文件，不需要额外安装 SQLite 命令行工具。可用包管理器
 安装媒体工具，例如：
@@ -21,9 +21,10 @@ sudo apt install mpv ffmpeg
 brew install mpv ffmpeg
 ```
 
-## 升级到 0.12
+## 数据库升级
 
-首次打开数据库会自动迁移至 schema v9，加入播客存储。包括 0.11.1 在内的旧版程序
+首次打开数据库会自动迁移至 schema v10。v9 加入播客存储；v10 为已有播客数据库
+补齐收听库表、索引和修订计数。包括 0.12.0 在内的旧版程序
 无法再打开迁移后的数据库。如需保留降级能力，请先关闭 radio-cli 并备份整个数据目录，
 再升级。既有电台、收藏和录音在迁移后仍可使用。
 
@@ -76,7 +77,7 @@ macOS 发行包未经 Developer ID 签名或公证。若 Gatekeeper 阻止运行
 cargo install radio-cli --locked
 ```
 
-`cargo install` 会从源码构建，因此需要 Rust 1.88 或更新版本的工具链，
+`cargo install` 会从源码构建，因此需要 Rust 1.89 或更新版本的工具链，
 并把 `radio` 安装到 `~/.cargo/bin`。运行时仍需要 `mpv`、`ffmpeg` 和
 `ffprobe`。
 

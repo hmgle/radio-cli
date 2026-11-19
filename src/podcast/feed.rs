@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::Config;
 use anyhow::Result;
-use quick_xml::{Reader, events::Event};
+use quick_xml::{NsReader, events::Event, name::ResolveResult};
 use reqwest::{
     Url,
     blocking::{Client, Response},
@@ -54,7 +54,7 @@ pub(crate) fn client(config: &Config) -> Result<Client> {
             }
         }))
         .build()
-        .map_err(|_| error(crate::t!("podcast_network")))
+        .map_err(network_error)
 }
 pub(crate) fn body(mut r: Response, stop: &AtomicBool) -> Result<(Url, Vec<u8>)> {
     if !r.status().is_success() {
@@ -73,7 +73,7 @@ pub(crate) fn body(mut r: Response, stop: &AtomicBool) -> Result<(Url, Vec<u8>)>
         }
         let n = r
             .read(&mut buf)
-            .map_err(|_| error(crate::t!("podcast_network")))?;
+            .map_err(|e| error(&format!("{}: {}", crate::t!("podcast_network"), e.kind())))?;
         if n == 0 {
             break;
         }
@@ -90,39 +90,92 @@ pub fn fetch(
     old: Option<&Feed>,
     stop: &Arc<AtomicBool>,
 ) -> Result<Option<Preview>> {
-    let u = url(value, None)?;
-    let mut req = client(config)?.get(u);
-    if let Some(f) = old {
-        if let Some(v) = &f.etag {
-            req = req.header("If-None-Match", v);
+    let client = Client::builder()
+        .user_agent(crate::USER_AGENT)
+        .connect_timeout(Duration::from_secs(config.settings.connect_timeout_secs))
+        .timeout(Duration::from_secs(config.settings.request_timeout_secs))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(network_error)?;
+    let mut current = url(value, None)?;
+    let mut canonical = current.clone();
+    let mut visited = Vec::new();
+    for _ in 0..=5 {
+        if stop.load(Ordering::Relaxed) {
+            return Err(DomainError::new(ErrorCode::Cancelled).into());
         }
-        if let Some(v) = &f.modified {
-            req = req.header("If-Modified-Since", v);
+        if visited.contains(&current) {
+            return Err(error(crate::t!("podcast_invalid_url")));
         }
+        visited.push(current.clone());
+        let mut req = client.get(current.clone());
+        // Validators are only reusable for the URL that supplied them.
+        if let Some(f) = old.filter(|f| f.url == current.as_str()) {
+            if let Some(v) = &f.etag {
+                req = req.header("If-None-Match", v);
+            }
+            if let Some(v) = &f.modified {
+                req = req.header("If-Modified-Since", v);
+            }
+        }
+        let r = req.send().map_err(network_error)?;
+        if r.status() == 304 && old.is_some() {
+            return Ok(None);
+        }
+        if matches!(r.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+            let next = r
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| error(crate::t!("podcast_invalid_url")))?;
+            let next = url(next, Some(&current))?;
+            // Do not persist a permanent redirect reached through a temporary URL.
+            if matches!(r.status().as_u16(), 301 | 308) && canonical == current {
+                canonical = next.clone();
+            }
+            current = next;
+            continue;
+        }
+        let etag = r
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let modified = r
+            .headers()
+            .get("last-modified")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let (base, data) = body(r, stop)?;
+        let mut p = parse(&data, &base)?;
+        if let Some(next) = p.feed.new_feed_url.as_deref() {
+            let next = url(next, Some(&base))?;
+            if next != current {
+                canonical = next.clone();
+                current = next;
+                continue;
+            }
+        }
+        p.feed.url = canonical.to_string();
+        if canonical == current {
+            p.feed.etag = etag;
+            p.feed.modified = modified;
+        }
+        p.feed.refreshed_at = Some(chrono::Utc::now().to_rfc3339());
+        return Ok(Some(p));
     }
-    let r = req
-        .send()
-        .map_err(|_| error(crate::t!("podcast_network")))?;
-    if r.status() == 304 && old.is_some() {
-        return Ok(None);
-    }
-    let etag = r
-        .headers()
-        .get("etag")
-        .and_then(|h| h.to_str().ok())
-        .map(str::to_owned);
-    let modified = r
-        .headers()
-        .get("last-modified")
-        .and_then(|h| h.to_str().ok())
-        .map(str::to_owned);
-    let (base, data) = body(r, stop)?;
-    let mut p = parse(&data, &base)?;
-    p.feed.etag = etag;
-    p.feed.modified = modified;
-    p.feed.refreshed_at = Some(chrono::Utc::now().to_rfc3339());
-    Ok(Some(p))
+    Err(error(crate::t!("podcast_limit")))
 }
+
+pub(crate) fn network_error(e: reqwest::Error) -> anyhow::Error {
+    // reqwest can include signed URLs; remove URLs before exposing diagnostics.
+    error(&format!(
+        "{}: {}",
+        crate::t!("podcast_network"),
+        e.without_url()
+    ))
+}
+
 fn plain(value: &str) -> String {
     Html::parse_fragment(value)
         .root_element()
@@ -133,13 +186,77 @@ fn plain(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
-fn duration(value: &str) -> Option<u64> {
-    let mut n = 0u64;
-    for part in value.trim().split(':') {
-        n = n.checked_mul(60)?.checked_add(part.parse::<u64>().ok()?)?;
+fn notes(value: &str) -> String {
+    fn walk(element: scraper::ElementRef<'_>, output: &mut String) {
+        let name = element.value().name();
+        if matches!(name, "script" | "style") {
+            return;
+        }
+        let block = matches!(
+            name,
+            "p" | "div" | "li" | "ul" | "ol" | "h1" | "h2" | "h3" | "br"
+        );
+        if block && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        if name == "li" {
+            output.push_str("• ");
+        }
+        for child in element.children() {
+            if let Some(text) = child.value().as_text() {
+                output.push_str(&text.split_whitespace().collect::<Vec<_>>().join(" "));
+                output.push(' ');
+            } else if let Some(child) = scraper::ElementRef::wrap(child) {
+                walk(child, output);
+            }
+        }
+        if name == "a"
+            && let Some(href) = element
+                .value()
+                .attr("href")
+                .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
+        {
+            output.push_str(&format!(" ({href}) "));
+        }
+        if block && !output.ends_with('\n') {
+            output.push('\n');
+        }
     }
-    n.checked_mul(1000)
+    let html = Html::parse_fragment(value);
+    let mut output = String::new();
+    walk(html.root_element(), &mut output);
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
+fn duration(value: &str) -> Option<u64> {
+    super::parse_time(value.trim()).ok()
+}
+fn published(value: &str) -> Option<String> {
+    let strict = |s: &str| {
+        chrono::DateTime::parse_from_rfc2822(s)
+            .or_else(|_| chrono::DateTime::parse_from_rfc3339(s))
+            .ok()
+    };
+    if let Some(d) = strict(value) {
+        return Some(d.to_utc().to_rfc3339());
+    }
+    let value = value.split_once(',').map_or(value, |(_, rest)| rest.trim());
+    let mut parts: Vec<String> = value.split_whitespace().map(str::to_owned).collect();
+    if let Some(zone) = parts.last_mut() {
+        *zone = match zone.as_str() {
+            "UTC" => "+0000".into(),
+            "CEST" => "+0200".into(),
+            z if (z.starts_with('+') || z.starts_with('-')) && z.len() == 6 => z.replace(':', ""),
+            z => z.into(),
+        };
+    }
+    strict(&parts.join(" ")).map(|d| d.to_utc().to_rfc3339())
+}
+
 struct Node {
     name: String,
     text: String,
@@ -174,7 +291,7 @@ pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
         return Err(error(crate::t!("podcast_invalid_feed")));
     }
     let invalid = || error(crate::t!("podcast_invalid_feed"));
-    let mut reader = Reader::from_reader(data);
+    let mut reader = NsReader::from_reader(data);
     reader.config_mut().check_end_names = true;
     let mut stack: Vec<Node> = vec![];
     let mut f = Feed {
@@ -232,6 +349,38 @@ pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
                     }
                     current = Some(Episode::default());
                 }
+                if let Some(ep) = current.as_mut() {
+                    let ns = reader.resolver().resolve_element(e.name()).0;
+                    if name == "chapters"
+                        && parent_scope == Scope::Episode
+                        && matches!(ns, ResolveResult::Bound(ns) if ns.as_ref() == "https://podcastindex.org/namespace/1.0")
+                    {
+                        ep.chapters_url = attr_url("url");
+                    } else if name == "chapter"
+                        && matches!(ns, ResolveResult::Bound(ns) if ns.as_ref() == "http://podlove.org/simple-chapters")
+                        && let Some(position_ms) =
+                            attrs.get("start").and_then(|v| super::parse_time(v).ok())
+                    {
+                        ep.chapters.push(Chapter {
+                            title: crate::clean_text(
+                                attrs.get("title").map(String::as_str).unwrap_or(""),
+                            ),
+                            position_ms,
+                        });
+                    }
+                }
+                if parent_scope == Scope::Episode
+                    && name == "transcript"
+                    && matches!(reader.resolver().resolve_element(e.name()).0, ResolveResult::Bound(ns) if ns.as_ref() == "https://podcastindex.org/namespace/1.0")
+                    && let Some(ep) = current.as_mut()
+                    && let Some(url) = attr_url("url")
+                {
+                    ep.transcripts.push(Transcript {
+                        url,
+                        mime: attrs.get("type").cloned().unwrap_or_default(),
+                        language: attrs.get("language").cloned(),
+                    });
+                }
                 if parent_scope == Scope::Episode
                     && (name == "enclosure"
                         || (name == "link" && attrs.get("rel").is_some_and(|r| r == "enclosure")))
@@ -241,7 +390,8 @@ pub(crate) fn parse(data: &[u8], base: &Url) -> Result<Preview> {
                         if ep.url.is_empty()
                             && (mime.is_empty()
                                 || mime.starts_with("audio/")
-                                || mime == "application/octet-stream")
+                                || mime == "application/octet-stream"
+                                || mime == "application/ogg")
                             && let Some(u) = attr_url(if name == "link" { "href" } else { "url" })
                         {
                             ep.url = u;
@@ -339,12 +489,11 @@ fn finish(
             match n.name.as_str() {
                 "title" => e.title = display_text(),
                 "guid" | "id" if !text.is_empty() => e.guid = Some(text.into()),
-                "description" | "summary" | "content" => e.description = display_text(),
+                "description" | "summary" | "content" => {
+                    e.description = if n.html { notes(text) } else { text.to_owned() }
+                }
                 "pubDate" | "published" => {
-                    e.published = chrono::DateTime::parse_from_rfc2822(text)
-                        .or_else(|_| chrono::DateTime::parse_from_rfc3339(text))
-                        .ok()
-                        .map(|d| d.to_utc().to_rfc3339())
+                    e.published = published(text);
                 }
                 "updated" => {
                     stack.last_mut().unwrap().updated = chrono::DateTime::parse_from_rfc3339(text)
@@ -360,6 +509,7 @@ fn finish(
             let mut e = current.take().unwrap();
             e.published = e.published.or(n.updated);
             if !e.url.is_empty() {
+                e.source_order = Some(episodes.len() as u64);
                 episodes.push(e);
             }
         }
@@ -368,11 +518,12 @@ fn finish(
             .split_last()
             .is_some_and(|(_, ancestors)| scope(ancestors) == Scope::Feed);
         match n.name.as_str() {
+            "new-feed-url" if parent_scope == Scope::Feed => f.new_feed_url = Some(resolved()),
             "title" if parent_scope == Scope::Feed => f.title = display_text(),
             "author" | "managingEditor" if parent_scope == Scope::Feed => f.author = display_text(),
             "name" if parent == "author" && nested_feed_field => f.author = display_text(),
             "description" | "subtitle" if parent_scope == Scope::Feed => {
-                f.description = display_text()
+                f.description = if n.html { notes(text) } else { text.to_owned() }
             }
             "link" if parent_scope == Scope::Feed && !text.is_empty() => f.website = resolved(),
             "url" if parent == "image" && nested_feed_field && f.image.is_empty() => {
@@ -392,6 +543,14 @@ fn finish(
         parent.text.push_str(&n.text);
     }
 }
+pub(crate) fn is_apple_url(value: &str) -> bool {
+    url(value, None).is_ok_and(|u| {
+        matches!(
+            u.host_str(),
+            Some("podcasts.apple.com" | "itunes.apple.com")
+        )
+    })
+}
 pub fn discover(config: &Config, value: &str, stop: &Arc<AtomicBool>) -> Result<Vec<String>> {
     let u = url(value, None)?;
     if matches!(
@@ -409,7 +568,15 @@ pub fn discover(config: &Config, value: &str, stop: &Arc<AtomicBool>) -> Result<
                 .map(|(_, v)| v.into_owned())
         })
     {
-        return apple(config, "lookup", &[("id", &id)], stop).map(|v| {
+        let country = u
+            .path_segments()
+            .and_then(|mut p| p.next())
+            .filter(|p| p.len() == 2 && p.bytes().all(|c| c.is_ascii_alphabetic()));
+        let mut args = vec![("id", id.as_str())];
+        if let Some(country) = country {
+            args.push(("country", country));
+        }
+        return apple(config, "lookup", &args, stop).map(|v| {
             v.into_iter()
                 .filter_map(|v| {
                     v["feedUrl"]
@@ -422,13 +589,13 @@ pub fn discover(config: &Config, value: &str, stop: &Arc<AtomicBool>) -> Result<
     }
     let (base, data) = body(
         client(config)?
-            .get(u)
+            .get(u.clone())
             .send()
-            .map_err(|_| error(crate::t!("podcast_network")))?,
+            .map_err(network_error)?,
         stop,
     )?;
     if parse(&data, &base).is_ok() {
-        return Ok(vec![base.to_string()]);
+        return Ok(vec![u.to_string()]);
     }
     let html = Html::parse_document(&String::from_utf8_lossy(&data));
     let mut found = vec![];
@@ -478,11 +645,15 @@ fn apple(
     }
     {
         let mut last = LAST.lock().unwrap();
-        while last.is_some_and(|at| at.elapsed() < Duration::from_secs(3)) {
-            if stop.load(Ordering::Relaxed) {
-                return Err(DomainError::new(ErrorCode::Cancelled).into());
+        if let Some(at) = *last {
+            let wait = (at + Duration::from_secs(3)).saturating_duration_since(Instant::now());
+            if !wait.is_zero() {
+                return Err(error(&format!(
+                    "{} ({}s)",
+                    crate::t!("podcast_rate_limited"),
+                    wait.as_secs().saturating_add(1)
+                )));
             }
-            std::thread::sleep(Duration::from_millis(50));
         }
         *last = Some(Instant::now());
     }
@@ -490,7 +661,7 @@ fn apple(
         .get(format!("https://itunes.apple.com/{endpoint}"))
         .query(args)
         .send()
-        .map_err(|_| error(crate::t!("podcast_network")))?;
+        .map_err(network_error)?;
     if r.status() == 429 {
         let seconds = r
             .headers()
@@ -543,6 +714,14 @@ mod tests {
             &Url::parse("https://example.test/a/feed").unwrap(),
         )
     }
+    #[test]
+    fn transcript_namespace_aliases_and_relative_urls_are_preserved() {
+        let p = parse_xml(r#"<rss xmlns:p="https://podcastindex.org/namespace/1.0" xmlns:other="https://example.test"><channel><title>Show</title><item><title>Episode</title><enclosure url="audio.mp3"/><p:transcript url="captions.vtt" type="text/vtt" language="zh"/><other:transcript url="wrong.srt" type="application/x-subrip"/></item></channel></rss>"#).unwrap();
+        assert_eq!(p.episodes[0].transcripts.len(), 1);
+        assert!(p.episodes[0].transcripts[0].url.ends_with("/captions.vtt"));
+        assert_eq!(p.episodes[0].transcripts[0].language.as_deref(), Some("zh"));
+    }
+
     #[test]
     fn atom_source_metadata_stays_separate_from_entry_identity_and_content() {
         for source_first in [false, true] {
@@ -754,5 +933,40 @@ mod tests {
         }
         let xml = format!("<rss>{}</rss>", "<a>".repeat(65));
         assert!(parse_xml(&xml).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tolerant_date_tests {
+    use super::*;
+    #[test]
+    fn tolerant_dates_preserve_offsets_without_inventing_timezones() {
+        for s in [
+            "Tue, 01 Jan 2024 10:00:00 +0800",
+            "Monday, 01 Jan 2024 10:00:00 GMT",
+            "Mon, 01 Jan 2024 10:00:00 UTC",
+            "Mon, 01 Jan 2024 10:00:00 CEST",
+            "Mon, 01 Jan 2024 10:00:00 +08:00",
+        ] {
+            assert!(published(s).is_some(), "{s}");
+        }
+        assert!(published("2024-01-01T10:00:00").is_none());
+        assert_eq!(duration("01:02.5"), Some(62500));
+        assert_eq!(duration("NaN"), None);
+        assert_eq!(duration("-1"), None);
+    }
+}
+
+#[cfg(test)]
+mod chapter_tests {
+    use super::*;
+    #[test]
+    fn chapters_and_ogg_use_their_declared_namespaces_and_media_times() {
+        let p = parse(br#"<rss xmlns:p="https://podcastindex.org/namespace/1.0" xmlns:c="http://podlove.org/simple-chapters"><channel><title>Show</title><item><title>Episode</title><enclosure url="audio.ogg" type="application/ogg"/><p:chapters url="chapters.json" type="application/json+chapters"/><c:chapters><c:chapter start="00:01.5" title="Intro"/></c:chapters></item></channel></rss>"#, &Url::parse("https://chapters.test/feed").unwrap()).unwrap();
+        assert_eq!(p.episodes[0].chapters[0].position_ms, 1500);
+        assert_eq!(
+            p.episodes[0].chapters_url.as_deref(),
+            Some("https://chapters.test/chapters.json")
+        );
     }
 }
