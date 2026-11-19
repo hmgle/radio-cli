@@ -8238,12 +8238,15 @@ fn podcast_discovery_categories_open_charts_and_escape_restores_the_category() {
         crate::podcast::manage(&config, &store, action, &Arc::new(AtomicBool::new(false))).unwrap();
     data.podcast_items = super::podcast::items(&value).into();
     data.podcast_feed_title = value["feed_title"].as_str().unwrap().into();
+    app.reconcile(&data);
     for size in [(40, 16), (80, 24), (160, 48)] {
         let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
         terminal.draw(|f| render::draw(f, &mut app, &data)).unwrap();
         assert!(text(&terminal).contains(crate::t!("podcast_charts")));
     }
-    app.list.select(Some(1)); // Categories entry.
+    app.key(key(KeyCode::Char('j')), &data, &sender);
+    app.reconcile(&data);
+    assert_eq!(app.list.selected(), Some(1)); // Categories entry.
     app.key(key(KeyCode::Enter), &data, &sender);
     let Command::PodcastRequest { action, request } = receiver.try_recv().unwrap() else {
         panic!()
@@ -8292,11 +8295,25 @@ fn podcast_discovery_categories_open_charts_and_escape_restores_the_category() {
     } if id == "1318")
     );
     app.key(key(KeyCode::Esc), &data, &sender);
-    assert!(
-        matches!(receiver.try_recv().unwrap(), Command::RestorePodcast {snapshot, ..}
-        if matches!(snapshot.action, crate::podcast::Action::Categories { .. }))
-    );
+    let Command::RestorePodcast { snapshot, request } = receiver.try_recv().unwrap() else {
+        panic!()
+    };
+    assert!(matches!(
+        snapshot.action,
+        crate::podcast::Action::Categories { .. }
+    ));
     assert_eq!(app.list.selected(), Some(technology));
+    data.podcast_page = Some(snapshot.action);
+    data.podcast_request = Some(request);
+    data.podcast_items = snapshot.items;
+    app.reconcile(&data);
+    app.key(key(KeyCode::Esc), &data, &sender);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::RestorePodcast { snapshot, .. }
+            if matches!(snapshot.action, crate::podcast::Action::Browse { .. })
+    ));
+    assert_eq!(app.list.selected(), Some(1));
 }
 
 #[test]
