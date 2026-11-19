@@ -15,8 +15,9 @@ the local catalog and interface, SQLite stores favorites and history, mpv plays
 audio, and FFmpeg records streams without re-encoding. No account or API key is
 required.
 
-- Subscribe to public podcasts, resume episodes, download audio, and manage a
-  listening queue; see the [podcast guide](docs/podcasts.md).
+- Discover and subscribe to public podcasts, manage your listening queue and
+  downloads, and follow synchronized captions in the TUI. See the
+  [podcast guide](docs/podcasts.md).
 - Browse a catalog from [Radio Browser](https://www.radio-browser.info/), search
   locally, filter by country, language, tag, and bitrate, and play a random match.
 - Use the keyboard-first TUI or script the CLI, with legacy `--json` and stable

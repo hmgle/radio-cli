@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 — 2026-11-19
 
 - Fix Enter doing nothing on Apple podcast search results. Convert the
   directory's media type into an actionable TUI row so results open their RSS
@@ -14,12 +14,9 @@
   on Esc, including after jumping to playback. Show playback state on the parent
   podcast independently of the user's selection.
 
-- Migrate existing podcast databases from schema v9 to v10, adding listening
-  library tables and revision tracking while preserving subscriptions, progress,
-  downloads and queues. Fix podcast lists stuck loading during startup playback
-  when the previous v9 schema lacked these additions. Failed browse setup no
-  longer leaves the list loading. Binaries supporting only v9 cannot reopen an
-  upgraded database.
+- Add saved episodes, inbox and history views, bookmarks, chapters and
+  per-show listening preferences. Restore the current episode across browsing
+  views and keep failed browse requests from leaving the list loading.
 
 - Generate TUI podcast captions incrementally from seekable audio windows.
   Publish each segment immediately, prioritize the playing position after seeks,
@@ -48,6 +45,14 @@
 - Extract artist and track names from RadioInfo XML carried by HLS/ID3 or
   ICY streams, including Cidade. Use readable titles in playback and recording
   metadata while retaining station announcements and partial track names.
+
+### Compatibility
+
+- Opening a database migrates it to schema v10, adding listening-library tables
+  and revision tracking while preserving existing subscriptions, progress,
+  downloads and queues. Version 0.12.0 and earlier cannot reopen the upgraded
+  database. To retain the option of downgrading, close radio-cli and back up
+  the entire data directory before upgrading.
 
 ## 0.12.0 — 2026-11-08
 
