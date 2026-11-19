@@ -6,7 +6,8 @@
   including Cidade streams. Keep station announcements and partial titles
   readable instead of displaying the XML document in playback and recordings.
   Select the first record with track text without combining different records.
-  Check attributes throughout the document before accepting an extracted title.
+  Fall back to the original title if an XML attribute contains an unescaped
+  less-than sign.
 
 ## 0.12.0 — 2026-11-08
 

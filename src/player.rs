@@ -1089,6 +1089,8 @@ mod tests {
             "key='one' key='two'",
             "key='&unknown;'",
             "key='&unterminated'",
+            "key='<oops'",
+            "key=\"<oops\"",
         ] {
             for title in [
                 format!(
@@ -1109,7 +1111,7 @@ mod tests {
                 }
             }
         }
-        let title = "<RadioInfo key='&amp;' other=\"value\"><Table key='one'><DB_SONG_NAME key='&#x2665;'>Song</DB_SONG_NAME></Table><Other key='two'/></RadioInfo>";
+        let title = "<RadioInfo key='&amp;' other=\"&lt;value\"><Table key='one'><DB_SONG_NAME key='&#x2665;'>Song</DB_SONG_NAME></Table><Other key='&#60;two'/></RadioInfo>";
         assert_eq!(metadata_title(&json!({"title": title})), "Song");
     }
 

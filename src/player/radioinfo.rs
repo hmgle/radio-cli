@@ -69,10 +69,11 @@ pub(super) fn title(text: &str) -> Option<String> {
                 // lazily. Inspect even ignored nodes and later records so an
                 // attribute error cannot silently turn XML into a track title.
                 for attribute in element.attributes() {
-                    attribute
-                        .ok()?
-                        .normalized_value(XmlVersion::Implicit1_0)
-                        .ok()?;
+                    let attribute = attribute.ok()?;
+                    if attribute.value.contains('<') {
+                        return None;
+                    }
+                    attribute.normalized_value(XmlVersion::Implicit1_0).ok()?;
                 }
                 let name = element.name().as_ref().to_owned();
                 if stack.is_empty() {
