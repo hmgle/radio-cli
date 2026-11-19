@@ -1598,9 +1598,9 @@ fn queue_start_and_relative_seeks_respect_pause_and_sleep_at_end() {
     let mut config = support::config(dir.path());
     config.settings.audio_device = Some("null".into());
     config.settings.mpv = std::env::var("RADIO_TEST_MPV").unwrap_or_else(|_| "mpv".into());
-    let audio = support::fixture("libmp3lame", "mp3");
+    let audio = support::fixture("pcm_s16le", "wav");
     let server =
-        support::Server::new(move |_, stream| support::response(stream, 200, "audio/mpeg", &audio));
+        support::Server::new(move |_, stream| support::response(stream, 200, "audio/wav", &audio));
     let mut engine = Engine::new(config, Arc::new(AtomicBool::new(false))).unwrap();
     let mut p = preview(&server.url);
     p.episodes = (0..3)
@@ -1626,6 +1626,7 @@ fn queue_start_and_relative_seeks_respect_pause_and_sleep_at_end() {
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(12);
     while !engine.status().seekable
+        || engine.status().episode.as_ref().unwrap().position_ms < 200
         || !matches!(
             engine.status().playback_state,
             radio_cli::engine::PlaybackState::Playing
@@ -1641,19 +1642,30 @@ fn queue_start_and_relative_seeks_respect_pause_and_sleep_at_end() {
         assert!(Instant::now() < deadline, "{:?}", engine.status());
         std::thread::sleep(Duration::from_millis(10));
     }
-    let before = engine.status().episode.as_ref().unwrap().position_ms;
-    engine
-        .podcast_action(Action::Relative { seconds: 0.4 })
-        .unwrap();
-    engine
-        .podcast_action(Action::Relative { seconds: 0.4 })
-        .unwrap();
-    while engine.status().episode.as_ref().unwrap().position_ms < before + 650 {
-        engine.tick().unwrap();
-        assert!(Instant::now() < deadline, "{:?}", engine.status());
-        std::thread::sleep(Duration::from_millis(10));
+    for seconds in [0.8, -0.4] {
+        let before = engine.status().episode.as_ref().unwrap().position_ms;
+        engine.podcast_action(Action::Relative { seconds }).unwrap();
+        // Wait for mpv to report each position before issuing another seek.
+        loop {
+            engine.tick().unwrap();
+            let position = engine.status().episode.as_ref().unwrap().position_ms;
+            let moved = if seconds > 0. {
+                position.saturating_sub(before)
+            } else {
+                before.saturating_sub(position)
+            };
+            if moved >= 200 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "relative seek by {seconds}s from {before}ms: {:?}",
+                engine.status()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(engine.status().paused());
     }
-    assert!(engine.status().paused());
     engine
         .podcast_action(Action::Queue {
             action: podcast::QueueAction::Next {

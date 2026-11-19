@@ -651,12 +651,14 @@ fn paused_podcast_can_be_located_across_pages_and_return_to_its_collection() {
             == 1
     });
     tui.send("\x1b");
-    thread::sleep(Duration::from_millis(150));
-    tui.resize(120, 30);
     tui.wait_output(|out| {
         let text = String::from_utf8_lossy(out);
-        text.contains("Saved episodes") && text.contains("Episode 000") && text.contains("Paused")
+        text.contains("Saved episode") && text.contains("1/1 items")
     });
+    // Ratatui can emit only the changed digits in the selected episode title.
+    // The collection has one item when its original search is restored.
+    tui.resize(120, 30);
+    tui.wait_output(|out| String::from_utf8_lossy(out).contains("Paused"));
     tui.quit();
     assert_eq!(
         store.meta("pref_last_episode").unwrap().as_deref(),

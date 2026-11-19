@@ -1151,6 +1151,7 @@ mod tests {
         wait(&mut engine, 1);
         while engine.status().playback_state != PlaybackState::Playing
             || !engine.playback.session_started
+            || engine.status().episode.as_ref().unwrap().position_ms <= 1200
         {
             engine.tick().unwrap();
             assert!(Instant::now() < deadline);
@@ -1160,7 +1161,8 @@ mod tests {
         engine.pause().unwrap();
         while !engine.status().paused() {
             engine.tick().unwrap();
-            assert!(Instant::now() < deadline);
+            assert!(Instant::now() < deadline, "{:?}", engine.status());
+            std::thread::sleep(Duration::from_millis(10));
         }
         engine.seek_episode(2500).unwrap();
         engine.podcast_speed(2.).unwrap();
