@@ -158,6 +158,9 @@ impl Tui {
     }
     fn quit(&mut self) {
         self.send(":q\r");
+        self.wait_for_exit();
+    }
+    fn wait_for_exit(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut buffer = [0; 8192];
         loop {
@@ -197,20 +200,27 @@ fn podcast_discovery_and_category_back_navigation_work_in_real_terminal() {
     let server = Server::new(|_, stream| response(stream, 200, "application/json", b"[]"));
     let dir = tempfile::tempdir().unwrap();
     let mut tui = Tui::start(dir.path(), &server.url);
+    let discovery_ready = |output: &[u8]| {
+        let text = String::from_utf8_lossy(output);
+        text.contains("Surprise") && text.contains("region")
+    };
     tui.wait_output(|o| String::from_utf8_lossy(o).contains("NORMAL"));
     tui.send(":podcast browse --country CN\r");
-    tui.wait_output(|o| String::from_utf8_lossy(o).contains("discovery"));
+    tui.wait_output(discovery_ready);
     tui.send("j\r");
     tui.wait_output(|o| String::from_utf8_lossy(o).contains("Arts"));
     tui.send("\x1b");
     // Resizing forces a complete frame. Diff output alone can omit unchanged
     // letters or split a word across cursor-position escapes.
     tui.resize(119, 30);
-    tui.wait_output(|o| String::from_utf8_lossy(o).contains("discovery"));
+    tui.wait_output(discovery_ready);
+    tui.send(":podcast categories --country CN\r");
+    tui.wait_output(|o| String::from_utf8_lossy(o).contains("Arts"));
     tui.send("D");
     tui.resize(120, 30);
-    tui.wait_output(|o| String::from_utf8_lossy(o).contains("discovery"));
-    tui.quit();
+    tui.wait_output(discovery_ready);
+    tui.send("\x03");
+    tui.wait_for_exit();
 }
 
 #[test]
