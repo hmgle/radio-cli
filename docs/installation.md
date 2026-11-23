@@ -24,12 +24,12 @@ brew install mpv ffmpeg
 
 ## Database upgrades
 
-The first open migrates existing databases to schema v10. Schema v9 introduced
-podcast storage; v10 adds listening-library tables, indexes and revision tracking
-for existing podcast databases. Earlier binaries, including 0.12.0, cannot open
-that database afterwards. If you need the option of downgrading, close radio-cli
-and back up the entire data directory before upgrading. Existing stations,
-favorites and recordings remain available after migration.
+The first open migrates existing databases to schema v11. The migration updates
+the podcast episode date index and preserves existing listening data, stations,
+favorites and recordings. Version 0.13.0 and earlier cannot open the migrated
+database. To retain the option of downgrading, close all radio-cli processes and
+back up the entire data directory before upgrading. Use that pre-upgrade backup
+with the older binary.
 
 ## Install from npm
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Compatibility
+
+- Opening a database migrates it to schema v11 to index podcast episode order.
+  Version 0.13.0 and earlier cannot reopen the upgraded database. To retain the
+  option of downgrading, close radio-cli and back up the entire data directory
+  before upgrading.
+
 ## 0.13.0 — 2026-11-19
 
 - Fix Enter doing nothing on Apple podcast search results. Convert the
