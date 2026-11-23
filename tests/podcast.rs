@@ -24,6 +24,35 @@ fn preview(url: &str) -> Preview {
         }],
     }
 }
+
+#[test]
+fn cli_feed_connection_error_exposes_the_cause_without_the_request_url() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://{}/opaque-path?token=secret",
+        port.local_addr().unwrap()
+    );
+    drop(port);
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "language='en'\n").unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_radio"))
+        .arg("--config")
+        .arg(config)
+        .arg("--data-dir")
+        .arg(dir.path())
+        .args(["podcast", "preview", &url])
+        .env("NO_PROXY", "127.0.0.1")
+        .env("no_proxy", "127.0.0.1")
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(message.contains("connection refused"), "{message}");
+    assert!(!message.contains("opaque-path"), "{message}");
+    assert!(!message.contains("secret"), "{message}");
+}
+
 #[test]
 fn legacy_episode_json_survives_listing_playback_and_feed_refresh() {
     let dir = tempfile::tempdir().unwrap();
