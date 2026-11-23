@@ -202,6 +202,11 @@ pub enum QueueAction {
         id: String,
         position: usize,
     },
+    #[command(skip)]
+    MoveAdjacent {
+        id: String,
+        up: bool,
+    },
     Clear,
     Play {
         #[arg(long)]
@@ -251,7 +256,8 @@ impl Action {
                     | QueueAction::Remove { id }
                     | QueueAction::Start { id, .. }
                     | QueueAction::Next { id, .. }
-                    | QueueAction::Move { id, .. },
+                    | QueueAction::Move { id, .. }
+                    | QueueAction::MoveAdjacent { id, .. },
             } => Some(id),
             Self::Downloads {
                 action:

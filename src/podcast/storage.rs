@@ -537,6 +537,7 @@ impl Store {
             .prepare("SELECT episode_id FROM podcast_queue ORDER BY position,rowid")?
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut changed = true;
         match action {
             QueueAction::Add { id } => {
                 self.podcast_episode(&id)?;
@@ -564,12 +565,27 @@ impl Store {
                 ids.retain(|v| v != &id);
                 ids.insert(position - 1, id);
             }
+            QueueAction::MoveAdjacent { id, up } => {
+                let current = ids
+                    .iter()
+                    .position(|v| v == &id)
+                    .ok_or_else(|| error(crate::t!("podcast_not_found")))?;
+                let target = if up {
+                    current.saturating_sub(1)
+                } else {
+                    (current + 1).min(ids.len() - 1)
+                };
+                changed = current != target;
+                ids.swap(current, target);
+            }
             QueueAction::Play { .. } | QueueAction::Start { .. } => {
                 return Err(error(crate::t!("podcast_playback_only")));
             }
             QueueAction::List => unreachable!(),
         }
-        self.podcast_queue_write(&ids)?;
+        if changed {
+            self.podcast_queue_write(&ids)?;
+        }
         let items = self.podcast_queue()?;
         let revision = self.podcast_queue_revision()?;
         tx.commit()?;
