@@ -164,9 +164,11 @@ radio podcast queue play --auto-next
 ```
 
 CLI downloads run in the foreground. In the TUI, up to two downloads run in the
-background; unfinished tasks resume at the next TUI launch. Paused, cancelled
-and failed tasks need an explicit resume. Interrupted transfers resume only
-with a resource validator and a valid Range response; otherwise they restart.
+background, and unfinished queued tasks resume at the next TUI launch.
+Transient failures retry automatically up to three times. After retries are
+exhausted, use `radio podcast downloads resume EPISODE_ID` to try again. Paused
+and cancelled tasks also need an explicit resume. Interrupted transfers resume
+when the resource validator and Range response are valid, and restart otherwise.
 Completed files are checked with ffprobe and published from a `.part` file.
 Downloaded media is preferred when its enclosure URL, declared size and
 duration match the current episode. Missing or outdated downloads fall back to
