@@ -141,6 +141,73 @@ fn podcast_menu_names_and_freezes_current_or_selected_targets() {
 }
 
 #[test]
+fn queued_episode_menu_uses_the_queue_list_metadata() {
+    use crate::podcast::{self, Download, Episode, Feed, Preview};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let preview = Preview {
+        feed: Feed {
+            url: "https://example.test/feed".into(),
+            author: "Queue author".into(),
+            ..Default::default()
+        },
+        episodes: vec![Episode {
+            title: "Queued episode".into(),
+            url: "https://example.test/audio".into(),
+            ..Default::default()
+        }],
+    };
+    let feed = store
+        .podcast_subscribe(&preview, &preview.feed.url)
+        .unwrap();
+    let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    store
+        .podcast_queue_set(std::slice::from_ref(&episode.id))
+        .unwrap();
+    store.podcast_save_episode(&episode.id, false).unwrap();
+    store
+        .podcast_save_download(&Download {
+            episode_id: episode.id.clone(),
+            state: "paused".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let mut app = App::default();
+    app.source = Source::PodcastQueue;
+    let action = super::podcast::browse(app.source, &None, "", 0, 100);
+    let result = podcast::manage(
+        &config,
+        &store,
+        action.clone(),
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let mut data = view();
+    data.podcast_page = Some(action);
+    data.podcast_items = super::podcast::items(&result).into();
+    let item = &data.podcast_items[0];
+    assert_eq!(item.id, episode.id);
+    assert!(item.description.contains("Queue author"));
+    assert!(item.meta.contains(crate::t!("podcast_download_paused")));
+
+    let (sender, _) = command::channel(1);
+    app.key(key(KeyCode::Char('P')), &data, &sender);
+    let actions = &app.podcast_menu.as_ref().unwrap().actions;
+    for enabled in [10, 12, 14, 34, 35] {
+        assert!(actions.contains(&enabled), "missing menu action {enabled}");
+    }
+    for hidden in [4, 13] {
+        assert!(
+            !actions.contains(&hidden),
+            "unexpected menu action {hidden}"
+        );
+    }
+}
+
+#[test]
 fn showing_menu_captions_keeps_the_frozen_target_when_playback_changes() {
     use crate::podcast::{Download, Episode, Feed, Preview};
     let dir = tempfile::tempdir().unwrap();

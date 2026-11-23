@@ -149,7 +149,8 @@ OPML `import --dry-run` 返回 `{urls:[...]}`，导入返回逐源 `{id?,ok,erro
 CLI 仍需显式 ID；仅 TUI 命令可使用当前播放上下文。
 
 `podcast library` 返回与 `episodes` 相同的分页结构；行额外包含 `author`、
-`feed_title`、`queued`、`saved` 和可选的 `download_state`。节目列表增加
+`feed_title`、`queued`、`saved` 和可选的 `download_state`。`queue list` 也包含
+这些单集展示字段。节目列表增加
 `unplayed_count` 和配置的 `sort`。节目对象增加可空 `new_feed_url`；单集增加
 可空 `source_order`、`chapters_url` 和 `chapters:[{title,position_ms}]`。
 旧数据的章节默认为空数组，可选字段为 null。刷新结果可额外包含 `title`。

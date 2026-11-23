@@ -643,6 +643,16 @@ pub fn manage(
         Action::Queue {
             action: QueueAction::Start { .. },
         } => return Err(error(crate::t!("podcast_playback_only"))),
+        Action::Queue {
+            action: QueueAction::List,
+        } => store.read_snapshot(|store| {
+            let items = store
+                .podcast_queue()?
+                .iter()
+                .map(|e| episode_value(store, e))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(json!(items))
+        })?,
         Action::Queue { action } => {
             json!(store.podcast_queue_update(action)?)
         }
