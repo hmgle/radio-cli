@@ -141,6 +141,139 @@ fn podcast_menu_names_and_freezes_current_or_selected_targets() {
 }
 
 #[test]
+fn queued_episode_menu_uses_the_queue_list_metadata() {
+    use crate::podcast::{self, Download, Episode, Feed, Preview};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let preview = Preview {
+        feed: Feed {
+            url: "https://example.test/feed".into(),
+            author: "Queue author".into(),
+            ..Default::default()
+        },
+        episodes: vec![Episode {
+            title: "Queued episode".into(),
+            url: "https://example.test/audio".into(),
+            ..Default::default()
+        }],
+    };
+    let feed = store
+        .podcast_subscribe(&preview, &preview.feed.url)
+        .unwrap();
+    let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+    store
+        .podcast_queue_set(std::slice::from_ref(&episode.id))
+        .unwrap();
+    store.podcast_save_episode(&episode.id, false).unwrap();
+    store
+        .podcast_save_download(&Download {
+            episode_id: episode.id.clone(),
+            state: "paused".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let mut app = App::default();
+    app.source = Source::PodcastQueue;
+    let action = super::podcast::browse(app.source, &None, "", 0, 100);
+    let result = podcast::manage(
+        &config,
+        &store,
+        action.clone(),
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let mut data = view();
+    data.podcast_page = Some(action);
+    data.podcast_items = super::podcast::items(&result).into();
+    let item = &data.podcast_items[0];
+    assert_eq!(item.id, episode.id);
+    assert!(item.description.contains("Queue author"));
+    assert!(item.meta.contains(crate::t!("podcast_download_paused")));
+
+    let (sender, _) = command::channel(1);
+    app.key(key(KeyCode::Char('P')), &data, &sender);
+    let actions = &app.podcast_menu.as_ref().unwrap().actions;
+    for enabled in [10, 12, 14, 34, 35] {
+        assert!(actions.contains(&enabled), "missing menu action {enabled}");
+    }
+    for hidden in [4, 13] {
+        assert!(
+            !actions.contains(&hidden),
+            "unexpected menu action {hidden}"
+        );
+    }
+}
+
+#[test]
+fn filtered_queue_menu_moves_one_slot_in_the_full_queue() {
+    use crate::podcast::{self, Episode, Feed, Preview};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::test_support::config(dir.path());
+    let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+    let preview = Preview {
+        feed: Feed {
+            url: "https://example.test/feed".into(),
+            ..Default::default()
+        },
+        episodes: ["A", "B match", "C", "D match"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, title)| Episode {
+                title: title.into(),
+                url: format!("https://example.test/audio/{i}"),
+                ..Default::default()
+            })
+            .collect(),
+    };
+    let feed = store
+        .podcast_subscribe(&preview, &preview.feed.url)
+        .unwrap();
+    let episodes = store.podcast_episodes(&feed.id).unwrap();
+    let ids: Vec<_> = episodes.iter().map(|e| e.id.clone()).collect();
+    store.podcast_queue_set(&ids).unwrap();
+
+    let mut app = App::default();
+    app.source = Source::PodcastQueue;
+    app.filter.query = "match".into();
+    app.list.select(Some(1));
+    let action = super::podcast::browse(app.source, &None, "", 0, 100);
+    let stop = Arc::new(AtomicBool::new(false));
+    let result = podcast::manage(&config, &store, action.clone(), &stop).unwrap();
+    let mut data = view();
+    data.podcast_page = Some(action);
+    data.podcast_items = super::podcast::items(&result).into();
+    assert_eq!(app.podcast_items(&data).len(), 2);
+    let (sender, receiver) = command::channel(1);
+
+    for (menu_action, expected) in [
+        (34, ["A", "B match", "D match", "C"]),
+        (35, ["A", "B match", "C", "D match"]),
+        (35, ["A", "B match", "C", "D match"]),
+    ] {
+        app.key(key(KeyCode::Char('P')), &data, &sender);
+        let menu = app.podcast_menu.as_mut().unwrap();
+        assert_eq!(menu.id, ids[3]);
+        menu.selected = menu.actions.iter().position(|&n| n == menu_action).unwrap();
+        app.key(key(KeyCode::Enter), &data, &sender);
+        let Command::Podcast(action) = receiver.try_recv().unwrap() else {
+            panic!("expected a podcast queue action");
+        };
+        let result = podcast::manage(&config, &store, action, &stop).unwrap();
+        let titles: Vec<_> = result
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, expected);
+    }
+}
+
+#[test]
 fn showing_menu_captions_keeps_the_frozen_target_when_playback_changes() {
     use crate::podcast::{Download, Episode, Feed, Preview};
     let dir = tempfile::tempdir().unwrap();

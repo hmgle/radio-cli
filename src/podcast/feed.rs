@@ -8,7 +8,8 @@ use reqwest::{
 };
 use scraper::{Html, Selector};
 use std::{
-    io::Read,
+    error::Error as _,
+    io::{self, Read},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -168,12 +169,27 @@ pub fn fetch(
 }
 
 pub(crate) fn network_error(e: reqwest::Error) -> anyhow::Error {
-    // reqwest can include signed URLs; remove URLs before exposing diagnostics.
-    error(&format!(
-        "{}: {}",
-        crate::t!("podcast_network"),
-        e.without_url()
-    ))
+    // Sources can include signed URLs or proxy credentials. Only expose typed
+    // causes, using the standard I/O category instead of the source message.
+    let reason = if e.is_timeout() {
+        Some(crate::t!("podcast_network_timeout").to_owned())
+    } else {
+        std::iter::successors(e.source(), |&source| source.source())
+            .filter_map(|source| source.downcast_ref::<io::Error>())
+            .map(io::Error::kind)
+            .find(|kind| *kind != io::ErrorKind::Other)
+            .map(|kind| kind.to_string())
+            .or_else(|| {
+                e.is_connect()
+                    .then(|| crate::t!("podcast_network_connect").to_owned())
+            })
+    };
+    let mut message = format!("{}: {}", crate::t!("podcast_network"), e.without_url());
+    if let Some(reason) = reason {
+        message.push_str(": ");
+        message.push_str(&reason);
+    }
+    error(&message)
 }
 
 fn plain(value: &str) -> String {

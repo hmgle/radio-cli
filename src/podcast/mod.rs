@@ -6,6 +6,7 @@ mod library;
 pub use extras::{Bookmark, Chapter, ShowSettings};
 pub use library::LibraryQuery;
 mod download;
+mod download_files;
 mod feed;
 mod storage;
 pub mod transcript;
@@ -127,9 +128,23 @@ impl Download {
     pub(crate) fn matches_media(&self, episode: &Episode) -> bool {
         self.url == episode.url && self.media.as_ref() == Some(&episode.media())
     }
+
+    pub(crate) fn offline_path(&self, episode: &Episode) -> Option<&str> {
+        self.offline_path_if(episode, |path| std::path::Path::new(path).is_file())
+    }
+
+    fn offline_path_if(
+        &self,
+        episode: &Episode,
+        is_file: impl FnOnce(&str) -> bool,
+    ) -> Option<&str> {
+        (self.state == "complete" && self.matches_media(episode) && is_file(&self.path))
+            .then_some(self.path.as_str())
+    }
 }
 
 pub(crate) use storage::migrate;
+pub(crate) use storage::migrate_episode_order;
 pub(crate) use storage::migrate_library;
 pub(crate) use storage::register_functions;
 
@@ -137,7 +152,7 @@ pub use commands::{parse_time, refresh, valid_speed};
 
 pub(crate) mod progressive;
 mod runtime;
-pub(crate) use runtime::Runtime;
+pub(crate) use runtime::{BrowsePage, BrowseSnapshot, Runtime};
 
 pub(crate) fn sanitize_output(value: &mut serde_json::Value) {
     match value {
@@ -191,7 +206,11 @@ pub fn text_output(value: &serde_json::Value) -> String {
                     columns
                         .iter()
                         .map(|key| {
-                            let value = &row[*key];
+                            let value = if *key == "state" && row["download_state"].is_string() {
+                                &row["download_state"]
+                            } else {
+                                &row[*key]
+                            };
                             if value.is_null() {
                                 "—".into()
                             } else {

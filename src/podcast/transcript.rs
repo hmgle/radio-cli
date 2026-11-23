@@ -260,9 +260,9 @@ fn prepare_audio(
     stop: &Arc<AtomicBool>,
     progress: Option<&std::sync::atomic::AtomicU64>,
 ) -> Result<super::Download> {
-    let download = store.podcast_download(&episode.id)?.filter(|d| {
-        d.state == "complete" && d.matches_media(episode) && Path::new(&d.path).is_file()
-    });
+    let download = store
+        .podcast_download(&episode.id)?
+        .filter(|d| d.offline_path(episode).is_some());
     let download = if let Some(download) = download {
         download
     } else {

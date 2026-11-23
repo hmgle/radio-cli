@@ -164,9 +164,11 @@ radio podcast queue play --auto-next
 ```
 
 CLI downloads run in the foreground. In the TUI, up to two downloads run in the
-background; unfinished tasks resume at the next TUI launch. Paused, cancelled
-and failed tasks need an explicit resume. Interrupted transfers resume only
-with a resource validator and a valid Range response; otherwise they restart.
+background, and unfinished queued tasks resume at the next TUI launch.
+Transient failures retry automatically up to three times. After retries are
+exhausted, use `radio podcast downloads resume EPISODE_ID` to try again. Paused
+and cancelled tasks also need an explicit resume. Interrupted transfers resume
+when the resource validator and Range response are valid, and restart otherwise.
 Completed files are checked with ffprobe and published from a `.part` file.
 Downloaded media is preferred when its enclosure URL, declared size and
 duration match the current episode. Missing or outdated downloads fall back to
@@ -295,10 +297,11 @@ hints; duration shown during playback comes from mpv when available.
 
 Use `--json-v2` for scripts; see the [JSON contract](json-contract.md).
 
-## Explicit IDs for scripts
+## Identifying episodes in scripts
 
-A separate CLI process has no current TUI player. Its episode commands retain
-explicit IDs, as do TUI commands for an explicitly named target:
+For CLI commands that target an episode, supply its ID or the exact titles as
+`"Show Title::Episode Title"`. The same forms work for an explicit target in
+the TUI.
 
 ```sh
 radio podcast episodes FEED_ID --json-v2

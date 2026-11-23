@@ -169,12 +169,17 @@ Download-list objects additionally include nullable `title` for display; the
 `--transcribe` checks the local speech runtime/model, downloads missing audio,
 and then generates captions. TUI generation publishes partial captions while
 reading bounded audio windows; CLI output remains a single final result.
-CLI still requires an explicit ID; only TUI
-commands can inherit a playing episode.
+CLI caption commands take an episode ID or the exact `Show::Episode` title.
+TUI commands with an omitted target inherit the playing episode.
 
 `podcast library` returns the same page shape as `episodes`, with decorated
 rows containing `author`, `feed_title`, `queued`, `saved` and optional
-`download_state`. `list` adds `unplayed_count` and the configured `sort`.
+`download_state`. `queue list` includes the same episode display fields.
+In those fields, `download_state: "complete"` indicates that a local file
+exists and matches the current enclosure. `"stale"` means a completed
+download needs to be downloaded again. The download object's `state` still
+records the transfer outcome.
+`list` adds `unplayed_count` and the configured `sort`.
 Feed objects add nullable `new_feed_url`. Episodes add nullable `source_order`,
 nullable `chapters_url`, and `chapters:[{title,position_ms}]`. Old records use
 empty chapter arrays and null optional fields. Refresh outcomes may add `title`.

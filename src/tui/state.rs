@@ -1473,20 +1473,12 @@ impl App {
             32 => Command::Podcast(Action::Unsubscribe {
                 id: menu.feed_id.clone().unwrap_or_else(|| menu.id.clone()),
             }),
-            34 | 35 => {
-                let items = self.podcast_items(view);
-                let current = items.iter().position(|i| i.id == menu.id).unwrap_or(0);
-                Command::Podcast(Action::Queue {
-                    action: QueueAction::Move {
-                        id: menu.id.clone(),
-                        position: if choice == 34 {
-                            current.max(1)
-                        } else {
-                            (current + 2).min(items.len())
-                        },
-                    },
-                })
-            }
+            34 | 35 => Command::Podcast(Action::Queue {
+                action: QueueAction::MoveAdjacent {
+                    id: menu.id.clone(),
+                    up: choice == 34,
+                },
+            }),
             36 => Command::Podcast(Action::Downloads {
                 action: crate::podcast::DownloadAction::Cancel {
                     id: menu.id.clone(),

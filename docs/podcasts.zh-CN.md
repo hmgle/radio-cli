@@ -135,8 +135,10 @@ radio podcast queue clear
 radio podcast queue play --auto-next
 ```
 
-CLI 在前台下载，TUI 最多并发两个。退出后保留任务，下次 TUI 启动恢复；暂停、取消、
-失败的任务需手动继续。仅在资源校验信息和 Range 响应有效时续传，否则重新下载。
+CLI 在前台下载，TUI 最多并发两个。队列中未完成的任务会在下次 TUI 启动时恢复。
+临时失败会自动重试，最多额外尝试三次。用尽次数后，可执行
+`radio podcast downloads resume EPISODE_ID` 手动恢复。暂停、取消的任务也需手动恢复。
+仅在资源校验信息和 Range 响应有效时续传，否则重新下载。
 文件以 `.part` 写入，通过 ffprobe 检查后发布。附件 URL、声明大小和时长与当前单集
 一致时，播放优先使用完成的下载；文件丢失或媒体已变更时回退在线附件。旧版本下载
 记录没有媒体指纹，也需要重新下载后才能用于本地播放。显式下载会替换过期文件，
@@ -227,10 +229,10 @@ refresh_hours = 6
 超限或错误保留旧内容。仅支持 HTTP(S)，拒绝 XML DTD。日期、时长和长度均可缺失，
 播放时长优先以 mpv 实测为准。脚本使用 `--json-v2`，见 [JSON 合同](json-contract.zh-CN.md)。
 
-## 脚本中的显式 ID
+## 脚本中如何指定单集
 
-独立 CLI 进程没有当前 TUI 播放上下文，因此单集命令仍需显式 ID；TUI 也保留显式
-指定其他单集的能力：
+独立 CLI 中需要指定单集的命令接受单集 ID，或带引号的
+`"节目标题::单集标题"`（两者都须精确匹配）。在 TUI 中显式指定单集也可使用这两种形式。
 
 ```sh
 radio podcast episodes FEED_ID --json-v2

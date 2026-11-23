@@ -6,6 +6,7 @@ use crate::{
     directory::Directory,
     engine::{Engine, Status},
     model::{Filter, Recording, Station},
+    podcast::{Action, BrowseSnapshot},
     store::{ListRevision, Store},
 };
 use anyhow::{Result, bail};
@@ -53,19 +54,26 @@ pub(super) enum PageStatus<'a> {
 type LocatedEpisode = (u64, Result<(String, usize), String>);
 
 #[derive(Clone)]
+struct PodcastPoll {
+    action: Action,
+    request: Option<u64>,
+    checked_at: Instant,
+    snapshot: Option<Arc<BrowseSnapshot>>,
+}
+
+#[derive(Clone)]
 pub(super) struct View {
     pub podcast_items: Arc<Vec<super::podcast::Item>>,
     pub podcast_total: usize,
     pub podcast_browse: bool,
     pub podcast_feed_title: String,
-    podcast_revision: Option<u64>,
     pub podcast_page: Option<crate::podcast::Action>,
     pub podcast_request: Option<u64>,
     // Every browse has an identity, including results that are not polled.
     podcast_pending: Option<(Option<u64>, crate::podcast::Action)>,
     pub podcast_task: String,
     // Retries retain the submitted identity, even before the first publication.
-    podcast_poll: Option<(crate::podcast::Action, Option<u64>, Instant)>,
+    podcast_poll: Option<PodcastPoll>,
     pub subtitles: crate::speech::Snapshot,
     pub artwork_station: Option<String>,
     pub track_artwork: Option<crate::engine::artwork::TrackArtwork>,
@@ -151,7 +159,6 @@ impl View {
             podcast_total: 0,
             podcast_browse: false,
             podcast_feed_title: String::new(),
-            podcast_revision: None,
             podcast_page: None,
             podcast_request: None,
             podcast_pending: None,
@@ -322,9 +329,36 @@ impl View {
             Err(error) => {
                 self.podcast_pending = None;
                 self.podcast_browse = false;
-                self.podcast_revision = None;
+                if let Some(poll) = &mut self.podcast_poll {
+                    poll.snapshot = None;
+                }
                 self.fail_operation(&error.to_string());
             }
+        }
+    }
+    fn finish_podcast_browse(&mut self, result: Result<Option<crate::podcast::BrowsePage>>) {
+        if let Some(poll) = &mut self.podcast_poll {
+            poll.checked_at = Instant::now();
+        }
+        match result {
+            Ok(Some(page)) => {
+                if let Some(poll) = &mut self.podcast_poll {
+                    poll.snapshot = page.snapshot;
+                }
+                self.publish_podcast(Ok(page.value));
+            }
+            Ok(None) => {
+                self.podcast_pending = None;
+                self.podcast_browse = false;
+            }
+            Err(error) => self.publish_podcast(Err(error)),
+        }
+    }
+    fn stop_podcast_poll(&mut self, engine: &mut Engine) {
+        if self.podcast_poll.take().is_some() {
+            engine.cancel_podcast_browse();
+            self.podcast_pending = None;
+            self.podcast_browse = false;
         }
     }
     fn log(&mut self, message: &str) {
@@ -609,26 +643,8 @@ pub(super) fn execute(
         Command::ShowPodcastSubtitles(id) => engine.show_podcast_subtitles(&id)?,
         Command::CancelPodcastSubtitles(id) => engine.cancel_podcast_subtitles_for(&id)?,
         Command::Podcast(action) | Command::PodcastRequest { action, .. } => {
-            use crate::podcast::{Action, DownloadAction, QueueAction};
             let browse = super::podcast::is_browse(&action);
             if browse {
-                // Finish fallible setup before marking the view as loading.
-                let revision = engine.store().podcast_revision()?;
-                let periodic = matches!(
-                    &action,
-                    Action::List { .. }
-                        | Action::Library { .. }
-                        | Action::Bookmarks { .. }
-                        | Action::Episodes { .. }
-                        | Action::Downloads {
-                            action: DownloadAction::List
-                        }
-                        | Action::Queue {
-                            action: QueueAction::List
-                        }
-                );
-                view.lock().unwrap().podcast_poll =
-                    periodic.then(|| (action.clone(), podcast_request, Instant::now()));
                 let source = match &action {
                     Action::Downloads { .. } => "podcast_downloads",
                     Action::Queue { .. } => "podcast_queue",
@@ -637,7 +653,12 @@ pub(super) fn execute(
                 engine.save_preference("pref_source", source)?;
                 let mut data = view.lock().unwrap();
                 data.podcast_browse = true;
-                data.podcast_revision = Some(revision);
+                data.podcast_poll = action.polls_browse().then(|| PodcastPoll {
+                    action: action.clone(),
+                    request: podcast_request,
+                    checked_at: Instant::now(),
+                    snapshot: None,
+                });
                 data.podcast_pending = Some((podcast_request, action.clone()));
                 data.podcast_page = None;
                 data.podcast_items = Arc::new(vec![]);
@@ -736,7 +757,7 @@ pub(super) fn execute(
             }
         }
         Command::Search(value) => {
-            view.lock().unwrap().podcast_poll = None;
+            view.lock().unwrap().stop_podcast_poll(engine);
             let source = if value.geo.is_some() {
                 super::state::Source::Explore
             } else if value.history {
@@ -859,7 +880,7 @@ pub(super) fn execute(
             }
         }
         Command::Recordings(value) => {
-            view.lock().unwrap().podcast_poll = None;
+            view.lock().unwrap().stop_podcast_poll(engine);
             if let Err(error) = engine.save_preference("pref_source", "recordings") {
                 view.lock().unwrap().fail_operation(&format!("{error:#}"));
             }
@@ -993,32 +1014,26 @@ pub(super) fn run(
             }
             let repeat = {
                 let mut data = view.lock().unwrap();
-                if !data.podcast_browse {
-                    data.podcast_poll.as_mut().and_then(|(a, request, at)| {
-                        if at.elapsed() >= Duration::from_secs(3) {
-                            *at = Instant::now();
-                            Some((*request, a.clone()))
-                        } else {
-                            None
-                        }
-                    })
+                if data.podcast_pending.is_none()
+                    && let Some(poll) = &mut data.podcast_poll
+                    && poll.checked_at.elapsed() >= Duration::from_secs(3)
+                {
+                    poll.checked_at = Instant::now();
+                    Some(poll.clone())
                 } else {
                     None
                 }
             };
-            if let Some((request, action)) = repeat
-                && (view.lock().unwrap().podcast_revision
-                    != Some(engine.store().podcast_revision()?)
-                    || view.lock().unwrap().podcast_page.is_none())
-                && engine.podcast_action(action.clone()).is_ok()
-            {
+            if let Some(poll) = repeat {
+                let result = engine.refresh_podcast_browse(poll.action.clone(), poll.snapshot);
                 let mut data = view.lock().unwrap();
-                data.podcast_revision = Some(engine.store().podcast_revision()?);
-                data.podcast_pending = Some((request, action));
-                data.podcast_browse = true;
+                match result {
+                    Ok(()) => data.podcast_pending = Some((poll.request, poll.action)),
+                    Err(error) => data.publish_podcast(Err(error)),
+                }
             }
             if let Some(result) = engine.poll_podcast_browse() {
-                view.lock().unwrap().publish_podcast(result);
+                view.lock().unwrap().finish_podcast_browse(result);
             }
             if let Some(result) = engine.poll_podcast_operation() {
                 let mut data = view.lock().unwrap();
@@ -1212,9 +1227,9 @@ mod tests {
         store.set_meta("pref_last_media", "episode").unwrap();
         store.set_meta("pref_last_episode", &episode.id).unwrap();
         crate::test_support::downgrade_podcast_schema_to_v9(&store.conn);
-        let mut app = App::restore(&store, config.settings.resume).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let engine = Engine::new(config, stop.clone()).unwrap();
+        let mut app = App::restore(engine.store(), engine.config().settings.resume).unwrap();
         let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
         let (sender, receiver) = command::channel(8);
         let output = view.clone();
@@ -1277,7 +1292,7 @@ mod tests {
             .execute_batch("DROP TABLE podcast_revision")
             .unwrap();
         let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
-        let error = execute(
+        execute(
             Command::Podcast(crate::podcast::Action::List {
                 query: String::new(),
                 page: crate::cli::Page {
@@ -1291,19 +1306,145 @@ mod tests {
             &mut None,
             &view,
         )
-        .unwrap_err();
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let result = loop {
+            if let Some(result) = engine.poll_podcast_browse() {
+                break result;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        };
+        let mut data = view.lock().unwrap();
+        data.finish_podcast_browse(result);
         assert!(
-            error
-                .to_string()
+            data.operation_error
                 .contains("no such table: podcast_revision")
         );
-        let data = view.lock().unwrap();
         assert!(
             !data.podcast_browse,
             "failed browse must not keep showing page_loading"
         );
         assert!(data.podcast_pending.is_none());
-        assert!(data.podcast_poll.is_none());
+        assert!(data.podcast_poll.as_ref().unwrap().snapshot.is_none());
+    }
+
+    #[test]
+    fn podcast_pages_refresh_when_download_files_disappear_and_return() {
+        use crate::podcast::{
+            Download, DownloadAction, Episode, Feed, LibraryQuery, Preview, QueueAction,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::test_support::config(dir.path());
+        config.settings.podcasts.refresh_hours = 0;
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let preview = Preview {
+            feed: Feed {
+                url: "https://example.test/rss".into(),
+                ..Default::default()
+            },
+            episodes: vec![Episode {
+                title: "Local episode".into(),
+                url: "https://example.test/audio".into(),
+                ..Default::default()
+            }],
+        };
+        let feed = store
+            .podcast_subscribe(&preview, &preview.feed.url)
+            .unwrap();
+        let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+        let path = dir.path().join("episode.audio");
+        store
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: path.to_string_lossy().into_owned(),
+                state: "complete".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store.podcast_queue_set(&[episode.id]).unwrap();
+        let revision = store.podcast_revision().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let engine = Engine::new(config, stop.clone()).unwrap();
+        let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
+        let (sender, receiver) = super::super::command::channel(8);
+        let output = view.clone();
+        let flag = stop.clone();
+        let worker = thread::spawn(move || run(engine, receiver, output, flag, Filter::default()));
+        let wait_for = |request, expected| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let data = view.lock().unwrap();
+                let state = data
+                    .podcast_items
+                    .first()
+                    .and_then(|i| i.download_state.as_deref());
+                if data.podcast_request == Some(request)
+                    && !data.podcast_browse
+                    && state == expected
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "request {request}, expected {expected:?}, got {state:?}"
+                );
+                drop(data);
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let poll_now = || {
+            view.lock()
+                .unwrap()
+                .podcast_poll
+                .as_mut()
+                .unwrap()
+                .checked_at = Instant::now() - Duration::from_secs(3);
+        };
+        let actions = [
+            Action::Episodes {
+                id: feed.id,
+                query: String::new(),
+                page: LibraryQuery::default().page,
+            },
+            Action::Downloads {
+                action: DownloadAction::List,
+            },
+            Action::Queue {
+                action: QueueAction::List,
+            },
+            Action::Library {
+                options: LibraryQuery {
+                    downloaded: true,
+                    ..Default::default()
+                },
+            },
+        ];
+        for (index, action) in actions.into_iter().enumerate() {
+            let request = index as u64 + 1;
+            let missing = if matches!(action, Action::Library { .. }) {
+                None
+            } else {
+                Some("stale")
+            };
+            std::fs::write(&path, b"fixture").unwrap();
+            sender
+                .send(Command::PodcastRequest { action, request })
+                .unwrap();
+            wait_for(request, Some("complete"));
+            std::fs::remove_file(&path).unwrap();
+            poll_now();
+            wait_for(request, missing);
+            std::fs::write(&path, b"fixture").unwrap();
+            poll_now();
+            wait_for(request, Some("complete"));
+            assert_eq!(store.podcast_revision().unwrap(), revision);
+        }
+        stop.store(true, Ordering::Relaxed);
+        worker.join().unwrap().unwrap();
     }
 
     #[test]
@@ -1401,7 +1542,8 @@ mod tests {
             }
             {
                 let mut data = view.lock().unwrap();
-                data.podcast_poll.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(3);
+                data.podcast_poll.as_mut().unwrap().checked_at =
+                    Instant::now() - Duration::from_secs(3);
             }
             let deadline = Instant::now() + Duration::from_secs(3);
             let recovered = loop {

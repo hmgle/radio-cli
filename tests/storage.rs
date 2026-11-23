@@ -1,3 +1,5 @@
+mod support;
+
 use radio_cli::{
     model::{Filter, Station},
     store::Store,
@@ -917,6 +919,7 @@ fn url_index_backfills_legacy_rows_without_rejecting_shared_directory_urls() {
         DROP TABLE station_search_stats; DROP TABLE station_search_terms; DROP TABLE station_search; DROP INDEX station_sort; DROP INDEX station_name; DROP INDEX station_bitrate;
         DROP INDEX station_active; DROP INDEX station_directory;
         DROP TABLE facets_cache; DROP INDEX station_url; ALTER TABLE stations DROP COLUMN normalized_url; PRAGMA user_version=2;").unwrap();
+    support::strip_podcast_episode_order(&conn);
     conn.execute_batch("DROP INDEX station_geo; ALTER TABLE stations DROP COLUMN geo_x; ALTER TABLE stations DROP COLUMN geo_y; DELETE FROM meta WHERE key='geo_revision';").unwrap();
     drop(conn);
     store = Store::open(&path).unwrap();
@@ -1184,6 +1187,7 @@ fn migrations_from_intermediate_versions_preserve_derived_data() {
             conn.execute_batch("DROP TABLE facets_cache;").unwrap();
         }
         conn.execute_batch("DROP INDEX station_geo; ALTER TABLE stations DROP COLUMN geo_x; ALTER TABLE stations DROP COLUMN geo_y; DELETE FROM meta WHERE key='geo_revision';").unwrap();
+        support::strip_podcast_episode_order(&conn);
         conn.pragma_update(None, "user_version", version).unwrap();
         drop(conn);
         let store = Store::open(&path).unwrap();
@@ -1347,6 +1351,7 @@ fn version_five_geography_backfills_and_sync_publishes_atomically() {
     let path = dir.path().join("radio.db");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch("DROP INDEX station_geo; ALTER TABLE stations DROP COLUMN geo_x; ALTER TABLE stations DROP COLUMN geo_y; DELETE FROM meta WHERE key='geo_revision'; PRAGMA user_version=5;").unwrap();
+    support::strip_podcast_episode_order(&conn);
     drop(conn);
     let mut store = Store::open(&path).unwrap();
     let counts = |store: &Store| {

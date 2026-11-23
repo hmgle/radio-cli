@@ -187,9 +187,9 @@ pub(crate) fn generate(
     if !partial.segments.is_empty() {
         captions.reset(&partial.segments);
     }
-    let local = store.podcast_download(&episode.id)?.filter(|d| {
-        d.state == "complete" && d.matches_media(episode) && std::path::Path::new(&d.path).is_file()
-    });
+    let local = store
+        .podcast_download(&episode.id)?
+        .filter(|d| d.offline_path(episode).is_some());
     let input = if let Some(d) = local {
         d.path
     } else {

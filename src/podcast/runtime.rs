@@ -1,4 +1,5 @@
 //! Session-scoped jobs keep network and file work away from media controls.
+use super::download_files::{BrowseFileProbe, DownloadFiles};
 use super::*;
 use crate::{
     config::Config,
@@ -9,12 +10,48 @@ use anyhow::Result;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
+
+pub(crate) struct BrowseSnapshot {
+    revision: u64,
+    files: HashMap<String, bool>,
+}
+
+impl BrowseSnapshot {
+    fn files_changed(&self, stop: &AtomicBool, probe: &BrowseFileProbe) -> bool {
+        self.files
+            .iter()
+            .take_while(|_| !stop.load(Ordering::Relaxed))
+            .any(|(path, exists)| probe.is_file(path, stop) != *exists)
+    }
+}
+
+pub(crate) struct BrowsePage {
+    pub value: Value,
+    pub snapshot: Option<Arc<BrowseSnapshot>>,
+}
+
+struct BrowseTask {
+    job: Background<Option<BrowsePage>>,
+    probe: Arc<BrowseFileProbe>,
+}
+
+impl Drop for BrowseTask {
+    fn drop(&mut self) {
+        self.job.cancel();
+        self.probe.wake_waiters();
+    }
+}
+
 pub struct Runtime {
     action: Option<Background<Value>>,
-    browse: Option<Background<Value>>,
+    browse: Option<BrowseTask>,
+    file_probe: Arc<BrowseFileProbe>,
     events: std::collections::VecDeque<Result<Value>>,
     subtitle_job: Option<Background<Value>>,
     retiring_subtitles: Vec<(String, Background<Value>)>,
@@ -36,6 +73,7 @@ impl Default for Runtime {
         Self {
             action: None,
             browse: None,
+            file_probe: Arc::default(),
             events: Default::default(),
             subtitle_job: None,
             retiring_subtitles: vec![],
@@ -180,13 +218,7 @@ impl Runtime {
             return Ok(());
         }
         if action.is_query() {
-            let config = config.clone();
-            self.browse = Some(Background::start("radio-podcast-browse", move |stop| {
-                let _lock = lock;
-                let store = Store::open(&config.data_dir.join("radio.db"))?;
-                manage(&config, &store, action, &stop)
-            })?);
-            return Ok(());
+            return self.browse(config, action, lock, None);
         }
         if self.action.is_some() {
             return Err(error(crate::t!("podcast_busy")));
@@ -207,8 +239,56 @@ impl Runtime {
         })?);
         Ok(())
     }
-    pub(crate) fn poll_browse(&mut self) -> Option<Result<Value>> {
-        let result = self.browse.as_ref()?.poll()?;
+    pub(crate) fn browse(
+        &mut self,
+        config: &Config,
+        action: Action,
+        lock: Arc<MediaLock>,
+        previous: Option<Arc<BrowseSnapshot>>,
+    ) -> Result<()> {
+        self.cancel_browse();
+        let config = config.clone();
+        let probe = self.file_probe.clone();
+        let job = Background::start("radio-podcast-browse", move |stop| {
+            let periodic = action.polls_browse();
+            let _lock = (!periodic).then_some(lock);
+            let path = config.data_dir.join("radio.db");
+            let mut store = if periodic {
+                Store::open_reader(&path)?
+            } else {
+                Store::open(&path)?
+            };
+            let cancelled = stop.clone();
+            store.cancel_queries_when(move || cancelled.load(Ordering::Relaxed))?;
+            let revision = periodic.then(|| store.podcast_revision()).transpose()?;
+            if let Some(previous) = previous
+                && revision == Some(previous.revision)
+                && !previous.files_changed(&stop, &probe)
+            {
+                return Ok(None);
+            }
+            if stop.load(Ordering::Relaxed) {
+                return Err(DomainError::new(ErrorCode::Cancelled).into());
+            }
+            let files = Arc::new(DownloadFiles::for_browse(stop.clone(), probe));
+            let value = super::commands::manage_with_files(&config, &store, action, &stop, &files)?;
+            let snapshot = revision.map(|revision| {
+                Arc::new(BrowseSnapshot {
+                    revision,
+                    files: files.take_observations(),
+                })
+            });
+            Ok(Some(BrowsePage { value, snapshot }))
+        })?;
+        self.browse = Some(BrowseTask {
+            job,
+            probe: self.file_probe.clone(),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn poll_browse(&mut self) -> Option<Result<Option<BrowsePage>>> {
+        let result = self.browse.as_ref()?.job.poll()?;
         self.browse = None;
         Some(result)
     }
@@ -256,7 +336,8 @@ impl Runtime {
             || self.retiring_subtitles.iter().any(|(key, _)| key == id)
     }
     pub(crate) fn cancel(&mut self) -> bool {
-        let browse = self.browse.take().is_some();
+        let browse = self.browse.is_some();
+        self.cancel_browse();
         let action = self.action.take().is_some();
         let subtitles = self.subtitle_job.is_some();
         self.cancel_subtitles();
@@ -429,10 +510,7 @@ impl Runtime {
                 episode_id: id.into(),
                 ..Default::default()
             });
-            if d.state != "complete"
-                || !d.matches_media(&episode)
-                || !std::path::Path::new(&d.path).is_file()
-            {
+            if d.offline_path(&episode).is_none() {
                 d.generation = d.generation.saturating_add(1);
                 d.state = "queued".into();
                 d.error = None;
@@ -449,6 +527,195 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelling_browse_releases_an_active_sqlite_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let writer = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        // Make the first browse query scan for several seconds without a large fixture.
+        writer
+            .conn
+            .execute_batch(
+                "ALTER TABLE podcast_revision RENAME TO original_revision;
+             CREATE VIEW podcast_revision AS WITH RECURSIVE rows(n) AS
+             (VALUES(0) UNION ALL SELECT n+1 FROM rows WHERE n<50000000)
+             SELECT max(n) AS n FROM rows;",
+            )
+            .unwrap();
+        writer.conn.busy_timeout(Duration::ZERO).unwrap();
+        let checkpoint_busy = || -> bool {
+            writer
+                .conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+                .unwrap()
+        };
+        let lock = Arc::new(MediaLock::acquire(&config.runtime_dir).unwrap());
+        let mut runtime = Runtime::default();
+        runtime
+            .browse(
+                &config,
+                Action::Library {
+                    options: LibraryQuery::default(),
+                },
+                lock,
+                None,
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            writer
+                .conn
+                .execute("INSERT OR REPLACE INTO meta VALUES ('scan-test','1')", [])
+                .unwrap();
+            if checkpoint_busy() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "browse did not start reading");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(runtime.cancel());
+        writer.conn.busy_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            !checkpoint_busy(),
+            "cancelled browse still holds its snapshot"
+        );
+    }
+
+    #[test]
+    fn online_episodes_load_while_another_episodes_probe_is_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let subscribe = |name: &str| {
+            let url = format!("https://example.test/{name}");
+            store
+                .podcast_subscribe(
+                    &Preview {
+                        feed: Feed {
+                            url: url.clone(),
+                            ..Default::default()
+                        },
+                        episodes: vec![Episode {
+                            title: name.into(),
+                            url: format!("{url}.mp3"),
+                            ..Default::default()
+                        }],
+                    },
+                    &url,
+                )
+                .unwrap()
+        };
+        let a = subscribe("Downloaded");
+        let b = subscribe("Online");
+        let episode = store.podcast_episodes(&a.id).unwrap().remove(0);
+        store
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                state: "complete".into(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: dir.path().join("audio").to_string_lossy().into_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        let action = |id: &str| Action::Episodes {
+            id: id.into(),
+            query: String::new(),
+            page: LibraryQuery::default().page,
+        };
+        let lock = Arc::new(MediaLock::acquire(&config.runtime_dir).unwrap());
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let wait = std::sync::Mutex::new(wait);
+        let mut runtime = Runtime::default();
+        Arc::get_mut(&mut runtime.file_probe).unwrap().before_probe = Some(Box::new(move || {
+            entered.send(()).unwrap();
+            wait.lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+        }));
+        runtime
+            .browse(&config, action(&a.id), lock.clone(), None)
+            .unwrap();
+        ready.recv_timeout(Duration::from_secs(3)).unwrap();
+        for _ in 0..8 {
+            runtime
+                .browse(&config, action(&a.id), lock.clone(), None)
+                .unwrap();
+        }
+        runtime.browse(&config, action(&b.id), lock, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(result) = runtime.poll_browse() {
+                let page = result.unwrap().unwrap();
+                assert_eq!(page.value["items"][0]["title"], "Online");
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ready.try_recv().is_err());
+        release.send(()).unwrap();
+    }
+
+    #[test]
+    fn browse_snapshot_uses_the_same_file_observation_as_library_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let feed = store
+            .podcast_subscribe(
+                &Preview {
+                    feed: Feed {
+                        url: "https://example.test/feed".into(),
+                        ..Default::default()
+                    },
+                    episodes: vec![Episode {
+                        url: "https://example.test/audio".into(),
+                        ..Default::default()
+                    }],
+                },
+                "https://example.test/feed",
+            )
+            .unwrap();
+        let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+        let audio = dir.path().join("local.audio");
+        let path = audio.to_str().unwrap();
+        store
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                state: "complete".into(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: path.into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let files = Arc::new(super::super::download_files::DownloadFiles::default());
+        assert!(!files.is_file(path));
+        std::fs::write(&audio, b"restored").unwrap();
+        let page = store
+            .podcast_library_with_files(&LibraryQuery::default(), &files)
+            .unwrap();
+        assert_eq!(page["items"][0]["download_state"], "stale");
+        let filter = LibraryQuery {
+            downloaded: true,
+            ..Default::default()
+        };
+        let page = store.podcast_library_with_files(&filter, &files).unwrap();
+        assert_eq!(page["total"], 0);
+        assert_eq!(page["items"], serde_json::json!([]));
+        let snapshot = BrowseSnapshot {
+            revision: store.podcast_revision().unwrap(),
+            files: files.take_observations(),
+        };
+        assert_eq!(snapshot.files.get(path), Some(&false));
+        assert!(snapshot.files_changed(&AtomicBool::new(false), &BrowseFileProbe::default()));
+        let page = store.podcast_library(&filter).unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["items"][0]["download_state"], "complete");
+    }
 
     #[test]
     fn unrelated_players_do_not_consume_caption_deltas() {

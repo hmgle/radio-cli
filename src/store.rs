@@ -13,6 +13,7 @@ use std::path::Path;
 
 const RECORDING_ORDER: &str =
     "CASE WHEN json_valid(json) THEN json_extract(json,'$.started_at') END DESC,id DESC";
+const SCHEMA_VERSION: u32 = 11;
 
 pub struct Store {
     pub(crate) conn: Connection,
@@ -77,10 +78,10 @@ impl Store {
             PRAGMA cache_size=-4096; PRAGMA synchronous=NORMAL;",
         )?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 10 {
+        if version > SCHEMA_VERSION {
             bail!(DomainError::new(ErrorCode::DatabaseTooNew));
         }
-        if version < 10 {
+        if version < SCHEMA_VERSION {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             // Another process may have migrated while we waited for the lock.
             let version: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -110,7 +111,7 @@ impl Store {
                     -- Translate legacy diagnostics once, never during normal queries.
                     UPDATE recordings SET recovery_pending=1 WHERE status='interrupted' AND json_extract(json,'$.error') LIKE '恢复失败:%';"
                 )?,
-                2..=10 => {},
+                2..=SCHEMA_VERSION => {},
                 _ => bail!(DomainError::new(ErrorCode::DatabaseTooNew)),
             }
             if version < 3 {
@@ -187,7 +188,10 @@ impl Store {
             if version < 10 {
                 crate::podcast::migrate_library(&tx)?;
             }
-            tx.pragma_update(None, "user_version", 10)?;
+            if version < 11 {
+                crate::podcast::migrate_episode_order(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
         Ok(Self { conn })
@@ -1240,6 +1244,7 @@ mod tests {
                 })
                 .unwrap();
         }
+        crate::test_support::strip_podcast_episode_order(&store.conn);
         store
             .conn
             .execute_batch(
