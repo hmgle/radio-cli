@@ -59,23 +59,29 @@ impl Store {
             .transpose()?;
         super::storage::register_download_availability(&self.conn, files.clone())?;
         let result = files.read_page(self, |store| {
-            let base = "FROM podcast_episodes e JOIN podcast_feeds f ON f.id=e.feed_id
+            let candidates = "(?1 IS NULL OR e.feed_id=?1)
+                AND (?2='' OR instr(podcast_lower(json_extract(e.json,'$.title')),?2)>0)
+                AND (?3='all' OR (?3='played' AND COALESCE(p.completed,0)=1)
+                  OR (?3='unplayed' AND COALESCE(p.completed,0)=0)
+                  OR (?3='progress' AND COALESCE(p.completed,0)=0 AND p.position_ms>0))
+                AND ((?4='all' AND f.subscribed=1) OR (?4='continue' AND COALESCE(p.completed,0)=0 AND p.position_ms>0)
+                  OR (?4='history' AND h.played_at IS NOT NULL) OR (?4='saved' AND s.episode_id IS NOT NULL)
+                  OR (?4='inbox' AND i.episode_id IS NOT NULL AND f.subscribed=1))";
+            // CASE short-circuits even when SQLite reorders the joins.
+            let filter = if q.downloaded {
+                format!("CASE WHEN {candidates} THEN podcast_download_available(d.json,e.json) ELSE 0 END")
+            } else {
+                candidates.to_owned()
+            };
+            let base = format!("FROM podcast_episodes e JOIN podcast_feeds f ON f.id=e.feed_id
                 LEFT JOIN podcast_progress p ON p.episode_id=e.id
                 LEFT JOIN podcast_downloads d ON d.episode_id=e.id
                 LEFT JOIN podcast_saved s ON s.episode_id=e.id
                 LEFT JOIN podcast_inbox i ON i.episode_id=e.id
                 LEFT JOIN (SELECT episode_id,MAX(played_at) AS played_at FROM podcast_history GROUP BY episode_id) h ON h.episode_id=e.id
-                WHERE (?1 IS NULL OR e.feed_id=?1)
-                AND (?2='' OR instr(podcast_lower(json_extract(e.json,'$.title')),?2)>0)
-                AND (?3='all' OR (?3='played' AND COALESCE(p.completed,0)=1)
-                  OR (?3='unplayed' AND COALESCE(p.completed,0)=0)
-                  OR (?3='progress' AND COALESCE(p.completed,0)=0 AND p.position_ms>0))
-                AND CASE WHEN ?4=0 THEN 1 ELSE podcast_download_available(d.json,e.json) END
-                AND ((?5='all' AND f.subscribed=1) OR (?5='continue' AND COALESCE(p.completed,0)=0 AND p.position_ms>0)
-                  OR (?5='history' AND h.played_at IS NOT NULL) OR (?5='saved' AND s.episode_id IS NOT NULL)
-                  OR (?5='inbox' AND i.episode_id IS NOT NULL AND f.subscribed=1))";
+                WHERE {filter}");
             let query = q.query.to_lowercase();
-            let args = params![q.feed, query, q.status, q.downloaded, q.view];
+            let args = params![q.feed, query, q.status, q.view];
             let total: usize = store.conn.query_row(&format!("SELECT count(*) {base}"), args, |r| r.get(0))?;
             let order = if q.view == "history" { "h.played_at DESC,e.id" }
                 else if q.view == "continue" { "p.updated_at DESC,e.id" }
@@ -84,9 +90,9 @@ impl Store {
                     "title" => "podcast_lower(json_extract(e.json,'$.title')),e.id",
                     _ => "json_extract(e.json,'$.published') DESC,COALESCE(json_extract(e.json,'$.source_order'),e.legacy_order),e.id",
                 }};
-            let sql = format!("SELECT e.id {base} ORDER BY {order} LIMIT ?6 OFFSET ?7");
+            let sql = format!("SELECT e.id {base} ORDER BY {order} LIMIT ?5 OFFSET ?6");
             let mut stmt = store.conn.prepare(&sql)?;
-            let ids = stmt.query_map(params![q.feed, query, q.status, q.downloaded, q.view,
+            let ids = stmt.query_map(params![q.feed, query, q.status, q.view,
                 if q.page.all { -1 } else { i64::from(q.page.limit) }, q.page.offset as i64], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let rows = ids.iter().map(|id| super::commands::episode_value(store, &store.podcast_episode(id)?, |path| files.observed_file(path))).collect::<Result<Vec<_>>>()?;

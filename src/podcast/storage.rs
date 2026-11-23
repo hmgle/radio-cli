@@ -758,6 +758,52 @@ mod tests {
     }
 
     #[test]
+    fn downloaded_filter_only_probes_members_of_the_selected_collection() {
+        let (_dir, config, episodes) = queue_fixture();
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let episode = &episodes[0];
+        let path = config.data_dir.join("local.audio");
+        std::fs::write(&path, b"fixture").unwrap();
+        store
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                state: "complete".into(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: path.to_str().unwrap().into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let files = Arc::new(super::super::download_files::DownloadFiles::default());
+        for view in ["inbox", "history", "saved", "continue"] {
+            let query = LibraryQuery {
+                view: view.into(),
+                downloaded: true,
+                ..Default::default()
+            };
+            let page = store.podcast_library_with_files(&query, &files).unwrap();
+            assert_eq!(page["total"], 0, "{view}");
+            assert!(
+                files.take_observations().is_empty(),
+                "{view} probed an excluded file"
+            );
+        }
+        store.podcast_save_episode(&episode.id, false).unwrap();
+        let query = LibraryQuery {
+            view: "saved".into(),
+            downloaded: true,
+            ..Default::default()
+        };
+        let page = store.podcast_library_with_files(&query, &files).unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["items"][0]["id"], episode.id);
+        assert_eq!(
+            files.take_observations().get(path.to_str().unwrap()),
+            Some(&true)
+        );
+    }
+
+    #[test]
     fn downloaded_library_releases_the_read_snapshot_before_probing_files() {
         let (_dir, config, episodes) = queue_fixture();
         let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
