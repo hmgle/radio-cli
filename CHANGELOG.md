@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.13.1 — 2026-11-23
+
+- Show queue membership, author and download status in podcast queue rows.
+  Moving an episode from a filtered view now moves it one place in the full queue.
+- Use the same offline availability check for playback, episode lists and the
+  downloaded filter. Missing or outdated files can be downloaded again.
+- Refresh podcast file status in the background. Online-only pages stay
+  responsive when a download disk stalls, and refreshing or leaving a page
+  cancels its SQLite scan. Filtered collections check only matching files.
+- Show the underlying cause of podcast connection errors while protecting
+  credentials. Use the episode date index for paginated listings.
+- Update `url` to 2.5.9 for RUSTSEC-2026-0592.
 
 ### Compatibility
 
