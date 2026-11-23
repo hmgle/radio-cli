@@ -6,13 +6,12 @@ use crate::{
     directory::Directory,
     engine::{Engine, Status},
     model::{Filter, Recording, Station},
-    podcast::{Action, DownloadAction, QueueAction},
+    podcast::{Action, BrowseSnapshot},
     store::{ListRevision, Store},
 };
 use anyhow::{Result, bail};
 use std::{
     collections::VecDeque,
-    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -59,58 +58,7 @@ struct PodcastPoll {
     action: Action,
     request: Option<u64>,
     checked_at: Instant,
-    files: Option<Arc<[(String, bool)]>>,
-}
-
-impl PodcastPoll {
-    fn new(store: &Store, action: &Action, request: Option<u64>) -> Result<Option<Self>> {
-        let files = match action {
-            Action::List { .. } | Action::Bookmarks { .. } => None,
-            Action::Library { .. }
-            | Action::Episodes { .. }
-            | Action::Downloads {
-                action: DownloadAction::List,
-            }
-            | Action::Queue {
-                action: QueueAction::List,
-            } => Some(Arc::from([])),
-            _ => return Ok(None),
-        };
-        let mut poll = Self {
-            action: action.clone(),
-            request,
-            checked_at: Instant::now(),
-            files,
-        };
-        poll.capture_files(store)?;
-        Ok(Some(poll))
-    }
-
-    fn capture_files(&mut self, store: &Store) -> Result<()> {
-        if self.files.is_some() {
-            // Include off-page downloads so restoring a missing file can also
-            // put its episode back into a library filtered by availability.
-            self.files = Some(
-                store
-                    .podcast_completed_download_paths()?
-                    .into_iter()
-                    .map(|path| {
-                        let exists = Path::new(&path).is_file();
-                        (path, exists)
-                    })
-                    .collect(),
-            );
-        }
-        Ok(())
-    }
-
-    fn files_changed(&self) -> bool {
-        self.files.as_ref().is_some_and(|files| {
-            files
-                .iter()
-                .any(|(path, exists)| Path::new(path).is_file() != *exists)
-        })
-    }
+    snapshot: Option<Arc<BrowseSnapshot>>,
 }
 
 #[derive(Clone)]
@@ -119,7 +67,6 @@ pub(super) struct View {
     pub podcast_total: usize,
     pub podcast_browse: bool,
     pub podcast_feed_title: String,
-    podcast_revision: Option<u64>,
     pub podcast_page: Option<crate::podcast::Action>,
     pub podcast_request: Option<u64>,
     // Every browse has an identity, including results that are not polled.
@@ -212,7 +159,6 @@ impl View {
             podcast_total: 0,
             podcast_browse: false,
             podcast_feed_title: String::new(),
-            podcast_revision: None,
             podcast_page: None,
             podcast_request: None,
             podcast_pending: None,
@@ -383,9 +329,36 @@ impl View {
             Err(error) => {
                 self.podcast_pending = None;
                 self.podcast_browse = false;
-                self.podcast_revision = None;
+                if let Some(poll) = &mut self.podcast_poll {
+                    poll.snapshot = None;
+                }
                 self.fail_operation(&error.to_string());
             }
+        }
+    }
+    fn finish_podcast_browse(&mut self, result: Result<Option<crate::podcast::BrowsePage>>) {
+        if let Some(poll) = &mut self.podcast_poll {
+            poll.checked_at = Instant::now();
+        }
+        match result {
+            Ok(Some(page)) => {
+                if let Some(poll) = &mut self.podcast_poll {
+                    poll.snapshot = page.snapshot;
+                }
+                self.publish_podcast(Ok(page.value));
+            }
+            Ok(None) => {
+                self.podcast_pending = None;
+                self.podcast_browse = false;
+            }
+            Err(error) => self.publish_podcast(Err(error)),
+        }
+    }
+    fn stop_podcast_poll(&mut self, engine: &mut Engine) {
+        if self.podcast_poll.take().is_some() {
+            engine.cancel_podcast_browse();
+            self.podcast_pending = None;
+            self.podcast_browse = false;
         }
     }
     fn log(&mut self, message: &str) {
@@ -672,9 +645,6 @@ pub(super) fn execute(
         Command::Podcast(action) | Command::PodcastRequest { action, .. } => {
             let browse = super::podcast::is_browse(&action);
             if browse {
-                // Finish fallible setup before marking the view as loading.
-                let revision = engine.store().podcast_revision()?;
-                let poll = PodcastPoll::new(engine.store(), &action, podcast_request)?;
                 let source = match &action {
                     Action::Downloads { .. } => "podcast_downloads",
                     Action::Queue { .. } => "podcast_queue",
@@ -683,8 +653,12 @@ pub(super) fn execute(
                 engine.save_preference("pref_source", source)?;
                 let mut data = view.lock().unwrap();
                 data.podcast_browse = true;
-                data.podcast_poll = poll;
-                data.podcast_revision = Some(revision);
+                data.podcast_poll = action.polls_browse().then(|| PodcastPoll {
+                    action: action.clone(),
+                    request: podcast_request,
+                    checked_at: Instant::now(),
+                    snapshot: None,
+                });
                 data.podcast_pending = Some((podcast_request, action.clone()));
                 data.podcast_page = None;
                 data.podcast_items = Arc::new(vec![]);
@@ -783,7 +757,7 @@ pub(super) fn execute(
             }
         }
         Command::Search(value) => {
-            view.lock().unwrap().podcast_poll = None;
+            view.lock().unwrap().stop_podcast_poll(engine);
             let source = if value.geo.is_some() {
                 super::state::Source::Explore
             } else if value.history {
@@ -906,7 +880,7 @@ pub(super) fn execute(
             }
         }
         Command::Recordings(value) => {
-            view.lock().unwrap().podcast_poll = None;
+            view.lock().unwrap().stop_podcast_poll(engine);
             if let Err(error) = engine.save_preference("pref_source", "recordings") {
                 view.lock().unwrap().fail_operation(&format!("{error:#}"));
             }
@@ -1040,33 +1014,26 @@ pub(super) fn run(
             }
             let repeat = {
                 let mut data = view.lock().unwrap();
-                let revision = data.podcast_revision;
-                let missing_page = data.podcast_page.is_none();
-                if !data.podcast_browse
+                if data.podcast_pending.is_none()
                     && let Some(poll) = &mut data.podcast_poll
                     && poll.checked_at.elapsed() >= Duration::from_secs(3)
                 {
                     poll.checked_at = Instant::now();
-                    Some((poll.clone(), revision, missing_page))
+                    Some(poll.clone())
                 } else {
                     None
                 }
             };
-            if let Some((mut poll, previous_revision, missing_page)) = repeat {
-                let revision = engine.store().podcast_revision()?;
-                if (previous_revision != Some(revision) || missing_page || poll.files_changed())
-                    && poll.capture_files(engine.store()).is_ok()
-                    && engine.podcast_action(poll.action.clone()).is_ok()
-                {
-                    let mut data = view.lock().unwrap();
-                    data.podcast_revision = Some(revision);
-                    data.podcast_pending = Some((poll.request, poll.action.clone()));
-                    data.podcast_poll = Some(poll);
-                    data.podcast_browse = true;
+            if let Some(poll) = repeat {
+                let result = engine.refresh_podcast_browse(poll.action.clone(), poll.snapshot);
+                let mut data = view.lock().unwrap();
+                match result {
+                    Ok(()) => data.podcast_pending = Some((poll.request, poll.action)),
+                    Err(error) => data.publish_podcast(Err(error)),
                 }
             }
             if let Some(result) = engine.poll_podcast_browse() {
-                view.lock().unwrap().publish_podcast(result);
+                view.lock().unwrap().finish_podcast_browse(result);
             }
             if let Some(result) = engine.poll_podcast_operation() {
                 let mut data = view.lock().unwrap();
@@ -1325,7 +1292,7 @@ mod tests {
             .execute_batch("DROP TABLE podcast_revision")
             .unwrap();
         let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
-        let error = execute(
+        execute(
             Command::Podcast(crate::podcast::Action::List {
                 query: String::new(),
                 page: crate::cli::Page {
@@ -1339,24 +1306,34 @@ mod tests {
             &mut None,
             &view,
         )
-        .unwrap_err();
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let result = loop {
+            if let Some(result) = engine.poll_podcast_browse() {
+                break result;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        };
+        let mut data = view.lock().unwrap();
+        data.finish_podcast_browse(result);
         assert!(
-            error
-                .to_string()
+            data.operation_error
                 .contains("no such table: podcast_revision")
         );
-        let data = view.lock().unwrap();
         assert!(
             !data.podcast_browse,
             "failed browse must not keep showing page_loading"
         );
         assert!(data.podcast_pending.is_none());
-        assert!(data.podcast_poll.is_none());
+        assert!(data.podcast_poll.as_ref().unwrap().snapshot.is_none());
     }
 
     #[test]
     fn podcast_pages_refresh_when_download_files_disappear_and_return() {
-        use crate::podcast::{Download, Episode, Feed, LibraryQuery, Preview};
+        use crate::podcast::{
+            Download, DownloadAction, Episode, Feed, LibraryQuery, Preview, QueueAction,
+        };
 
         let dir = tempfile::tempdir().unwrap();
         let mut config = crate::test_support::config(dir.path());

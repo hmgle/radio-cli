@@ -1,9 +1,11 @@
 //! Local collections share a stable, filtered query before pagination.
+use super::download_files::DownloadFiles;
 use crate::{cli::Page, store::Store};
 use anyhow::Result;
 use clap::Args;
 use rusqlite::params;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Args)]
 pub struct LibraryQuery {
@@ -41,13 +43,22 @@ impl Default for LibraryQuery {
 }
 impl Store {
     pub fn podcast_library(&self, q: &LibraryQuery) -> Result<Value> {
+        self.podcast_library_with_files(q, &Arc::default())
+    }
+
+    pub(super) fn podcast_library_with_files(
+        &self,
+        q: &LibraryQuery,
+        files: &Arc<DownloadFiles>,
+    ) -> Result<Value> {
         let mut q = q.clone();
         q.feed = q
             .feed
             .as_deref()
             .map(|id| self.podcast_feed_id(id))
             .transpose()?;
-        self.read_snapshot(|store| {
+        super::storage::register_download_availability(&self.conn, files.clone())?;
+        let result = self.read_snapshot(|store| {
             let base = "FROM podcast_episodes e JOIN podcast_feeds f ON f.id=e.feed_id
                 LEFT JOIN podcast_progress p ON p.episode_id=e.id
                 LEFT JOIN podcast_downloads d ON d.episode_id=e.id
@@ -59,7 +70,7 @@ impl Store {
                 AND (?3='all' OR (?3='played' AND COALESCE(p.completed,0)=1)
                   OR (?3='unplayed' AND COALESCE(p.completed,0)=0)
                   OR (?3='progress' AND COALESCE(p.completed,0)=0 AND p.position_ms>0))
-                AND (?4=0 OR podcast_download_available(d.json,e.json))
+                AND CASE WHEN ?4=0 THEN 1 ELSE podcast_download_available(d.json,e.json) END
                 AND ((?5='all' AND f.subscribed=1) OR (?5='continue' AND COALESCE(p.completed,0)=0 AND p.position_ms>0)
                   OR (?5='history' AND h.played_at IS NOT NULL) OR (?5='saved' AND s.episode_id IS NOT NULL)
                   OR (?5='inbox' AND i.episode_id IS NOT NULL AND f.subscribed=1))";
@@ -78,11 +89,15 @@ impl Store {
             let ids = stmt.query_map(params![q.feed, query, q.status, q.downloaded, q.view,
                 if q.page.all { -1 } else { i64::from(q.page.limit) }, q.page.offset as i64], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            let rows = ids.iter().map(|id| super::commands::episode_value(store, &store.podcast_episode(id)?)).collect::<Result<Vec<_>>>()?;
+            let rows = ids.iter().map(|id| super::commands::episode_value(store, &store.podcast_episode(id)?, files)).collect::<Result<Vec<_>>>()?;
             let mut value = super::commands::page_result(&rows, total, q.page.clone());
             if let Some(feed) = &q.feed { value["feed_title"] = json!(store.podcast_feed(feed)?.title); }
             Ok(value)
-        })
+        });
+        let removed = self.conn.remove_function("podcast_download_available", 2);
+        let value = result?;
+        removed?;
+        Ok(value)
     }
     pub fn podcast_save_episode(&self, id: &str, remove: bool) -> Result<()> {
         let id = self.podcast_episode_id(id)?;

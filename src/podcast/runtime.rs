@@ -9,12 +9,36 @@ use anyhow::Result;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    sync::Arc,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
+
+pub(crate) struct BrowseSnapshot {
+    revision: u64,
+    files: HashMap<String, bool>,
+}
+
+impl BrowseSnapshot {
+    fn files_changed(&self, stop: &AtomicBool) -> bool {
+        self.files
+            .iter()
+            .take_while(|_| !stop.load(Ordering::Relaxed))
+            .any(|(path, exists)| Path::new(path).is_file() != *exists)
+    }
+}
+
+pub(crate) struct BrowsePage {
+    pub value: Value,
+    pub snapshot: Option<Arc<BrowseSnapshot>>,
+}
+
 pub struct Runtime {
     action: Option<Background<Value>>,
-    browse: Option<Background<Value>>,
+    browse: Option<Background<Option<BrowsePage>>>,
     events: std::collections::VecDeque<Result<Value>>,
     subtitle_job: Option<Background<Value>>,
     retiring_subtitles: Vec<(String, Background<Value>)>,
@@ -180,13 +204,7 @@ impl Runtime {
             return Ok(());
         }
         if action.is_query() {
-            let config = config.clone();
-            self.browse = Some(Background::start("radio-podcast-browse", move |stop| {
-                let _lock = lock;
-                let store = Store::open(&config.data_dir.join("radio.db"))?;
-                manage(&config, &store, action, &stop)
-            })?);
-            return Ok(());
+            return self.browse(config, action, lock, None);
         }
         if self.action.is_some() {
             return Err(error(crate::t!("podcast_busy")));
@@ -207,7 +225,47 @@ impl Runtime {
         })?);
         Ok(())
     }
-    pub(crate) fn poll_browse(&mut self) -> Option<Result<Value>> {
+    pub(crate) fn browse(
+        &mut self,
+        config: &Config,
+        action: Action,
+        lock: Arc<MediaLock>,
+        previous: Option<Arc<BrowseSnapshot>>,
+    ) -> Result<()> {
+        let config = config.clone();
+        self.browse = Some(Background::start("radio-podcast-browse", move |stop| {
+            let periodic = action.polls_browse();
+            let _lock = (!periodic).then_some(lock);
+            let path = config.data_dir.join("radio.db");
+            let store = if periodic {
+                Store::open_reader(&path)?
+            } else {
+                Store::open(&path)?
+            };
+            let revision = periodic.then(|| store.podcast_revision()).transpose()?;
+            if let Some(previous) = previous
+                && revision == Some(previous.revision)
+                && !previous.files_changed(&stop)
+            {
+                return Ok(None);
+            }
+            if stop.load(Ordering::Relaxed) {
+                return Err(DomainError::new(ErrorCode::Cancelled).into());
+            }
+            let files = Arc::new(super::download_files::DownloadFiles::new(stop.clone()));
+            let value = super::commands::manage_with_files(&config, &store, action, &stop, &files)?;
+            let snapshot = revision.map(|revision| {
+                Arc::new(BrowseSnapshot {
+                    revision,
+                    files: files.take_observations(),
+                })
+            });
+            Ok(Some(BrowsePage { value, snapshot }))
+        })?);
+        Ok(())
+    }
+
+    pub(crate) fn poll_browse(&mut self) -> Option<Result<Option<BrowsePage>>> {
         let result = self.browse.as_ref()?.poll()?;
         self.browse = None;
         Some(result)
@@ -446,6 +504,63 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browse_snapshot_uses_the_same_file_observation_as_library_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("radio.db")).unwrap();
+        let feed = store
+            .podcast_subscribe(
+                &Preview {
+                    feed: Feed {
+                        url: "https://example.test/feed".into(),
+                        ..Default::default()
+                    },
+                    episodes: vec![Episode {
+                        url: "https://example.test/audio".into(),
+                        ..Default::default()
+                    }],
+                },
+                "https://example.test/feed",
+            )
+            .unwrap();
+        let episode = store.podcast_episodes(&feed.id).unwrap().remove(0);
+        let audio = dir.path().join("local.audio");
+        let path = audio.to_str().unwrap();
+        store
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                state: "complete".into(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: path.into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let files = Arc::new(super::super::download_files::DownloadFiles::default());
+        assert!(!files.is_file(path));
+        std::fs::write(&audio, b"restored").unwrap();
+        let page = store
+            .podcast_library_with_files(&LibraryQuery::default(), &files)
+            .unwrap();
+        assert_eq!(page["items"][0]["download_state"], "stale");
+        let filter = LibraryQuery {
+            downloaded: true,
+            ..Default::default()
+        };
+        let page = store.podcast_library_with_files(&filter, &files).unwrap();
+        assert_eq!(page["total"], 0);
+        assert_eq!(page["items"], serde_json::json!([]));
+        let snapshot = BrowseSnapshot {
+            revision: store.podcast_revision().unwrap(),
+            files: files.take_observations(),
+        };
+        assert_eq!(snapshot.files.get(path), Some(&false));
+        assert!(snapshot.files_changed(&AtomicBool::new(false)));
+        let page = store.podcast_library(&filter).unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["items"][0]["download_state"], "complete");
+    }
 
     #[test]
     fn unrelated_players_do_not_consume_caption_deltas() {

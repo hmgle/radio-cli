@@ -6,6 +6,7 @@ mod library;
 pub use extras::{Bookmark, Chapter, ShowSettings};
 pub use library::LibraryQuery;
 mod download;
+mod download_files;
 mod feed;
 mod storage;
 pub mod transcript;
@@ -129,10 +130,16 @@ impl Download {
     }
 
     pub(crate) fn offline_path(&self, episode: &Episode) -> Option<&str> {
-        (self.state == "complete"
-            && self.matches_media(episode)
-            && std::path::Path::new(&self.path).is_file())
-        .then_some(self.path.as_str())
+        self.offline_path_if(episode, |path| std::path::Path::new(path).is_file())
+    }
+
+    fn offline_path_if(
+        &self,
+        episode: &Episode,
+        is_file: impl FnOnce(&str) -> bool,
+    ) -> Option<&str> {
+        (self.state == "complete" && self.matches_media(episode) && is_file(&self.path))
+            .then_some(self.path.as_str())
     }
 }
 
@@ -145,7 +152,7 @@ pub use commands::{parse_time, refresh, valid_speed};
 
 pub(crate) mod progressive;
 mod runtime;
-pub(crate) use runtime::Runtime;
+pub(crate) use runtime::{BrowsePage, BrowseSnapshot, Runtime};
 
 pub(crate) fn sanitize_output(value: &mut serde_json::Value) {
     match value {

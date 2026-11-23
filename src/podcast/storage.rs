@@ -16,7 +16,7 @@ fn episode_page_sql() -> String {
 }
 
 pub(crate) fn register_functions(conn: &rusqlite::Connection) -> Result<()> {
-    use rusqlite::{Error, functions::FunctionFlags};
+    use rusqlite::functions::FunctionFlags;
 
     conn.create_scalar_function(
         "podcast_lower",
@@ -24,12 +24,21 @@ pub(crate) fn register_functions(conn: &rusqlite::Connection) -> Result<()> {
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |context| Ok(context.get::<String>(0)?.to_lowercase()),
     )?;
+    Ok(())
+}
+
+pub(super) fn register_download_availability(
+    conn: &rusqlite::Connection,
+    files: std::sync::Arc<super::download_files::DownloadFiles>,
+) -> Result<()> {
+    use rusqlite::{Error, functions::FunctionFlags};
+
     // Availability also depends on the filesystem, so this function is not deterministic.
     conn.create_scalar_function(
         "podcast_download_available",
         2,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DIRECTONLY,
-        |context| {
+        move |context| {
             let Some(download) = context.get::<Option<String>>(0)? else {
                 return Ok(false);
             };
@@ -41,7 +50,7 @@ pub(crate) fn register_functions(conn: &rusqlite::Connection) -> Result<()> {
             let episode = context.get::<String>(1)?;
             let e: Episode = serde_json::from_str(&episode)
                 .map_err(|e| Error::UserFunctionError(Box::new(e)))?;
-            Ok(d.offline_path(&e).is_some())
+            Ok(d.offline_path_if(&e, |path| files.is_file(path)).is_some())
         },
     )?;
     Ok(())
@@ -496,16 +505,6 @@ impl Store {
         stmt.query_map([], |r| r.get::<_, String>(0))?
             .map(|j| Ok(serde_json::from_str(&j?)?))
             .collect()
-    }
-    pub(crate) fn podcast_completed_download_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT DISTINCT json_extract(json,'$.path') FROM podcast_downloads
-             WHERE CASE WHEN json_valid(json) THEN json_extract(json,'$.state')='complete'
-               AND json_type(json,'$.path')='text' END",
-        )?;
-        Ok(stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<rusqlite::Result<_>>()?)
     }
     pub fn podcast_queue(&self) -> Result<Vec<Episode>> {
         let mut stmt = self

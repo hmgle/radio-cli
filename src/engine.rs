@@ -683,12 +683,27 @@ impl Engine {
     pub fn podcast_tasks(&self) -> (usize, bool) {
         self.podcast_runtime.tasks()
     }
-    pub(crate) fn poll_podcast_browse(&mut self) -> Option<Result<serde_json::Value>> {
+    pub(crate) fn poll_podcast_browse(
+        &mut self,
+    ) -> Option<Result<Option<crate::podcast::BrowsePage>>> {
         self.podcast_runtime.poll_browse()
     }
+    pub(crate) fn refresh_podcast_browse(
+        &mut self,
+        action: crate::podcast::Action,
+        previous: Option<Arc<crate::podcast::BrowseSnapshot>>,
+    ) -> Result<()> {
+        self.podcast_runtime.browse(
+            &self.session.config,
+            action,
+            self.session._lock.clone(),
+            previous,
+        )
+    }
     pub fn poll_podcast(&mut self) -> Option<Result<serde_json::Value>> {
-        self.podcast_runtime
-            .poll_browse()
+        self.poll_podcast_browse()
+            .and_then(|result| result.transpose())
+            .map(|page| page.map(|page| page.value))
             .or_else(|| self.podcast_runtime.poll())
     }
     pub(crate) fn poll_podcast_operation(&mut self) -> Option<Result<serde_json::Value>> {

@@ -214,6 +214,22 @@ pub enum QueueAction {
     },
 }
 impl Action {
+    pub(crate) fn polls_browse(&self) -> bool {
+        matches!(
+            self,
+            Self::List { .. }
+                | Self::Bookmarks { .. }
+                | Self::Library { .. }
+                | Self::Episodes { .. }
+                | Self::Downloads {
+                    action: DownloadAction::List
+                }
+                | Self::Queue {
+                    action: QueueAction::List
+                }
+        )
+    }
+
     pub(crate) fn is_query(&self) -> bool {
         matches!(
             self,
@@ -381,7 +397,11 @@ pub(super) fn refresh_feeds(
     }
     Ok(json!(results))
 }
-pub(super) fn episode_value(store: &Store, e: &Episode) -> Result<Value> {
+pub(super) fn episode_value(
+    store: &Store,
+    e: &Episode,
+    files: &super::download_files::DownloadFiles,
+) -> Result<Value> {
     let mut value = json!(e);
     let feed = store.podcast_feed(&e.feed_id)?;
     value["author"] = json!(feed.author);
@@ -397,7 +417,9 @@ pub(super) fn episode_value(store: &Store, e: &Episode) -> Result<Value> {
         |r| r.get::<_, bool>(0)
     )?);
     if let Some(d) = store.podcast_download(&e.id)? {
-        value["download_state"] = json!(if d.state == "complete" && d.offline_path(e).is_none() {
+        value["download_state"] = json!(if d.state == "complete"
+            && d.offline_path_if(e, |path| files.is_file(path)).is_none()
+        {
             "stale"
         } else {
             &d.state
@@ -408,8 +430,19 @@ pub(super) fn episode_value(store: &Store, e: &Episode) -> Result<Value> {
 pub fn manage(
     config: &Config,
     store: &Store,
+    action: Action,
+    stop: &Arc<AtomicBool>,
+) -> Result<Value> {
+    let files = Arc::new(super::download_files::DownloadFiles::new(stop.clone()));
+    manage_with_files(config, store, action, stop, &files)
+}
+
+pub(super) fn manage_with_files(
+    config: &Config,
+    store: &Store,
     mut action: Action,
     stop: &Arc<AtomicBool>,
+    files: &Arc<super::download_files::DownloadFiles>,
 ) -> Result<Value> {
     if let Some(id) = action.episode_id_mut() {
         *id = store.podcast_episode_id(id)?;
@@ -444,7 +477,7 @@ pub fn manage(
         Action::Jump { .. } | Action::Sleep { .. } => {
             return Err(error(crate::t!("podcast_playback_only")));
         }
-        Action::Library { options } => store.podcast_library(&options)?,
+        Action::Library { options } => store.podcast_library_with_files(&options, files)?,
         Action::Save { id, remove } => {
             store.podcast_save_episode(&id, remove)?;
             json!({"id":id,"saved":!remove})
@@ -553,7 +586,7 @@ pub fn manage(
             let (items, total) = store.podcast_episodes_page(&id, &query, &p)?;
             let items = items
                 .iter()
-                .map(|e| episode_value(store, e))
+                .map(|e| episode_value(store, e, files))
                 .collect::<Result<Vec<_>>>()?;
             let mut value = page_result(&items, total, p);
             value["feed_title"] = json!(store.podcast_feed(&id)?.title);
@@ -601,7 +634,8 @@ pub fn manage(
             DownloadAction::List => {
                 let mut rows = Vec::new();
                 for d in store.podcast_downloads()? {
-                    let mut value = episode_value(store, &store.podcast_episode(&d.episode_id)?)?;
+                    let mut value =
+                        episode_value(store, &store.podcast_episode(&d.episode_id)?, files)?;
                     value
                         .as_object_mut()
                         .unwrap()
@@ -659,7 +693,7 @@ pub fn manage(
             let items = store
                 .podcast_queue()?
                 .iter()
-                .map(|e| episode_value(store, e))
+                .map(|e| episode_value(store, e, files))
                 .collect::<Result<Vec<_>>>()?;
             Ok(json!(items))
         })?,
