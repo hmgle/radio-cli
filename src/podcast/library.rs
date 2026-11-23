@@ -58,7 +58,7 @@ impl Store {
             .map(|id| self.podcast_feed_id(id))
             .transpose()?;
         super::storage::register_download_availability(&self.conn, files.clone())?;
-        let result = self.read_snapshot(|store| {
+        let result = files.read_page(self, |store| {
             let base = "FROM podcast_episodes e JOIN podcast_feeds f ON f.id=e.feed_id
                 LEFT JOIN podcast_progress p ON p.episode_id=e.id
                 LEFT JOIN podcast_downloads d ON d.episode_id=e.id
@@ -89,7 +89,7 @@ impl Store {
             let ids = stmt.query_map(params![q.feed, query, q.status, q.downloaded, q.view,
                 if q.page.all { -1 } else { i64::from(q.page.limit) }, q.page.offset as i64], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            let rows = ids.iter().map(|id| super::commands::episode_value(store, &store.podcast_episode(id)?, files)).collect::<Result<Vec<_>>>()?;
+            let rows = ids.iter().map(|id| super::commands::episode_value(store, &store.podcast_episode(id)?, |path| files.observed_file(path))).collect::<Result<Vec<_>>>()?;
             let mut value = super::commands::page_result(&rows, total, q.page.clone());
             if let Some(feed) = &q.feed { value["feed_title"] = json!(store.podcast_feed(feed)?.title); }
             Ok(value)

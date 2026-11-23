@@ -400,7 +400,7 @@ pub(super) fn refresh_feeds(
 pub(super) fn episode_value(
     store: &Store,
     e: &Episode,
-    files: &super::download_files::DownloadFiles,
+    is_file: impl FnOnce(&str) -> bool,
 ) -> Result<Value> {
     let mut value = json!(e);
     let feed = store.podcast_feed(&e.feed_id)?;
@@ -418,7 +418,7 @@ pub(super) fn episode_value(
     )?);
     if let Some(d) = store.podcast_download(&e.id)? {
         value["download_state"] = json!(if d.state == "complete"
-            && d.offline_path_if(e, |path| files.is_file(path)).is_none()
+            && d.offline_path_if(e, is_file).is_none()
         {
             "stale"
         } else {
@@ -586,7 +586,7 @@ pub(super) fn manage_with_files(
             let (items, total) = store.podcast_episodes_page(&id, &query, &p)?;
             let items = items
                 .iter()
-                .map(|e| episode_value(store, e, files))
+                .map(|e| episode_value(store, e, |path| files.is_file(path)))
                 .collect::<Result<Vec<_>>>()?;
             let mut value = page_result(&items, total, p);
             value["feed_title"] = json!(store.podcast_feed(&id)?.title);
@@ -635,7 +635,9 @@ pub(super) fn manage_with_files(
                 let mut rows = Vec::new();
                 for d in store.podcast_downloads()? {
                     let mut value =
-                        episode_value(store, &store.podcast_episode(&d.episode_id)?, files)?;
+                        episode_value(store, &store.podcast_episode(&d.episode_id)?, |path| {
+                            files.is_file(path)
+                        })?;
                     value
                         .as_object_mut()
                         .unwrap()
@@ -689,11 +691,11 @@ pub(super) fn manage_with_files(
         } => return Err(error(crate::t!("podcast_playback_only"))),
         Action::Queue {
             action: QueueAction::List,
-        } => store.read_snapshot(|store| {
+        } => files.read_page(store, |store| {
             let items = store
                 .podcast_queue()?
                 .iter()
-                .map(|e| episode_value(store, e, files))
+                .map(|e| episode_value(store, e, |path| files.observed_file(path)))
                 .collect::<Result<Vec<_>>>()?;
             Ok(json!(items))
         })?,

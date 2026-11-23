@@ -50,7 +50,8 @@ pub(super) fn register_download_availability(
             let episode = context.get::<String>(1)?;
             let e: Episode = serde_json::from_str(&episode)
                 .map_err(|e| Error::UserFunctionError(Box::new(e)))?;
-            Ok(d.offline_path_if(&e, |path| files.is_file(path)).is_some())
+            Ok(d.offline_path_if(&e, |path| files.observed_file(path))
+                .is_some())
         },
     )?;
     Ok(())
@@ -754,6 +755,51 @@ mod tests {
             .unwrap();
         let episodes = store.podcast_episodes(&feed.id).unwrap();
         (dir, config, episodes)
+    }
+
+    #[test]
+    fn downloaded_library_releases_the_read_snapshot_before_probing_files() {
+        let (_dir, config, episodes) = queue_fixture();
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let episode = &episodes[0];
+        let audio = config.data_dir.join("local.audio");
+        std::fs::write(&audio, b"fixture").unwrap();
+        store
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                state: "complete".into(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: audio.to_string_lossy().into_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut files = super::super::download_files::DownloadFiles::default();
+        files.before_probe = Some(|path| {
+            let db = std::path::Path::new(path).with_file_name("radio.db");
+            let writer = rusqlite::Connection::open(db).unwrap();
+            writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+            writer
+                .execute(
+                    "INSERT INTO meta(key,value) VALUES ('checkpoint-test','ok')",
+                    [],
+                )
+                .unwrap();
+            let busy: i64 = writer
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(busy, 0);
+        });
+        let query = LibraryQuery {
+            downloaded: true,
+            ..Default::default()
+        };
+        let result = store
+            .podcast_library_with_files(&query, &std::sync::Arc::new(files))
+            .unwrap();
+        assert_eq!(result["total"], 1);
+        assert_eq!(result["items"][0]["id"], episode.id);
+        assert_eq!(result["items"][0]["download_state"], "complete");
     }
 
     #[test]
