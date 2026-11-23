@@ -1,4 +1,5 @@
 //! Session-scoped jobs keep network and file work away from media controls.
+use super::download_files::{BrowseFileProbe, DownloadFiles};
 use super::*;
 use crate::{
     config::Config,
@@ -9,7 +10,6 @@ use anyhow::Result;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -23,11 +23,11 @@ pub(crate) struct BrowseSnapshot {
 }
 
 impl BrowseSnapshot {
-    fn files_changed(&self, stop: &AtomicBool) -> bool {
+    fn files_changed(&self, stop: &AtomicBool, probe: &BrowseFileProbe) -> bool {
         self.files
             .iter()
             .take_while(|_| !stop.load(Ordering::Relaxed))
-            .any(|(path, exists)| Path::new(path).is_file() != *exists)
+            .any(|(path, exists)| probe.is_file(path, stop) != *exists)
     }
 }
 
@@ -36,58 +36,22 @@ pub(crate) struct BrowsePage {
     pub snapshot: Option<Arc<BrowseSnapshot>>,
 }
 
-type BrowseTask = Background<Option<BrowsePage>>;
-
-struct BrowseRequest {
-    config: Config,
-    action: Action,
-    previous: Option<Arc<BrowseSnapshot>>,
+struct BrowseTask {
+    job: Background<Option<BrowsePage>>,
+    probe: Arc<BrowseFileProbe>,
 }
 
-impl BrowseRequest {
-    fn start(self, lock: Option<Arc<MediaLock>>) -> Result<BrowseTask> {
-        Background::start("radio-podcast-browse", move |stop| {
-            let Self {
-                config,
-                action,
-                previous,
-            } = self;
-            let periodic = action.polls_browse();
-            let _lock = lock;
-            let path = config.data_dir.join("radio.db");
-            let store = if periodic {
-                Store::open_reader(&path)?
-            } else {
-                Store::open(&path)?
-            };
-            let revision = periodic.then(|| store.podcast_revision()).transpose()?;
-            if let Some(previous) = previous
-                && revision == Some(previous.revision)
-                && !previous.files_changed(&stop)
-            {
-                return Ok(None);
-            }
-            if stop.load(Ordering::Relaxed) {
-                return Err(DomainError::new(ErrorCode::Cancelled).into());
-            }
-            let files = Arc::new(super::download_files::DownloadFiles::new(stop.clone()));
-            let value = super::commands::manage_with_files(&config, &store, action, &stop, &files)?;
-            let snapshot = revision.map(|revision| {
-                Arc::new(BrowseSnapshot {
-                    revision,
-                    files: files.take_observations(),
-                })
-            });
-            Ok(Some(BrowsePage { value, snapshot }))
-        })
+impl Drop for BrowseTask {
+    fn drop(&mut self) {
+        self.job.cancel();
+        self.probe.wake_waiters();
     }
 }
 
 pub struct Runtime {
     action: Option<Background<Value>>,
-    browse: Option<(BrowseTask, bool)>,
-    retiring_probe: Option<BrowseTask>,
-    pending_probe: Option<BrowseRequest>,
+    browse: Option<BrowseTask>,
+    file_probe: Arc<BrowseFileProbe>,
     events: std::collections::VecDeque<Result<Value>>,
     subtitle_job: Option<Background<Value>>,
     retiring_subtitles: Vec<(String, Background<Value>)>,
@@ -109,8 +73,7 @@ impl Default for Runtime {
         Self {
             action: None,
             browse: None,
-            retiring_probe: None,
-            pending_probe: None,
+            file_probe: Arc::default(),
             events: Default::default(),
             subtitle_job: None,
             retiring_subtitles: vec![],
@@ -284,47 +247,46 @@ impl Runtime {
         previous: Option<Arc<BrowseSnapshot>>,
     ) -> Result<()> {
         self.cancel_browse();
-        let periodic = action.polls_browse();
-        let checks_files = matches!(
-            action,
-            Action::Library { .. }
-                | Action::Episodes { .. }
-                | Action::Downloads {
-                    action: DownloadAction::List
-                }
-                | Action::Queue {
-                    action: QueueAction::List
-                }
-        );
-        let request = BrowseRequest {
-            config: config.clone(),
-            action,
-            previous,
-        };
-        if checks_files && self.retiring_probe.is_some() {
-            // Only the latest request needs to run after the blocked syscall exits.
-            self.pending_probe = Some(request);
-        } else {
-            self.browse = Some((request.start((!periodic).then_some(lock))?, checks_files));
-        }
+        let config = config.clone();
+        let probe = self.file_probe.clone();
+        let job = Background::start("radio-podcast-browse", move |stop| {
+            let periodic = action.polls_browse();
+            let _lock = (!periodic).then_some(lock);
+            let path = config.data_dir.join("radio.db");
+            let store = if periodic {
+                Store::open_reader(&path)?
+            } else {
+                Store::open(&path)?
+            };
+            let revision = periodic.then(|| store.podcast_revision()).transpose()?;
+            if let Some(previous) = previous
+                && revision == Some(previous.revision)
+                && !previous.files_changed(&stop, &probe)
+            {
+                return Ok(None);
+            }
+            if stop.load(Ordering::Relaxed) {
+                return Err(DomainError::new(ErrorCode::Cancelled).into());
+            }
+            let files = Arc::new(DownloadFiles::for_browse(stop.clone(), probe));
+            let value = super::commands::manage_with_files(&config, &store, action, &stop, &files)?;
+            let snapshot = revision.map(|revision| {
+                Arc::new(BrowseSnapshot {
+                    revision,
+                    files: files.take_observations(),
+                })
+            });
+            Ok(Some(BrowsePage { value, snapshot }))
+        })?;
+        self.browse = Some(BrowseTask {
+            job,
+            probe: self.file_probe.clone(),
+        });
         Ok(())
     }
 
     pub(crate) fn poll_browse(&mut self) -> Option<Result<Option<BrowsePage>>> {
-        if self
-            .retiring_probe
-            .as_ref()
-            .is_some_and(|job| job.poll().is_some())
-        {
-            self.retiring_probe = None;
-            if let Some(request) = self.pending_probe.take() {
-                match request.start(None) {
-                    Ok(job) => self.browse = Some((job, true)),
-                    Err(error) => return Some(Err(error)),
-                }
-            }
-        }
-        let result = self.browse.as_ref()?.0.poll()?;
+        let result = self.browse.as_ref()?.job.poll()?;
         self.browse = None;
         Some(result)
     }
@@ -363,11 +325,7 @@ impl Runtime {
         Ok(())
     }
     pub(crate) fn cancel_browse(&mut self) {
-        self.pending_probe = None;
-        if let Some((job, true)) = self.browse.take() {
-            job.cancel();
-            self.retiring_probe = Some(job);
-        }
+        self.browse = None;
     }
     pub(crate) fn download_active(&self, id: &str) -> bool {
         self.cleanup_ids.iter().any(|v| v == id)
@@ -376,7 +334,7 @@ impl Runtime {
             || self.retiring_subtitles.iter().any(|(key, _)| key == id)
     }
     pub(crate) fn cancel(&mut self) -> bool {
-        let browse = self.browse.is_some() || self.pending_probe.is_some();
+        let browse = self.browse.is_some();
         self.cancel_browse();
         let action = self.action.take().is_some();
         let subtitles = self.subtitle_job.is_some();
@@ -569,60 +527,81 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repeated_refreshes_wait_for_the_blocked_probe_and_run_only_the_latest() {
+    fn online_episodes_load_while_another_episodes_probe_is_blocked() {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::test_support::config(dir.path());
         let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
-        let feed = store
-            .podcast_subscribe(
-                &Preview {
-                    feed: Feed {
-                        url: "https://example.test/feed".into(),
-                        ..Default::default()
+        let subscribe = |name: &str| {
+            let url = format!("https://example.test/{name}");
+            store
+                .podcast_subscribe(
+                    &Preview {
+                        feed: Feed {
+                            url: url.clone(),
+                            ..Default::default()
+                        },
+                        episodes: vec![Episode {
+                            title: name.into(),
+                            url: format!("{url}.mp3"),
+                            ..Default::default()
+                        }],
                     },
-                    episodes: vec![Episode {
-                        title: "Latest".into(),
-                        url: "https://example.test/audio".into(),
-                        ..Default::default()
-                    }],
-                },
-                "https://example.test/feed",
-            )
-            .unwrap();
-        let lock = Arc::new(MediaLock::acquire(&config.runtime_dir).unwrap());
-        let (release, wait) = std::sync::mpsc::channel();
-        let blocked = Background::start("blocked-file-probe", move |_| {
-            wait.recv().unwrap();
-            Ok(None)
-        })
-        .unwrap();
-        let mut runtime = Runtime {
-            browse: Some((blocked, true)),
-            ..Default::default()
+                    &url,
+                )
+                .unwrap()
         };
-        for i in 0..8 {
-            let action = Action::Episodes {
-                id: feed.id.clone(),
-                query: if i == 7 { "Latest" } else { "Skipped" }.into(),
-                page: LibraryQuery::default().page,
-            };
-            runtime.browse(&config, action, lock.clone(), None).unwrap();
-            assert!(runtime.poll_browse().is_none());
-            assert!(runtime.browse.is_none());
+        let a = subscribe("Downloaded");
+        let b = subscribe("Online");
+        let episode = store.podcast_episodes(&a.id).unwrap().remove(0);
+        store
+            .podcast_save_download(&Download {
+                episode_id: episode.id.clone(),
+                state: "complete".into(),
+                url: episode.url.clone(),
+                media: Some(episode.media()),
+                path: dir.path().join("audio").to_string_lossy().into_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        let action = |id: &str| Action::Episodes {
+            id: id.into(),
+            query: String::new(),
+            page: LibraryQuery::default().page,
+        };
+        let lock = Arc::new(MediaLock::acquire(&config.runtime_dir).unwrap());
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let wait = std::sync::Mutex::new(wait);
+        let mut runtime = Runtime::default();
+        Arc::get_mut(&mut runtime.file_probe).unwrap().before_probe = Some(Box::new(move || {
+            entered.send(()).unwrap();
+            wait.lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+        }));
+        runtime
+            .browse(&config, action(&a.id), lock.clone(), None)
+            .unwrap();
+        ready.recv_timeout(Duration::from_secs(3)).unwrap();
+        for _ in 0..8 {
+            runtime
+                .browse(&config, action(&a.id), lock.clone(), None)
+                .unwrap();
         }
-        release.send(()).unwrap();
+        runtime.browse(&config, action(&b.id), lock, None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             if let Some(result) = runtime.poll_browse() {
                 let page = result.unwrap().unwrap();
-                assert_eq!(page.value["items"][0]["title"], "Latest");
+                assert_eq!(page.value["items"][0]["title"], "Online");
                 break;
             }
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(runtime.pending_probe.is_none());
-        assert!(runtime.retiring_probe.is_none());
+        assert!(ready.try_recv().is_err());
+        release.send(()).unwrap();
     }
 
     #[test]
@@ -676,7 +655,7 @@ mod tests {
             files: files.take_observations(),
         };
         assert_eq!(snapshot.files.get(path), Some(&false));
-        assert!(snapshot.files_changed(&AtomicBool::new(false)));
+        assert!(snapshot.files_changed(&AtomicBool::new(false), &BrowseFileProbe::default()));
         let page = store.podcast_library(&filter).unwrap();
         assert_eq!(page["total"], 1);
         assert_eq!(page["items"][0]["download_state"], "complete");
