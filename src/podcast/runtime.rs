@@ -36,9 +36,58 @@ pub(crate) struct BrowsePage {
     pub snapshot: Option<Arc<BrowseSnapshot>>,
 }
 
+type BrowseTask = Background<Option<BrowsePage>>;
+
+struct BrowseRequest {
+    config: Config,
+    action: Action,
+    previous: Option<Arc<BrowseSnapshot>>,
+}
+
+impl BrowseRequest {
+    fn start(self, lock: Option<Arc<MediaLock>>) -> Result<BrowseTask> {
+        Background::start("radio-podcast-browse", move |stop| {
+            let Self {
+                config,
+                action,
+                previous,
+            } = self;
+            let periodic = action.polls_browse();
+            let _lock = lock;
+            let path = config.data_dir.join("radio.db");
+            let store = if periodic {
+                Store::open_reader(&path)?
+            } else {
+                Store::open(&path)?
+            };
+            let revision = periodic.then(|| store.podcast_revision()).transpose()?;
+            if let Some(previous) = previous
+                && revision == Some(previous.revision)
+                && !previous.files_changed(&stop)
+            {
+                return Ok(None);
+            }
+            if stop.load(Ordering::Relaxed) {
+                return Err(DomainError::new(ErrorCode::Cancelled).into());
+            }
+            let files = Arc::new(super::download_files::DownloadFiles::new(stop.clone()));
+            let value = super::commands::manage_with_files(&config, &store, action, &stop, &files)?;
+            let snapshot = revision.map(|revision| {
+                Arc::new(BrowseSnapshot {
+                    revision,
+                    files: files.take_observations(),
+                })
+            });
+            Ok(Some(BrowsePage { value, snapshot }))
+        })
+    }
+}
+
 pub struct Runtime {
     action: Option<Background<Value>>,
-    browse: Option<Background<Option<BrowsePage>>>,
+    browse: Option<(BrowseTask, bool)>,
+    retiring_probe: Option<BrowseTask>,
+    pending_probe: Option<BrowseRequest>,
     events: std::collections::VecDeque<Result<Value>>,
     subtitle_job: Option<Background<Value>>,
     retiring_subtitles: Vec<(String, Background<Value>)>,
@@ -60,6 +109,8 @@ impl Default for Runtime {
         Self {
             action: None,
             browse: None,
+            retiring_probe: None,
+            pending_probe: None,
             events: Default::default(),
             subtitle_job: None,
             retiring_subtitles: vec![],
@@ -232,41 +283,48 @@ impl Runtime {
         lock: Arc<MediaLock>,
         previous: Option<Arc<BrowseSnapshot>>,
     ) -> Result<()> {
-        let config = config.clone();
-        self.browse = Some(Background::start("radio-podcast-browse", move |stop| {
-            let periodic = action.polls_browse();
-            let _lock = (!periodic).then_some(lock);
-            let path = config.data_dir.join("radio.db");
-            let store = if periodic {
-                Store::open_reader(&path)?
-            } else {
-                Store::open(&path)?
-            };
-            let revision = periodic.then(|| store.podcast_revision()).transpose()?;
-            if let Some(previous) = previous
-                && revision == Some(previous.revision)
-                && !previous.files_changed(&stop)
-            {
-                return Ok(None);
-            }
-            if stop.load(Ordering::Relaxed) {
-                return Err(DomainError::new(ErrorCode::Cancelled).into());
-            }
-            let files = Arc::new(super::download_files::DownloadFiles::new(stop.clone()));
-            let value = super::commands::manage_with_files(&config, &store, action, &stop, &files)?;
-            let snapshot = revision.map(|revision| {
-                Arc::new(BrowseSnapshot {
-                    revision,
-                    files: files.take_observations(),
-                })
-            });
-            Ok(Some(BrowsePage { value, snapshot }))
-        })?);
+        self.cancel_browse();
+        let periodic = action.polls_browse();
+        let checks_files = matches!(
+            action,
+            Action::Library { .. }
+                | Action::Episodes { .. }
+                | Action::Downloads {
+                    action: DownloadAction::List
+                }
+                | Action::Queue {
+                    action: QueueAction::List
+                }
+        );
+        let request = BrowseRequest {
+            config: config.clone(),
+            action,
+            previous,
+        };
+        if checks_files && self.retiring_probe.is_some() {
+            // Only the latest request needs to run after the blocked syscall exits.
+            self.pending_probe = Some(request);
+        } else {
+            self.browse = Some((request.start((!periodic).then_some(lock))?, checks_files));
+        }
         Ok(())
     }
 
     pub(crate) fn poll_browse(&mut self) -> Option<Result<Option<BrowsePage>>> {
-        let result = self.browse.as_ref()?.poll()?;
+        if self
+            .retiring_probe
+            .as_ref()
+            .is_some_and(|job| job.poll().is_some())
+        {
+            self.retiring_probe = None;
+            if let Some(request) = self.pending_probe.take() {
+                match request.start(None) {
+                    Ok(job) => self.browse = Some((job, true)),
+                    Err(error) => return Some(Err(error)),
+                }
+            }
+        }
+        let result = self.browse.as_ref()?.0.poll()?;
         self.browse = None;
         Some(result)
     }
@@ -305,7 +363,11 @@ impl Runtime {
         Ok(())
     }
     pub(crate) fn cancel_browse(&mut self) {
-        self.browse = None;
+        self.pending_probe = None;
+        if let Some((job, true)) = self.browse.take() {
+            job.cancel();
+            self.retiring_probe = Some(job);
+        }
     }
     pub(crate) fn download_active(&self, id: &str) -> bool {
         self.cleanup_ids.iter().any(|v| v == id)
@@ -314,7 +376,8 @@ impl Runtime {
             || self.retiring_subtitles.iter().any(|(key, _)| key == id)
     }
     pub(crate) fn cancel(&mut self) -> bool {
-        let browse = self.browse.take().is_some();
+        let browse = self.browse.is_some() || self.pending_probe.is_some();
+        self.cancel_browse();
         let action = self.action.take().is_some();
         let subtitles = self.subtitle_job.is_some();
         self.cancel_subtitles();
@@ -504,6 +567,63 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_refreshes_wait_for_the_blocked_probe_and_run_only_the_latest() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let store = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        let feed = store
+            .podcast_subscribe(
+                &Preview {
+                    feed: Feed {
+                        url: "https://example.test/feed".into(),
+                        ..Default::default()
+                    },
+                    episodes: vec![Episode {
+                        title: "Latest".into(),
+                        url: "https://example.test/audio".into(),
+                        ..Default::default()
+                    }],
+                },
+                "https://example.test/feed",
+            )
+            .unwrap();
+        let lock = Arc::new(MediaLock::acquire(&config.runtime_dir).unwrap());
+        let (release, wait) = std::sync::mpsc::channel();
+        let blocked = Background::start("blocked-file-probe", move |_| {
+            wait.recv().unwrap();
+            Ok(None)
+        })
+        .unwrap();
+        let mut runtime = Runtime {
+            browse: Some((blocked, true)),
+            ..Default::default()
+        };
+        for i in 0..8 {
+            let action = Action::Episodes {
+                id: feed.id.clone(),
+                query: if i == 7 { "Latest" } else { "Skipped" }.into(),
+                page: LibraryQuery::default().page,
+            };
+            runtime.browse(&config, action, lock.clone(), None).unwrap();
+            assert!(runtime.poll_browse().is_none());
+            assert!(runtime.browse.is_none());
+        }
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(result) = runtime.poll_browse() {
+                let page = result.unwrap().unwrap();
+                assert_eq!(page.value["items"][0]["title"], "Latest");
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(runtime.pending_probe.is_none());
+        assert!(runtime.retiring_probe.is_none());
+    }
 
     #[test]
     fn browse_snapshot_uses_the_same_file_observation_as_library_rows() {
