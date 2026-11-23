@@ -497,6 +497,16 @@ impl Store {
             .map(|j| Ok(serde_json::from_str(&j?)?))
             .collect()
     }
+    pub(crate) fn podcast_completed_download_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT json_extract(json,'$.path') FROM podcast_downloads
+             WHERE CASE WHEN json_valid(json) THEN json_extract(json,'$.state')='complete'
+               AND json_type(json,'$.path')='text' END",
+        )?;
+        Ok(stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
     pub fn podcast_queue(&self) -> Result<Vec<Episode>> {
         let mut stmt = self
             .conn
