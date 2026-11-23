@@ -94,6 +94,14 @@ pub fn config(dir: &std::path::Path) -> radio_cli::config::Config {
     config_with_api(dir, "http://127.0.0.1:1")
 }
 
+pub fn strip_podcast_episode_order(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "DROP INDEX podcast_episode_dates;
+         ALTER TABLE podcast_episodes DROP COLUMN legacy_order;",
+    )
+    .unwrap();
+}
+
 pub fn downgrade_podcast_schema_to_v9(conn: &rusqlite::Connection) {
     // Released v9 has subscriptions and playback, but no listening library
     // or revision counter. Preserve its existing podcast rows.
@@ -110,12 +118,12 @@ pub fn downgrade_podcast_schema_to_v9(conn: &rusqlite::Connection) {
         conn.execute_batch(&format!("DROP TRIGGER {trigger}"))
             .unwrap();
     }
+    strip_podcast_episode_order(conn);
     conn.execute_batch(
         "DROP TABLE podcast_bookmarks;
          DROP TABLE podcast_saved;
          DROP TABLE podcast_inbox;
          DROP TABLE podcast_revision;
-         DROP INDEX podcast_episode_dates;
          DROP INDEX podcast_history_episode;
          PRAGMA user_version=9;",
     )

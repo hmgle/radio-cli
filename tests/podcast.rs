@@ -1409,7 +1409,7 @@ fn migration_from_schema_nine_keeps_podcasts_and_enables_the_library() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        10
+        11
     );
 }
 

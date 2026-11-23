@@ -3,6 +3,18 @@ use crate::store::Store;
 use anyhow::Result;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
+const EPISODE_NEWEST_ORDER: &str = "CASE WHEN json_valid(json) THEN json_extract(json,'$.published') END DESC,
+    CASE WHEN json_valid(json) THEN COALESCE(json_extract(json,'$.source_order'),legacy_order) END,id";
+
+fn episode_page_sql() -> String {
+    format!(
+        "SELECT e.json,p.position_ms,p.duration_ms,p.completed FROM podcast_episodes e
+         LEFT JOIN podcast_progress p ON p.episode_id=e.id WHERE e.feed_id=?1
+         AND (?2='' OR instr(podcast_lower(json_extract(e.json,'$.title')),?2)>0)
+         ORDER BY {EPISODE_NEWEST_ORDER} LIMIT ?3 OFFSET ?4",
+    )
+}
+
 pub(crate) fn register_functions(conn: &rusqlite::Connection) -> Result<()> {
     use rusqlite::{Error, functions::FunctionFlags};
 
@@ -53,7 +65,6 @@ pub(crate) fn migrate_library(conn: &rusqlite::Connection) -> Result<()> {
     CREATE TABLE IF NOT EXISTS podcast_saved(episode_id TEXT PRIMARY KEY REFERENCES podcast_episodes(id));
     CREATE TABLE IF NOT EXISTS podcast_inbox(episode_id TEXT PRIMARY KEY REFERENCES podcast_episodes(id));")?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS podcast_revision(n INTEGER NOT NULL); INSERT INTO podcast_revision SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM podcast_revision);
-        CREATE INDEX IF NOT EXISTS podcast_episode_dates ON podcast_episodes(feed_id,CASE WHEN json_valid(json) THEN json_extract(json,'$.published') END DESC,CASE WHEN json_valid(json) THEN json_extract(json,'$.source_order') END,id);
         CREATE INDEX IF NOT EXISTS podcast_history_episode ON podcast_history(episode_id,played_at DESC);")?;
     for table in [
         "podcast_feeds",
@@ -72,6 +83,20 @@ pub(crate) fn migrate_library(conn: &rusqlite::Connection) -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn migrate_episode_order(conn: &rusqlite::Connection) -> Result<()> {
+    // A rowid cannot appear in an index expression. Save the old fallback for
+    // episodes without a source position so existing pages keep their order.
+    conn.execute_batch(&format!(
+        "DROP INDEX IF EXISTS podcast_episode_dates;
+         ALTER TABLE podcast_episodes ADD COLUMN legacy_order INTEGER;
+         UPDATE podcast_episodes SET legacy_order=rowid
+         WHERE CASE WHEN json_valid(json) THEN json_extract(json,'$.source_order') IS NULL END;
+         CREATE INDEX podcast_episode_dates ON podcast_episodes(feed_id,{EPISODE_NEWEST_ORDER});"
+    ))?;
+    Ok(())
+}
+
 impl Store {
     pub fn podcast_revision(&self) -> Result<u64> {
         Ok(self
@@ -245,7 +270,7 @@ impl Store {
             } else {
                 uuid::Uuid::new_v4().to_string()
             };
-            self.conn.execute("INSERT INTO podcast_episodes VALUES (?1,?2,?3,?4) ON CONFLICT(feed_id,identity) DO UPDATE SET json=excluded.json",params![e.id,feed_id,identity,serde_json::to_string(&e)?])?;
+            self.conn.execute("INSERT INTO podcast_episodes(id,feed_id,identity,json) VALUES (?1,?2,?3,?4) ON CONFLICT(feed_id,identity) DO UPDATE SET json=excluded.json",params![e.id,feed_id,identity,serde_json::to_string(&e)?])?;
             if baseline && new_episode {
                 if settings.auto_download && !e.completed {
                     self.podcast_save_download(&Download {
@@ -294,11 +319,12 @@ impl Store {
         Ok(self
             .conn
             .query_row(
-                "SELECT position FROM (
-                SELECT id,row_number() OVER (
-                    ORDER BY json_extract(json,'$.published') DESC,COALESCE(json_extract(json,'$.source_order'),rowid),id
-                )-1 AS position FROM podcast_episodes WHERE feed_id=?1
-             ) WHERE id=?2",
+                &format!(
+                    "SELECT position FROM (
+                        SELECT id,row_number() OVER (ORDER BY {EPISODE_NEWEST_ORDER})-1 AS position
+                        FROM podcast_episodes WHERE feed_id=?1
+                     ) WHERE id=?2",
+                ),
                 params![feed, id],
                 |r| r.get(0),
             )
@@ -337,12 +363,7 @@ impl Store {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Episode>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT e.json,p.position_ms,p.duration_ms,p.completed FROM podcast_episodes e
-             LEFT JOIN podcast_progress p ON p.episode_id=e.id WHERE e.feed_id=?1
-             AND (?2='' OR instr(podcast_lower(json_extract(e.json,'$.title')),?2)>0)
-             ORDER BY json_extract(e.json,'$.published') DESC,COALESCE(json_extract(e.json,'$.source_order'),e.rowid),e.id LIMIT ?3 OFFSET ?4",
-        )?;
+        let mut stmt = self.conn.prepare_cached(&episode_page_sql())?;
         let rows = stmt.query_map(params![id, query, limit, offset], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -596,6 +617,94 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_ten_episode_order_keeps_legacy_rows_and_uses_the_date_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("radio.db");
+        let store = Store::open(&path).unwrap();
+        let preview = Preview {
+            feed: Feed {
+                url: "https://example.test/rss".into(),
+                ..Default::default()
+            },
+            episodes: [
+                ("Undated", None, 0),
+                ("Legacy", Some("2026-01-01T00:00:00Z"), 70),
+                ("Newest", Some("2026-01-02T00:00:00Z"), 0),
+                ("First on day", Some("2026-01-01T00:00:00Z"), 1),
+                ("Last on day", Some("2026-01-01T00:00:00Z"), 3),
+            ]
+            .into_iter()
+            .map(|(title, published, order)| Episode {
+                title: title.into(),
+                url: format!("https://example.test/{}", title.replace(' ', "-")),
+                published: published.map(str::to_owned),
+                source_order: Some(order),
+                ..Default::default()
+            })
+            .collect(),
+        };
+        let feed = store
+            .podcast_subscribe(&preview, &preview.feed.url)
+            .unwrap();
+        crate::test_support::strip_podcast_episode_order(&store.conn);
+        store
+            .conn
+            .execute_batch(
+                "UPDATE podcast_episodes SET json=json_remove(json,'$.source_order') WHERE rowid=2;
+             CREATE INDEX podcast_episode_dates ON podcast_episodes(
+                 feed_id,CASE WHEN json_valid(json) THEN json_extract(json,'$.published') END DESC,
+                 CASE WHEN json_valid(json) THEN json_extract(json,'$.source_order') END,id);
+             PRAGMA user_version=10;",
+            )
+            .unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let episodes = store.podcast_episodes(&feed.id).unwrap();
+        assert_eq!(
+            episodes
+                .iter()
+                .map(|e| e.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Newest", "First on day", "Legacy", "Last on day", "Undated"],
+        );
+        let legacy = &episodes[2];
+        assert_eq!(legacy.source_order, None);
+        assert_eq!(
+            store
+                .podcast_episode_position(&feed.id, &legacy.id)
+                .unwrap(),
+            Some(2)
+        );
+        let page = crate::cli::Page {
+            offset: 2,
+            limit: 2,
+            all: false,
+        };
+        let (rows, total) = store.podcast_episodes_page(&feed.id, "", &page).unwrap();
+        assert_eq!(rows, episodes[2..4]);
+        assert_eq!(total, episodes.len());
+        let plan = store
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", episode_page_sql()))
+            .unwrap()
+            .query_map(params![feed.id, "", page.limit, page.offset as i64], |r| {
+                r.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|row| row.contains("podcast_episode_dates")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|row| row.contains("TEMP B-TREE")),
+            "{plan:?}"
+        );
+    }
     use std::sync::{Arc, Barrier, atomic::AtomicBool};
 
     fn queue_fixture() -> (tempfile::TempDir, crate::config::Config, Vec<Episode>) {

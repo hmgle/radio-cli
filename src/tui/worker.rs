@@ -1212,9 +1212,9 @@ mod tests {
         store.set_meta("pref_last_media", "episode").unwrap();
         store.set_meta("pref_last_episode", &episode.id).unwrap();
         crate::test_support::downgrade_podcast_schema_to_v9(&store.conn);
-        let mut app = App::restore(&store, config.settings.resume).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let engine = Engine::new(config, stop.clone()).unwrap();
+        let mut app = App::restore(engine.store(), engine.config().settings.resume).unwrap();
         let view = Arc::new(Mutex::new(View::new(engine.status().clone())));
         let (sender, receiver) = command::channel(8);
         let output = view.clone();

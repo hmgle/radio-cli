@@ -72,6 +72,7 @@ mod tests {
                     .unwrap();
             }
         }
+        crate::test_support::strip_podcast_episode_order(&store.conn);
         store
             .conn
             .execute_batch("DROP TABLE content_revisions; PRAGMA user_version=6")

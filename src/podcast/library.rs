@@ -69,9 +69,9 @@ impl Store {
             let order = if q.view == "history" { "h.played_at DESC,e.id" }
                 else if q.view == "continue" { "p.updated_at DESC,e.id" }
                 else { match q.sort.as_str() {
-                    "oldest" => "json_extract(e.json,'$.published') IS NULL,json_extract(e.json,'$.published'),COALESCE(json_extract(e.json,'$.source_order'),e.rowid),e.id",
+                    "oldest" => "json_extract(e.json,'$.published') IS NULL,json_extract(e.json,'$.published'),COALESCE(json_extract(e.json,'$.source_order'),e.legacy_order),e.id",
                     "title" => "podcast_lower(json_extract(e.json,'$.title')),e.id",
-                    _ => "json_extract(e.json,'$.published') DESC,COALESCE(json_extract(e.json,'$.source_order'),e.rowid),e.id",
+                    _ => "json_extract(e.json,'$.published') DESC,COALESCE(json_extract(e.json,'$.source_order'),e.legacy_order),e.id",
                 }};
             let sql = format!("SELECT e.id {base} ORDER BY {order} LIMIT ?6 OFFSET ?7");
             let mut stmt = store.conn.prepare(&sql)?;

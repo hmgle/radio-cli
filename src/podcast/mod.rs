@@ -137,6 +137,7 @@ impl Download {
 }
 
 pub(crate) use storage::migrate;
+pub(crate) use storage::migrate_episode_order;
 pub(crate) use storage::migrate_library;
 pub(crate) use storage::register_functions;
 
