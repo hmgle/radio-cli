@@ -59,7 +59,7 @@ impl Store {
                 AND (?3='all' OR (?3='played' AND COALESCE(p.completed,0)=1)
                   OR (?3='unplayed' AND COALESCE(p.completed,0)=0)
                   OR (?3='progress' AND COALESCE(p.completed,0)=0 AND p.position_ms>0))
-                AND (?4=0 OR json_extract(d.json,'$.state')='complete')
+                AND (?4=0 OR podcast_download_available(d.json,e.json))
                 AND ((?5='all' AND f.subscribed=1) OR (?5='continue' AND COALESCE(p.completed,0)=0 AND p.position_ms>0)
                   OR (?5='history' AND h.played_at IS NOT NULL) OR (?5='saved' AND s.episode_id IS NOT NULL)
                   OR (?5='inbox' AND i.episode_id IS NOT NULL AND f.subscribed=1))";

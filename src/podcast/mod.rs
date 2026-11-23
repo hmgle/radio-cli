@@ -127,6 +127,13 @@ impl Download {
     pub(crate) fn matches_media(&self, episode: &Episode) -> bool {
         self.url == episode.url && self.media.as_ref() == Some(&episode.media())
     }
+
+    pub(crate) fn offline_path(&self, episode: &Episode) -> Option<&str> {
+        (self.state == "complete"
+            && self.matches_media(episode)
+            && std::path::Path::new(&self.path).is_file())
+        .then_some(self.path.as_str())
+    }
 }
 
 pub(crate) use storage::migrate;
@@ -191,7 +198,11 @@ pub fn text_output(value: &serde_json::Value) -> String {
                     columns
                         .iter()
                         .map(|key| {
-                            let value = &row[*key];
+                            let value = if *key == "state" && row["download_state"].is_string() {
+                                &row["download_state"]
+                            } else {
+                                &row[*key]
+                            };
                             if value.is_null() {
                                 "—".into()
                             } else {

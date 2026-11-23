@@ -391,7 +391,11 @@ pub(super) fn episode_value(store: &Store, e: &Episode) -> Result<Value> {
         |r| r.get::<_, bool>(0)
     )?);
     if let Some(d) = store.podcast_download(&e.id)? {
-        value["download_state"] = json!(d.state);
+        value["download_state"] = json!(if d.state == "complete" && d.offline_path(e).is_none() {
+            "stale"
+        } else {
+            &d.state
+        });
     }
     Ok(value)
 }

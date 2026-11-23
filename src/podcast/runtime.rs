@@ -429,10 +429,7 @@ impl Runtime {
                 episode_id: id.into(),
                 ..Default::default()
             });
-            if d.state != "complete"
-                || !d.matches_media(&episode)
-                || !std::path::Path::new(&d.path).is_file()
-            {
+            if d.offline_path(&episode).is_none() {
                 d.generation = d.generation.saturating_add(1);
                 d.state = "queued".into();
                 d.error = None;

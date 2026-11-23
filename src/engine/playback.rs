@@ -149,12 +149,7 @@ impl PlaybackController {
         let input = session
             .store
             .podcast_download(id)?
-            .filter(|d| {
-                d.state == "complete"
-                    && d.matches_media(&e)
-                    && std::path::Path::new(&d.path).is_file()
-            })
-            .map(|d| d.path)
+            .and_then(|d| d.offline_path(&e).map(str::to_owned))
             .unwrap_or_else(|| e.url.clone());
         if from_start || e.completed {
             e.position_ms = 0;

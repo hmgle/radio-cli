@@ -505,7 +505,7 @@ fn stale_downloads_are_skipped_for_playback_and_replaced_on_download() {
         .unwrap();
     assert!(output.status.success());
     let new_audio = output.stdout;
-    for changed in ["url", "bytes", "duration", "legacy"] {
+    for changed in ["url", "bytes", "duration", "legacy", "missing"] {
         let serve_new = Arc::new(AtomicBool::new(false));
         let flag = serve_new.clone();
         let old = old_audio.clone();
@@ -535,6 +535,13 @@ fn stale_downloads_are_skipped_for_playback_and_replaced_on_download() {
         let stop = Arc::new(AtomicBool::new(false));
         let old_download = podcast::download(&config, &episode.id, &stop).unwrap();
         assert_eq!(std::fs::read(&old_download.path).unwrap(), old_audio);
+        let downloaded = podcast::LibraryQuery {
+            downloaded: true,
+            ..Default::default()
+        };
+        let rows = engine.store().podcast_library(&downloaded).unwrap();
+        assert_eq!(rows["total"], 1);
+        assert_eq!(rows["items"][0]["download_state"], "complete");
         serve_new.store(true, std::sync::atomic::Ordering::Relaxed);
         match changed {
             "url" => p.episodes[0].url = format!("{}/new.mp3", server.url),
@@ -548,6 +555,7 @@ fn stale_downloads_are_skipped_for_playback_and_replaced_on_download() {
                     .podcast_save_download(&serde_json::from_value(value).unwrap())
                     .unwrap();
             }
+            "missing" => std::fs::remove_file(&old_download.path).unwrap(),
             _ => unreachable!(),
         }
         engine
@@ -555,11 +563,31 @@ fn stale_downloads_are_skipped_for_playback_and_replaced_on_download() {
             .podcast_refresh_merge(&feed, Some(p))
             .unwrap();
         let current = engine.store().podcast_episode(&episode.id).unwrap();
+        let rows = engine.store().podcast_library(&downloaded).unwrap();
+        assert_eq!(rows["total"], 0, "{changed}");
+        assert_eq!(rows["items"], serde_json::json!([]), "{changed}");
+        let rows = engine.store().podcast_library(&Default::default()).unwrap();
+        assert_eq!(rows["items"][0]["download_state"], "stale", "{changed}");
+        let downloads = podcast::manage(
+            &config,
+            engine.store(),
+            Action::Downloads {
+                action: podcast::DownloadAction::List,
+            },
+            &stop,
+        )
+        .unwrap();
+        assert_eq!(downloads[0]["state"], "complete", "{changed}");
+        assert_eq!(downloads[0]["download_state"], "stale", "{changed}");
+        assert!(podcast::text_output(&downloads).contains("\tstale\t"));
         engine.play_episode(&episode.id, false, None).unwrap();
         assert_eq!(engine.status().source_url, current.url, "{changed}");
         engine.stop_playback().unwrap();
         let new_download = podcast::download(&config, &episode.id, &stop).unwrap();
         assert_eq!(new_download.state, "complete");
+        let rows = engine.store().podcast_library(&downloaded).unwrap();
+        assert_eq!(rows["total"], 1, "{changed}");
+        assert_eq!(rows["items"][0]["download_state"], "complete", "{changed}");
         assert_eq!(
             std::fs::read(&new_download.path).unwrap(),
             new_audio,

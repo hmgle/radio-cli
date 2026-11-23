@@ -132,6 +132,7 @@ pub(super) fn items(value: &Value) -> Vec<Item> {
             } else {
                 "info"
             };
+            let download_state = v["download_state"].as_str().or_else(|| v["state"].as_str());
             Item {
                 command: v["command"].as_str().map(str::to_owned),
                 input: v["input"].as_bool().unwrap_or(false),
@@ -151,16 +152,7 @@ pub(super) fn items(value: &Value) -> Vec<Item> {
                         v["title"]
                             .as_str()
                             .unwrap_or(crate::t!("podcast_episode_unknown")),
-                        match v["state"].as_str().unwrap_or("") {
-                            "queued" => crate::t!("podcast_download_queued"),
-                            "downloading" => crate::t!("podcast_download_downloading"),
-                            "paused" => crate::t!("podcast_download_paused"),
-                            "cancelled" => crate::t!("podcast_download_cancelled"),
-                            "failed" => crate::t!("podcast_download_failed"),
-                            "complete" => crate::t!("podcast_download_complete"),
-                            "removed" => crate::t!("podcast_download_removed"),
-                            other => other,
-                        },
+                        download_label(download_state.unwrap_or("")),
                         v["bytes"]
                     )
                 } else {
@@ -196,10 +188,7 @@ pub(super) fn items(value: &Value) -> Vec<Item> {
                 feed_id: v["feed_id"].as_str().map(str::to_owned),
                 sort: v["sort"].as_str().map(str::to_owned),
                 bookmark_id: v["bookmark_id"].as_str().map(str::to_owned),
-                download_state: v["download_state"]
-                    .as_str()
-                    .or_else(|| v["state"].as_str())
-                    .map(str::to_owned),
+                download_state: download_state.map(str::to_owned),
                 queued: v["queued"].as_bool().unwrap_or(false),
                 saved: v["saved"].as_bool().unwrap_or(false),
                 meta: metadata(v),
@@ -208,6 +197,20 @@ pub(super) fn items(value: &Value) -> Vec<Item> {
         })
         .collect()
 }
+fn download_label(state: &str) -> &str {
+    match state {
+        "queued" => crate::t!("podcast_download_queued"),
+        "downloading" => crate::t!("podcast_download_downloading"),
+        "paused" => crate::t!("podcast_download_paused"),
+        "cancelled" => crate::t!("podcast_download_cancelled"),
+        "failed" => crate::t!("podcast_download_failed"),
+        "complete" => crate::t!("podcast_download_complete"),
+        "stale" => crate::t!("podcast_download_stale"),
+        "removed" => crate::t!("podcast_download_removed"),
+        other => other,
+    }
+}
+
 fn metadata(v: &Value) -> String {
     let mut parts = Vec::new();
     if let Some(rank) = v["chartRank"].as_u64() {
@@ -274,19 +277,7 @@ fn metadata(v: &Value) -> String {
         parts.push("≡".into());
     }
     if let Some(state) = v["download_state"].as_str() {
-        parts.push(
-            match state {
-                "queued" => crate::t!("podcast_download_queued"),
-                "downloading" => crate::t!("podcast_download_downloading"),
-                "paused" => crate::t!("podcast_download_paused"),
-                "cancelled" => crate::t!("podcast_download_cancelled"),
-                "failed" => crate::t!("podcast_download_failed"),
-                "complete" => crate::t!("podcast_download_complete"),
-                "removed" => crate::t!("podcast_download_removed"),
-                other => other,
-            }
-            .into(),
-        );
+        parts.push(download_label(state).into());
     }
     if let Some(n) = v["unplayed_count"].as_u64() {
         parts.push(format!("○ {n}"));

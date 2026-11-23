@@ -175,6 +175,10 @@ commands can inherit a playing episode.
 `podcast library` returns the same page shape as `episodes`, with decorated
 rows containing `author`, `feed_title`, `queued`, `saved` and optional
 `download_state`. `queue list` includes the same episode display fields.
+In those fields, `download_state: "complete"` indicates that a local file
+exists and matches the current enclosure. `"stale"` means a completed
+download needs to be downloaded again. The download object's `state` still
+records the transfer outcome.
 `list` adds `unplayed_count` and the configured `sort`.
 Feed objects add nullable `new_feed_url`. Episodes add nullable `source_order`,
 nullable `chapters_url`, and `chapters:[{title,position_ms}]`. Old records use

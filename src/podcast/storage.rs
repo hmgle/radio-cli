@@ -4,12 +4,33 @@ use anyhow::Result;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 pub(crate) fn register_functions(conn: &rusqlite::Connection) -> Result<()> {
+    use rusqlite::{Error, functions::FunctionFlags};
+
     conn.create_scalar_function(
         "podcast_lower",
         1,
-        rusqlite::functions::FunctionFlags::SQLITE_UTF8
-            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |context| Ok(context.get::<String>(0)?.to_lowercase()),
+    )?;
+    // Availability also depends on the filesystem, so this function is not deterministic.
+    conn.create_scalar_function(
+        "podcast_download_available",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DIRECTONLY,
+        |context| {
+            let Some(download) = context.get::<Option<String>>(0)? else {
+                return Ok(false);
+            };
+            let d: Download = serde_json::from_str(&download)
+                .map_err(|e| Error::UserFunctionError(Box::new(e)))?;
+            if d.state != "complete" {
+                return Ok(false);
+            }
+            let episode = context.get::<String>(1)?;
+            let e: Episode = serde_json::from_str(&episode)
+                .map_err(|e| Error::UserFunctionError(Box::new(e)))?;
+            Ok(d.offline_path(&e).is_some())
+        },
     )?;
     Ok(())
 }
