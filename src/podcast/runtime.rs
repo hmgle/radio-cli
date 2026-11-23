@@ -253,11 +253,13 @@ impl Runtime {
             let periodic = action.polls_browse();
             let _lock = (!periodic).then_some(lock);
             let path = config.data_dir.join("radio.db");
-            let store = if periodic {
+            let mut store = if periodic {
                 Store::open_reader(&path)?
             } else {
                 Store::open(&path)?
             };
+            let cancelled = stop.clone();
+            store.cancel_queries_when(move || cancelled.load(Ordering::Relaxed))?;
             let revision = periodic.then(|| store.podcast_revision()).transpose()?;
             if let Some(previous) = previous
                 && revision == Some(previous.revision)
@@ -525,6 +527,60 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelling_browse_releases_an_active_sqlite_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::test_support::config(dir.path());
+        let writer = Store::open(&config.data_dir.join("radio.db")).unwrap();
+        // Make the first browse query scan for several seconds without a large fixture.
+        writer
+            .conn
+            .execute_batch(
+                "ALTER TABLE podcast_revision RENAME TO original_revision;
+             CREATE VIEW podcast_revision AS WITH RECURSIVE rows(n) AS
+             (VALUES(0) UNION ALL SELECT n+1 FROM rows WHERE n<50000000)
+             SELECT max(n) AS n FROM rows;",
+            )
+            .unwrap();
+        writer.conn.busy_timeout(Duration::ZERO).unwrap();
+        let checkpoint_busy = || -> bool {
+            writer
+                .conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+                .unwrap()
+        };
+        let lock = Arc::new(MediaLock::acquire(&config.runtime_dir).unwrap());
+        let mut runtime = Runtime::default();
+        runtime
+            .browse(
+                &config,
+                Action::Library {
+                    options: LibraryQuery::default(),
+                },
+                lock,
+                None,
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            writer
+                .conn
+                .execute("INSERT OR REPLACE INTO meta VALUES ('scan-test','1')", [])
+                .unwrap();
+            if checkpoint_busy() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "browse did not start reading");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(runtime.cancel());
+        writer.conn.busy_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            !checkpoint_busy(),
+            "cancelled browse still holds its snapshot"
+        );
+    }
 
     #[test]
     fn online_episodes_load_while_another_episodes_probe_is_blocked() {
