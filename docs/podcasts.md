@@ -295,10 +295,11 @@ hints; duration shown during playback comes from mpv when available.
 
 Use `--json-v2` for scripts; see the [JSON contract](json-contract.md).
 
-## Explicit IDs for scripts
+## Identifying episodes in scripts
 
-A separate CLI process has no current TUI player. Its episode commands retain
-explicit IDs, as do TUI commands for an explicitly named target:
+For CLI commands that target an episode, supply its ID or the exact titles as
+`"Show Title::Episode Title"`. The same forms work for an explicit target in
+the TUI.
 
 ```sh
 radio podcast episodes FEED_ID --json-v2

@@ -169,8 +169,8 @@ Download-list objects additionally include nullable `title` for display; the
 `--transcribe` checks the local speech runtime/model, downloads missing audio,
 and then generates captions. TUI generation publishes partial captions while
 reading bounded audio windows; CLI output remains a single final result.
-CLI still requires an explicit ID; only TUI
-commands can inherit a playing episode.
+CLI caption commands take an episode ID or the exact `Show::Episode` title.
+TUI commands with an omitted target inherit the playing episode.
 
 `podcast library` returns the same page shape as `episodes`, with decorated
 rows containing `author`, `feed_title`, `queued`, `saved` and optional

@@ -146,7 +146,8 @@ OPML `import --dry-run` 返回 `{urls:[...]}`，导入返回逐源 `{id?,ok,erro
 下载列表对象额外包含可为 `null` 的 `title`，用于显示；身份仍由 `episode_id`
 确定。`--transcribe` 先检查本地语音运行时/模型，再按需下载音频并生成
 字幕。TUI 改为按片段读取并逐句显示，CLI 仍只输出一次最终结果。
-CLI 仍需显式 ID；仅 TUI 命令可使用当前播放上下文。
+CLI 字幕命令接受单集 ID 或精确的 `节目标题::单集标题`。TUI 命令省略目标时，
+使用正在播放的单集。
 
 `podcast library` 返回与 `episodes` 相同的分页结构；行额外包含 `author`、
 `feed_title`、`queued`、`saved` 和可选的 `download_state`。`queue list` 也包含
